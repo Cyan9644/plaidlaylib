@@ -1,0 +1,1125 @@
+Fio command: fio --name=all_ssd --filename=/mnt/ssd1/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1952696: Thu Oct  3 20:33:51 2024
+  read: IOPS=1739, BW=6959MiB/s (7297MB/s)(137GiB/20154msec)
+   bw (  MiB/s): min= 4800, max= 7072, per=100.00%, avg=6961.00, stdev=87.49, samples=160
+   iops        : min= 1200, max= 1768, avg=1740.20, stdev=21.87, samples=160
+  cpu          : usr=0.05%, sys=3.54%, ctx=35225, majf=0, minf=532
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.2%, 32=0.4%, >=64=99.3%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=35064,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=6959MiB/s (7297MB/s), 6959MiB/s-6959MiB/s (7297MB/s-7297MB/s), io=137GiB (147GB), run=20154-20154msec
+
+Disk stats (read/write):
+  nvme24n1: ios=559580/0, sectors=286504960/0, merge=16/0, ticks=80126422/0, in_queue=80126422, util=92.08%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd3/fio:/mnt/ssd10/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1952967: Thu Oct  3 20:34:11 2024
+  read: IOPS=3493, BW=13.6GiB/s (14.7GB/s)(274GiB/20093msec)
+   bw (  MiB/s): min=11648, max=14376, per=100.00%, avg=13988.80, stdev=98.39, samples=160
+   iops        : min= 2912, max= 3594, avg=3497.20, stdev=24.60, samples=160
+  cpu          : usr=0.14%, sys=5.99%, ctx=67413, majf=0, minf=535
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.2%, >=64=99.6%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=70200,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=13.6GiB/s (14.7GB/s), 13.6GiB/s-13.6GiB/s (14.7GB/s-14.7GB/s), io=274GiB (294GB), run=20093-20093msec
+
+Disk stats (read/write):
+  nvme26n1: ios=554807/0, sectors=284061184/0, merge=16/0, ticks=37778826/0, in_queue=37778825, util=91.47%
+  nvme19n1: ios=554618/0, sectors=283964416/0, merge=16/0, ticks=40357134/0, in_queue=40357134, util=91.62%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd5/fio:/mnt/ssd12/fio:/mnt/ssd18/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1953257: Thu Oct  3 20:34:32 2024
+  read: IOPS=5255, BW=20.5GiB/s (22.0GB/s)(412GiB/20069msec)
+   bw (  MiB/s): min=18656, max=21792, per=100.00%, avg=21040.94, stdev=111.22, samples=160
+   iops        : min= 4664, max= 5448, avg=5260.20, stdev=27.80, samples=160
+  cpu          : usr=0.17%, sys=8.40%, ctx=98220, majf=0, minf=540
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=99.8%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=105464,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=20.5GiB/s (22.0GB/s), 20.5GiB/s-20.5GiB/s (22.0GB/s-22.0GB/s), io=412GiB (442GB), run=20069-20069msec
+
+Disk stats (read/write):
+  nvme28n1: ios=561438/0, sectors=287456256/0, merge=16/0, ticks=28298056/0, in_queue=28298055, util=91.25%
+  nvme21n1: ios=561652/0, sectors=287566336/0, merge=16/0, ticks=24524835/0, in_queue=24524835, util=91.35%
+  nvme12n1: ios=561612/0, sectors=287545344/0, merge=16/0, ticks=25116437/0, in_queue=25116436, util=91.21%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd4/fio:/mnt/ssd10/fio:/mnt/ssd20/fio:/mnt/ssd24/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1953481: Thu Oct  3 20:34:53 2024
+  read: IOPS=7001, BW=27.3GiB/s (29.4GB/s)(549GiB/20081msec)
+   bw (  MiB/s): min=25472, max=29136, per=100.00%, avg=28059.76, stdev=133.45, samples=160
+   iops        : min= 6368, max= 7284, avg=7014.60, stdev=33.35, samples=160
+  cpu          : usr=0.15%, sys=9.85%, ctx=126825, majf=0, minf=546
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=99.8%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=140600,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=27.3GiB/s (29.4GB/s), 27.3GiB/s-27.3GiB/s (29.4GB/s-29.4GB/s), io=549GiB (590GB), run=20081-20081msec
+
+Disk stats (read/write):
+  nvme27n1: ios=562283/0, sectors=287888896/0, merge=16/0, ticks=23248348/0, in_queue=23248348, util=91.42%
+  nvme19n1: ios=562178/0, sectors=287835136/0, merge=16/0, ticks=24460025/0, in_queue=24460025, util=91.48%
+  nvme14n1: ios=562368/0, sectors=287932416/0, merge=16/0, ticks=14859458/0, in_queue=14859457, util=91.31%
+  nvme2n1: ios=562368/0, sectors=287932416/0, merge=16/0, ticks=14891884/0, in_queue=14891884, util=91.34%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd6/fio:/mnt/ssd8/fio:/mnt/ssd16/fio:/mnt/ssd29/fio:/mnt/ssd1/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1954447: Thu Oct  3 20:35:14 2024
+  read: IOPS=8744, BW=34.2GiB/s (36.7GB/s)(685GiB/20060msec)
+   bw (  MiB/s): min=32328, max=35358, per=100.00%, avg=35048.81, stdev=111.46, samples=160
+   iops        : min= 8082, max= 8838, avg=8761.05, stdev=27.82, samples=160
+  cpu          : usr=0.16%, sys=11.64%, ctx=155190, majf=0, minf=547
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=99.9%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=175416,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=34.2GiB/s (36.7GB/s), 34.2GiB/s-34.2GiB/s (36.7GB/s-36.7GB/s), io=685GiB (736GB), run=20060-20060msec
+
+Disk stats (read/write):
+  nvme29n1: ios=560273/0, sectors=286859776/0, merge=16/0, ticks=14780696/0, in_queue=14780696, util=91.05%
+  nvme17n1: ios=560211/0, sectors=286828032/0, merge=16/0, ticks=14250966/0, in_queue=14250966, util=91.21%
+  nvme10n1: ios=560222/0, sectors=286833664/0, merge=16/0, ticks=14230346/0, in_queue=14230347, util=91.51%
+  nvme7n1: ios=559705/0, sectors=286568960/0, merge=16/0, ticks=17199271/0, in_queue=17199271, util=91.80%
+  nvme24n1: ios=560167/0, sectors=286805504/0, merge=16/0, ticks=13925081/0, in_queue=13925081, util=91.67%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd5/fio:/mnt/ssd12/fio:/mnt/ssd18/fio:/mnt/ssd25/fio:/mnt/ssd4/fio:/mnt/ssd10/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1954703: Thu Oct  3 20:35:34 2024
+  read: IOPS=10.5k, BW=41.1GiB/s (44.1GB/s)(824GiB/20062msec)
+   bw (  MiB/s): min=39968, max=42616, per=100.00%, avg=42132.59, stdev=106.11, samples=160
+   iops        : min= 9992, max=10654, avg=10533.00, stdev=26.53, samples=160
+  cpu          : usr=0.13%, sys=13.16%, ctx=184222, majf=0, minf=551
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=99.9%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=210936,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=41.1GiB/s (44.1GB/s), 41.1GiB/s-41.1GiB/s (44.1GB/s-44.1GB/s), io=824GiB (885GB), run=20062-20062msec
+
+Disk stats (read/write):
+  nvme28n1: ios=561607/0, sectors=287542784/0, merge=16/0, ticks=5851950/0, in_queue=5851950, util=91.65%
+  nvme21n1: ios=561303/0, sectors=287387136/0, merge=16/0, ticks=9900676/0, in_queue=9900676, util=91.44%
+  nvme12n1: ios=561330/0, sectors=287400960/0, merge=16/0, ticks=10459506/0, in_queue=10459506, util=91.58%
+  nvme3n1: ios=560802/0, sectors=287130624/0, merge=16/0, ticks=11601758/0, in_queue=11601757, util=91.88%
+  nvme27n1: ios=560690/0, sectors=287073280/0, merge=16/0, ticks=15105571/0, in_queue=15105571, util=91.30%
+  nvme19n1: ios=560222/0, sectors=286833664/0, merge=16/0, ticks=22027055/0, in_queue=22027055, util=92.04%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd1/fio:/mnt/ssd13/fio:/mnt/ssd15/fio:/mnt/ssd29/fio:/mnt/ssd0/fio:/mnt/ssd9/fio:/mnt/ssd18/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1954945: Thu Oct  3 20:35:55 2024
+  read: IOPS=12.3k, BW=47.9GiB/s (51.4GB/s)(960GiB/20059msec)
+   bw (  MiB/s): min=46632, max=49360, per=100.00%, avg=49086.27, stdev=115.82, samples=160
+   iops        : min=11658, max=12340, avg=12270.20, stdev=28.90, samples=160
+  cpu          : usr=0.15%, sys=14.42%, ctx=208983, majf=0, minf=555
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=99.9%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=245880,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=47.9GiB/s (51.4GB/s), 47.9GiB/s-47.9GiB/s (51.4GB/s-51.4GB/s), io=960GiB (1031GB), run=20059-20059msec
+
+Disk stats (read/write):
+  nvme24n1: ios=559340/0, sectors=286382080/0, merge=16/0, ticks=20606154/0, in_queue=20606154, util=91.36%
+  nvme22n1: ios=560115/0, sectors=286778880/0, merge=16/0, ticks=10869731/0, in_queue=10869730, util=91.65%
+  nvme9n1: ios=560765/0, sectors=287111680/0, merge=16/0, ticks=5529596/0, in_queue=5529596, util=91.70%
+  nvme7n1: ios=560750/0, sectors=287104000/0, merge=16/0, ticks=5463957/0, in_queue=5463957, util=91.93%
+  nvme23n1: ios=559308/0, sectors=286365696/0, merge=16/0, ticks=19714270/0, in_queue=19714269, util=91.50%
+  nvme18n1: ios=560721/0, sectors=287089152/0, merge=16/0, ticks=6067453/0, in_queue=6067453, util=91.39%
+  nvme12n1: ios=560726/0, sectors=287091712/0, merge=16/0, ticks=5890887/0, in_queue=5890886, util=92.12%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd3/fio:/mnt/ssd7/fio:/mnt/ssd15/fio:/mnt/ssd22/fio:/mnt/ssd4/fio:/mnt/ssd9/fio:/mnt/ssd17/fio:/mnt/ssd25/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1955166: Thu Oct  3 20:36:16 2024
+  read: IOPS=12.6k, BW=49.1GiB/s (52.7GB/s)(991GiB/20169msec)
+   bw (  MiB/s): min=47000, max=57744, per=100.00%, avg=50656.80, stdev=421.50, samples=160
+   iops        : min=11750, max=14436, avg=12664.20, stdev=105.37, samples=160
+  cpu          : usr=0.12%, sys=13.34%, ctx=237336, majf=0, minf=559
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=99.9%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=253624,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=49.1GiB/s (52.7GB/s), 49.1GiB/s-49.1GiB/s (52.7GB/s-52.7GB/s), io=991GiB (1064GB), run=20169-20169msec
+
+Disk stats (read/write):
+  nvme26n1: ios=507264/0, sectors=259719168/0, merge=12/0, ticks=553850/0, in_queue=553850, util=90.23%
+  nvme16n1: ios=504444/0, sectors=258275840/0, merge=12/0, ticks=75791528/0, in_queue=75791528, util=91.49%
+  nvme9n1: ios=507264/0, sectors=259719168/0, merge=12/0, ticks=572287/0, in_queue=572287, util=89.77%
+  nvme0n1: ios=507264/0, sectors=259719168/0, merge=12/0, ticks=515603/0, in_queue=515603, util=89.74%
+  nvme27n1: ios=507264/0, sectors=259719168/0, merge=12/0, ticks=551977/0, in_queue=551977, util=90.59%
+  nvme18n1: ios=507264/0, sectors=259719168/0, merge=12/0, ticks=501118/0, in_queue=501118, util=89.86%
+  nvme11n1: ios=507200/0, sectors=259686400/0, merge=12/0, ticks=506316/0, in_queue=506317, util=90.63%
+  nvme3n1: ios=507200/0, sectors=259686400/0, merge=12/0, ticks=519005/0, in_queue=519005, util=90.59%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd2/fio:/mnt/ssd13/fio:/mnt/ssd16/fio:/mnt/ssd22/fio:/mnt/ssd6/fio:/mnt/ssd11/fio:/mnt/ssd19/fio:/mnt/ssd25/fio:/mnt/ssd5/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1955381: Thu Oct  3 20:36:36 2024
+  read: IOPS=15.8k, BW=61.6GiB/s (66.1GB/s)(1235GiB/20045msec)
+   bw (  MiB/s): min=61144, max=63848, per=100.00%, avg=63164.40, stdev=102.18, samples=160
+   iops        : min=15286, max=15962, avg=15791.10, stdev=25.55, samples=160
+  cpu          : usr=0.17%, sys=16.89%, ctx=258205, majf=0, minf=565
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=99.9%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=316088,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=61.6GiB/s (66.1GB/s), 61.6GiB/s-61.6GiB/s (66.1GB/s-66.1GB/s), io=1235GiB (1326GB), run=20045-20045msec
+
+Disk stats (read/write):
+  nvme25n1: ios=560455/0, sectors=286952960/0, merge=16/0, ticks=12078799/0, in_queue=12078799, util=91.43%
+  nvme22n1: ios=560915/0, sectors=287188480/0, merge=16/0, ticks=6429235/0, in_queue=6429234, util=91.39%
+  nvme10n1: ios=560076/0, sectors=286758912/0, merge=16/0, ticks=14439613/0, in_queue=14439613, util=91.53%
+  nvme0n1: ios=561084/0, sectors=287275008/0, merge=16/0, ticks=3712823/0, in_queue=3712823, util=91.30%
+  nvme29n1: ios=560294/0, sectors=286870528/0, merge=16/0, ticks=13157430/0, in_queue=13157431, util=91.36%
+  nvme20n1: ios=561071/0, sectors=287268352/0, merge=16/0, ticks=3629799/0, in_queue=3629799, util=91.95%
+  nvme13n1: ios=561066/0, sectors=287265792/0, merge=16/0, ticks=3499658/0, in_queue=3499659, util=91.50%
+  nvme3n1: ios=560320/0, sectors=286883840/0, merge=16/0, ticks=11969692/0, in_queue=11969692, util=91.34%
+  nvme28n1: ios=561052/0, sectors=287258624/0, merge=16/0, ticks=3748414/0, in_queue=3748414, util=92.36%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd1/fio:/mnt/ssd10/fio:/mnt/ssd17/fio:/mnt/ssd23/fio:/mnt/ssd4/fio:/mnt/ssd7/fio:/mnt/ssd18/fio:/mnt/ssd25/fio:/mnt/ssd0/fio:/mnt/ssd13/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1955602: Thu Oct  3 20:36:57 2024
+  read: IOPS=15.7k, BW=61.4GiB/s (65.9GB/s)(1237GiB/20159msec)
+   bw (  MiB/s): min=58648, max=72504, per=100.00%, avg=63295.20, stdev=600.64, samples=160
+   iops        : min=14662, max=18126, avg=15823.80, stdev=150.16, samples=160
+  cpu          : usr=0.16%, sys=16.68%, ctx=284453, majf=0, minf=567
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=99.9%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=316728,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=61.4GiB/s (65.9GB/s), 61.4GiB/s-61.4GiB/s (65.9GB/s-65.9GB/s), io=1237GiB (1328GB), run=20159-20159msec
+
+Disk stats (read/write):
+  nvme24n1: ios=506800/0, sectors=259481600/0, merge=12/0, ticks=483113/0, in_queue=483113, util=88.90%
+  nvme19n1: ios=506800/0, sectors=259481600/0, merge=12/0, ticks=480097/0, in_queue=480096, util=89.13%
+  nvme11n1: ios=506800/0, sectors=259481600/0, merge=12/0, ticks=429611/0, in_queue=429611, util=89.64%
+  nvme1n1: ios=506800/0, sectors=259481600/0, merge=12/0, ticks=428574/0, in_queue=428574, util=89.48%
+  nvme27n1: ios=506752/0, sectors=259457024/0, merge=12/0, ticks=447359/0, in_queue=447359, util=89.55%
+  nvme16n1: ios=506539/0, sectors=259347968/0, merge=12/0, ticks=75363606/0, in_queue=75363606, util=90.87%
+  nvme12n1: ios=506736/0, sectors=259448832/0, merge=12/0, ticks=428234/0, in_queue=428234, util=89.54%
+  nvme3n1: ios=506736/0, sectors=259448832/0, merge=12/0, ticks=499218/0, in_queue=499219, util=89.99%
+  nvme23n1: ios=506736/0, sectors=259448832/0, merge=12/0, ticks=494200/0, in_queue=494201, util=89.24%
+  nvme22n1: ios=506736/0, sectors=259448832/0, merge=12/0, ticks=490099/0, in_queue=490098, util=89.81%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd5/fio:/mnt/ssd9/fio:/mnt/ssd20/fio:/mnt/ssd28/fio:/mnt/ssd0/fio:/mnt/ssd11/fio:/mnt/ssd14/fio:/mnt/ssd29/fio:/mnt/ssd3/fio:/mnt/ssd8/fio:/mnt/ssd18/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1955823: Thu Oct  3 20:37:18 2024
+  read: IOPS=19.2k, BW=75.1GiB/s (80.7GB/s)(1508GiB/20067msec)
+   bw (  MiB/s): min=74352, max=78904, per=100.00%, avg=77157.60, stdev=161.28, samples=160
+   iops        : min=18588, max=19726, avg=19289.40, stdev=40.32, samples=160
+  cpu          : usr=0.22%, sys=21.22%, ctx=302281, majf=0, minf=572
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=99.9%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=386040,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=75.1GiB/s (80.7GB/s), 75.1GiB/s-75.1GiB/s (80.7GB/s-80.7GB/s), io=1508GiB (1619GB), run=20067-20067msec
+
+Disk stats (read/write):
+  nvme28n1: ios=559321/0, sectors=286372352/0, merge=16/0, ticks=2557886/0, in_queue=2557886, util=90.88%
+  nvme18n1: ios=559326/0, sectors=286374912/0, merge=16/0, ticks=2611233/0, in_queue=2611233, util=90.85%
+  nvme14n1: ios=559308/0, sectors=286365696/0, merge=16/0, ticks=2730412/0, in_queue=2730413, util=90.72%
+  nvme6n1: ios=557662/0, sectors=285522944/0, merge=16/0, ticks=21472893/0, in_queue=21472894, util=91.08%
+  nvme23n1: ios=558993/0, sectors=286204416/0, merge=16/0, ticks=8780352/0, in_queue=8780352, util=90.93%
+  nvme20n1: ios=559274/0, sectors=286348288/0, merge=16/0, ticks=4295773/0, in_queue=4295773, util=91.61%
+  nvme8n1: ios=559011/0, sectors=286213632/0, merge=16/0, ticks=8469254/0, in_queue=8469254, util=91.22%
+  nvme7n1: ios=559304/0, sectors=286363648/0, merge=16/0, ticks=2553738/0, in_queue=2553737, util=91.69%
+  nvme26n1: ios=558268/0, sectors=285833216/0, merge=16/0, ticks=14465649/0, in_queue=14465650, util=92.09%
+  nvme17n1: ios=559296/0, sectors=286359552/0, merge=16/0, ticks=2614850/0, in_queue=2614850, util=91.76%
+  nvme12n1: ios=559285/0, sectors=286353920/0, merge=16/0, ticks=2623616/0, in_queue=2623615, util=92.00%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd1/fio:/mnt/ssd12/fio:/mnt/ssd14/fio:/mnt/ssd28/fio:/mnt/ssd0/fio:/mnt/ssd9/fio:/mnt/ssd15/fio:/mnt/ssd23/fio:/mnt/ssd6/fio:/mnt/ssd7/fio:/mnt/ssd17/fio:/mnt/ssd26/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1956042: Thu Oct  3 20:37:39 2024
+  read: IOPS=18.8k, BW=73.6GiB/s (79.1GB/s)(1484GiB/20156msec)
+   bw (  MiB/s): min=71360, max=85328, per=100.00%, avg=75941.60, stdev=585.81, samples=160
+   iops        : min=17840, max=21332, avg=18985.40, stdev=146.45, samples=160
+  cpu          : usr=0.23%, sys=19.98%, ctx=329068, majf=0, minf=575
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=99.9%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=379960,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=73.6GiB/s (79.1GB/s), 73.6GiB/s-73.6GiB/s (79.1GB/s-79.1GB/s), io=1484GiB (1594GB), run=20156-20156msec
+
+Disk stats (read/write):
+  nvme24n1: ios=506656/0, sectors=259407872/0, merge=12/0, ticks=434013/0, in_queue=434013, util=88.83%
+  nvme21n1: ios=506656/0, sectors=259407872/0, merge=12/0, ticks=397505/0, in_queue=397505, util=88.42%
+  nvme8n1: ios=506608/0, sectors=259383296/0, merge=12/0, ticks=419486/0, in_queue=419486, util=89.49%
+  nvme6n1: ios=506608/0, sectors=259383296/0, merge=12/0, ticks=439282/0, in_queue=439282, util=89.30%
+  nvme23n1: ios=506608/0, sectors=259383296/0, merge=12/0, ticks=442310/0, in_queue=442310, util=88.55%
+  nvme18n1: ios=506608/0, sectors=259383296/0, merge=12/0, ticks=417816/0, in_queue=417816, util=88.62%
+  nvme9n1: ios=506608/0, sectors=259383296/0, merge=12/0, ticks=406152/0, in_queue=406152, util=88.92%
+  nvme1n1: ios=506608/0, sectors=259383296/0, merge=12/0, ticks=463488/0, in_queue=463488, util=88.80%
+  nvme29n1: ios=506608/0, sectors=259383296/0, merge=12/0, ticks=434641/0, in_queue=434641, util=89.14%
+  nvme16n1: ios=505667/0, sectors=258902016/0, merge=12/0, ticks=74152960/0, in_queue=74152960, util=91.39%
+  nvme11n1: ios=506592/0, sectors=259375104/0, merge=12/0, ticks=401619/0, in_queue=401619, util=89.23%
+  nvme4n1: ios=506592/0, sectors=259375104/0, merge=12/0, ticks=428997/0, in_queue=428997, util=90.16%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd1/fio:/mnt/ssd8/fio:/mnt/ssd16/fio:/mnt/ssd22/fio:/mnt/ssd5/fio:/mnt/ssd10/fio:/mnt/ssd18/fio:/mnt/ssd24/fio:/mnt/ssd6/fio:/mnt/ssd9/fio:/mnt/ssd20/fio:/mnt/ssd23/fio:/mnt/ssd3/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1956259: Thu Oct  3 20:38:00 2024
+  read: IOPS=22.7k, BW=88.7GiB/s (95.3GB/s)(1780GiB/20067msec)
+   bw (  MiB/s): min=87064, max=91632, per=100.00%, avg=91109.60, stdev=205.07, samples=160
+   iops        : min=21766, max=22908, avg=22777.40, stdev=51.26, samples=160
+  cpu          : usr=0.31%, sys=25.40%, ctx=334164, majf=0, minf=579
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=99.9%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=455800,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=88.7GiB/s (95.3GB/s), 88.7GiB/s-88.7GiB/s (95.3GB/s-95.3GB/s), io=1780GiB (1912GB), run=20067-20067msec
+
+Disk stats (read/write):
+  nvme24n1: ios=556435/0, sectors=284894720/0, merge=16/0, ticks=7703930/0, in_queue=7703930, util=91.07%
+  nvme17n1: ios=556595/0, sectors=284976640/0, merge=16/0, ticks=1778286/0, in_queue=1778287, util=91.17%
+  nvme10n1: ios=556387/0, sectors=284870144/0, merge=16/0, ticks=7106695/0, in_queue=7106696, util=91.14%
+  nvme0n1: ios=556589/0, sectors=284973568/0, merge=16/0, ticks=1740037/0, in_queue=1740037, util=91.27%
+  nvme28n1: ios=556578/0, sectors=284967936/0, merge=16/0, ticks=1883145/0, in_queue=1883145, util=91.34%
+  nvme19n1: ios=554896/0, sectors=284106752/0, merge=16/0, ticks=15062360/0, in_queue=15062360, util=91.30%
+  nvme12n1: ios=556576/0, sectors=284966912/0, merge=16/0, ticks=1595978/0, in_queue=1595978, util=91.63%
+  nvme2n1: ios=556570/0, sectors=284963840/0, merge=16/0, ticks=1621455/0, in_queue=1621455, util=91.69%
+  nvme29n1: ios=556432/0, sectors=284893184/0, merge=16/0, ticks=7153992/0, in_queue=7153992, util=91.78%
+  nvme18n1: ios=556571/0, sectors=284964352/0, merge=16/0, ticks=1744043/0, in_queue=1744043, util=91.82%
+  nvme14n1: ios=556564/0, sectors=284960768/0, merge=16/0, ticks=1781348/0, in_queue=1781348, util=91.76%
+  nvme1n1: ios=555735/0, sectors=284536320/0, merge=16/0, ticks=12366378/0, in_queue=12366378, util=91.91%
+  nvme26n1: ios=556288/0, sectors=284819456/0, merge=16/0, ticks=9293017/0, in_queue=9293018, util=92.39%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd1/fio:/mnt/ssd11/fio:/mnt/ssd14/fio:/mnt/ssd25/fio:/mnt/ssd4/fio:/mnt/ssd12/fio:/mnt/ssd15/fio:/mnt/ssd26/fio:/mnt/ssd0/fio:/mnt/ssd8/fio:/mnt/ssd18/fio:/mnt/ssd24/fio:/mnt/ssd2/fio:/mnt/ssd9/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1956479: Thu Oct  3 20:38:20 2024
+  read: IOPS=24.5k, BW=95.6GiB/s (103GB/s)(1917GiB/20056msec)
+   bw (  MiB/s): min=94104, max=99496, per=100.00%, avg=98124.00, stdev=212.60, samples=160
+   iops        : min=23526, max=24874, avg=24531.00, stdev=53.15, samples=160
+  cpu          : usr=0.36%, sys=27.00%, ctx=350123, majf=0, minf=583
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=99.9%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=490872,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=95.6GiB/s (103GB/s), 95.6GiB/s-95.6GiB/s (103GB/s-103GB/s), io=1917GiB (2059GB), run=20056-20056msec
+
+Disk stats (read/write):
+  nvme24n1: ios=556435/0, sectors=284894720/0, merge=16/0, ticks=7637605/0, in_queue=7637606, util=90.67%
+  nvme20n1: ios=556650/0, sectors=285004800/0, merge=16/0, ticks=1714038/0, in_queue=1714039, util=90.64%
+  nvme8n1: ios=556642/0, sectors=285000704/0, merge=16/0, ticks=4428663/0, in_queue=4428663, util=91.14%
+  nvme3n1: ios=555254/0, sectors=284290048/0, merge=16/0, ticks=14187701/0, in_queue=14187701, util=91.03%
+  nvme27n1: ios=556635/0, sectors=284997120/0, merge=16/0, ticks=4776443/0, in_queue=4776444, util=91.29%
+  nvme21n1: ios=556636/0, sectors=284997632/0, merge=16/0, ticks=2438111/0, in_queue=2438110, util=91.34%
+  nvme9n1: ios=556644/0, sectors=285001728/0, merge=16/0, ticks=1488228/0, in_queue=1488228, util=91.49%
+  nvme4n1: ios=556643/0, sectors=285001216/0, merge=16/0, ticks=5034872/0, in_queue=5034872, util=91.26%
+  nvme23n1: ios=555305/0, sectors=284316160/0, merge=16/0, ticks=14484160/0, in_queue=14484159, util=91.41%
+  nvme17n1: ios=556626/0, sectors=284992512/0, merge=16/0, ticks=1904988/0, in_queue=1904988, util=91.51%
+  nvme12n1: ios=556621/0, sectors=284989952/0, merge=16/0, ticks=1410490/0, in_queue=1410489, util=91.93%
+  nvme2n1: ios=556622/0, sectors=284990464/0, merge=16/0, ticks=1576653/0, in_queue=1576653, util=92.04%
+  nvme25n1: ios=556391/0, sectors=284872192/0, merge=16/0, ticks=7798308/0, in_queue=7798308, util=92.60%
+  nvme18n1: ios=556614/0, sectors=284986368/0, merge=16/0, ticks=1583435/0, in_queue=1583436, util=91.98%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd0/fio:/mnt/ssd10/fio:/mnt/ssd14/fio:/mnt/ssd26/fio:/mnt/ssd5/fio:/mnt/ssd12/fio:/mnt/ssd17/fio:/mnt/ssd22/fio:/mnt/ssd3/fio:/mnt/ssd7/fio:/mnt/ssd19/fio:/mnt/ssd29/fio:/mnt/ssd1/fio:/mnt/ssd13/fio:/mnt/ssd15/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1956698: Thu Oct  3 20:38:41 2024
+  read: IOPS=23.6k, BW=92.1GiB/s (98.9GB/s)(1856GiB/20156msec)
+   bw (  MiB/s): min=88272, max=108592, per=100.00%, avg=94960.40, stdev=891.13, samples=160
+   iops        : min=22068, max=27148, avg=23740.10, stdev=222.78, samples=160
+  cpu          : usr=0.29%, sys=24.64%, ctx=390877, majf=0, minf=587
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=99.9%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=475064,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=92.1GiB/s (98.9GB/s), 92.1GiB/s-92.1GiB/s (98.9GB/s-98.9GB/s), io=1856GiB (1993GB), run=20156-20156msec
+
+Disk stats (read/write):
+  nvme23n1: ios=506768/0, sectors=259465216/0, merge=12/0, ticks=437148/0, in_queue=437148, util=88.31%
+  nvme19n1: ios=506768/0, sectors=259465216/0, merge=12/0, ticks=374983/0, in_queue=374983, util=89.12%
+  nvme8n1: ios=506768/0, sectors=259465216/0, merge=12/0, ticks=407369/0, in_queue=407369, util=89.06%
+  nvme4n1: ios=506768/0, sectors=259465216/0, merge=12/0, ticks=351474/0, in_queue=351474, util=89.69%
+  nvme28n1: ios=506768/0, sectors=259465216/0, merge=12/0, ticks=331479/0, in_queue=331479, util=89.61%
+  nvme21n1: ios=506752/0, sectors=259457024/0, merge=12/0, ticks=347483/0, in_queue=347484, util=88.67%
+  nvme11n1: ios=506752/0, sectors=259457024/0, merge=12/0, ticks=356244/0, in_queue=356244, util=89.66%
+  nvme0n1: ios=506736/0, sectors=259448832/0, merge=12/0, ticks=321609/0, in_queue=321609, util=89.73%
+  nvme26n1: ios=506720/0, sectors=259440640/0, merge=12/0, ticks=434319/0, in_queue=434319, util=89.38%
+  nvme16n1: ios=503153/0, sectors=257614336/0, merge=12/0, ticks=72996751/0, in_queue=72996750, util=90.11%
+  nvme13n1: ios=506704/0, sectors=259432448/0, merge=12/0, ticks=308570/0, in_queue=308569, util=90.10%
+  nvme7n1: ios=506704/0, sectors=259432448/0, merge=12/0, ticks=325706/0, in_queue=325706, util=90.19%
+  nvme24n1: ios=506704/0, sectors=259432448/0, merge=12/0, ticks=457835/0, in_queue=457835, util=90.34%
+  nvme22n1: ios=506704/0, sectors=259432448/0, merge=12/0, ticks=354861/0, in_queue=354862, util=90.45%
+  nvme9n1: ios=506704/0, sectors=259432448/0, merge=12/0, ticks=348970/0, in_queue=348970, util=89.73%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd4/fio:/mnt/ssd12/fio:/mnt/ssd20/fio:/mnt/ssd25/fio:/mnt/ssd2/fio:/mnt/ssd9/fio:/mnt/ssd18/fio:/mnt/ssd22/fio:/mnt/ssd6/fio:/mnt/ssd8/fio:/mnt/ssd16/fio:/mnt/ssd26/fio:/mnt/ssd5/fio:/mnt/ssd10/fio:/mnt/ssd19/fio:/mnt/ssd23/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1956917: Thu Oct  3 20:39:02 2024
+  read: IOPS=27.7k, BW=108GiB/s (116GB/s)(2173GiB/20056msec)
+   bw (  MiB/s): min=105808, max=112144, per=100.00%, avg=111218.40, stdev=290.67, samples=160
+   iops        : min=26452, max=28036, avg=27804.60, stdev=72.67, samples=160
+  cpu          : usr=0.35%, sys=30.64%, ctx=374630, majf=0, minf=591
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=100.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=556344,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=108GiB/s (116GB/s), 108GiB/s-108GiB/s (116GB/s-116GB/s), io=2173GiB (2333GB), run=20056-20056msec
+
+Disk stats (read/write):
+  nvme27n1: ios=556089/0, sectors=284717568/0, merge=16/0, ticks=22017855/0, in_queue=22017855, util=90.60%
+  nvme21n1: ios=556352/0, sectors=284852224/0, merge=16/0, ticks=640444/0, in_queue=640444, util=89.74%
+  nvme14n1: ios=556352/0, sectors=284852224/0, merge=16/0, ticks=1057592/0, in_queue=1057593, util=90.34%
+  nvme3n1: ios=556352/0, sectors=284852224/0, merge=16/0, ticks=929535/0, in_queue=929535, util=90.23%
+  nvme25n1: ios=556352/0, sectors=284852224/0, merge=16/0, ticks=568843/0, in_queue=568843, util=90.55%
+  nvme18n1: ios=556352/0, sectors=284852224/0, merge=16/0, ticks=643202/0, in_queue=643202, util=90.42%
+  nvme12n1: ios=556352/0, sectors=284852224/0, merge=16/0, ticks=1153447/0, in_queue=1153448, util=90.61%
+  nvme0n1: ios=556352/0, sectors=284852224/0, merge=16/0, ticks=969119/0, in_queue=969119, util=90.47%
+  nvme29n1: ios=555864/0, sectors=284602880/0, merge=16/0, ticks=23513937/0, in_queue=23513936, util=91.29%
+  nvme17n1: ios=556352/0, sectors=284852224/0, merge=16/0, ticks=667194/0, in_queue=667195, util=91.10%
+  nvme10n1: ios=556352/0, sectors=284852224/0, merge=16/0, ticks=570536/0, in_queue=570536, util=90.65%
+  nvme4n1: ios=556352/0, sectors=284852224/0, merge=16/0, ticks=544312/0, in_queue=544312, util=91.38%
+  nvme28n1: ios=556352/0, sectors=284852224/0, merge=16/0, ticks=16719922/0, in_queue=16719922, util=91.61%
+  nvme19n1: ios=556352/0, sectors=284852224/0, merge=16/0, ticks=794797/0, in_queue=794798, util=91.63%
+  nvme13n1: ios=556288/0, sectors=284819456/0, merge=16/0, ticks=1187037/0, in_queue=1187037, util=91.37%
+  nvme1n1: ios=556288/0, sectors=284819456/0, merge=16/0, ticks=1299939/0, in_queue=1299938, util=91.59%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd2/fio:/mnt/ssd13/fio:/mnt/ssd17/fio:/mnt/ssd26/fio:/mnt/ssd6/fio:/mnt/ssd9/fio:/mnt/ssd18/fio:/mnt/ssd24/fio:/mnt/ssd4/fio:/mnt/ssd11/fio:/mnt/ssd19/fio:/mnt/ssd22/fio:/mnt/ssd5/fio:/mnt/ssd12/fio:/mnt/ssd16/fio:/mnt/ssd28/fio:/mnt/ssd3/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1957133: Thu Oct  3 20:39:23 2024
+  read: IOPS=26.7k, BW=104GiB/s (112GB/s)(2087GiB/20052msec)
+   bw (  MiB/s): min=101632, max=111408, per=100.00%, avg=106828.00, stdev=353.28, samples=160
+   iops        : min=25408, max=27852, avg=26707.00, stdev=88.32, samples=160
+  cpu          : usr=0.36%, sys=28.22%, ctx=404893, majf=0, minf=595
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=100.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=534392,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=104GiB/s (112GB/s), 104GiB/s-104GiB/s (112GB/s-112GB/s), io=2087GiB (2241GB), run=20052-20052msec
+
+Disk stats (read/write):
+  nvme25n1: ios=497948/0, sectors=254949376/0, merge=12/0, ticks=297008/0, in_queue=297008, util=88.47%
+  nvme22n1: ios=497948/0, sectors=254949376/0, merge=12/0, ticks=287993/0, in_queue=287992, util=88.76%
+  nvme11n1: ios=497934/0, sectors=254942208/0, merge=12/0, ticks=277662/0, in_queue=277661, util=89.54%
+  nvme4n1: ios=497931/0, sectors=254940672/0, merge=12/0, ticks=275532/0, in_queue=275532, util=89.77%
+  nvme29n1: ios=496680/0, sectors=254300160/0, merge=12/0, ticks=24600274/0, in_queue=24600274, util=90.97%
+  nvme18n1: ios=497935/0, sectors=254942720/0, merge=12/0, ticks=280078/0, in_queue=280077, util=88.74%
+  nvme12n1: ios=497933/0, sectors=254941696/0, merge=12/0, ticks=282312/0, in_queue=282311, util=89.14%
+  nvme2n1: ios=497933/0, sectors=254941696/0, merge=12/0, ticks=275423/0, in_queue=275423, util=90.12%
+  nvme27n1: ios=496689/0, sectors=254304768/0, merge=12/0, ticks=24595447/0, in_queue=24595447, util=91.38%
+  nvme20n1: ios=497926/0, sectors=254938112/0, merge=12/0, ticks=288593/0, in_queue=288594, util=89.08%
+  nvme13n1: ios=497922/0, sectors=254936064/0, merge=12/0, ticks=289421/0, in_queue=289421, util=89.67%
+  nvme0n1: ios=497921/0, sectors=254935552/0, merge=12/0, ticks=279817/0, in_queue=279817, util=89.86%
+  nvme28n1: ios=496902/0, sectors=254413824/0, merge=12/0, ticks=22633168/0, in_queue=22633168, util=91.50%
+  nvme21n1: ios=497919/0, sectors=254935040/0, merge=12/0, ticks=293530/0, in_queue=293530, util=89.32%
+  nvme10n1: ios=497910/0, sectors=254929920/0, merge=12/0, ticks=290470/0, in_queue=290470, util=89.75%
+  nvme6n1: ios=497909/0, sectors=254929408/0, merge=12/0, ticks=281510/0, in_queue=281511, util=91.07%
+  nvme26n1: ios=497908/0, sectors=254928896/0, merge=12/0, ticks=284431/0, in_queue=284432, util=90.11%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd6/fio:/mnt/ssd11/fio:/mnt/ssd15/fio:/mnt/ssd27/fio:/mnt/ssd0/fio:/mnt/ssd8/fio:/mnt/ssd17/fio:/mnt/ssd25/fio:/mnt/ssd1/fio:/mnt/ssd12/fio:/mnt/ssd16/fio:/mnt/ssd28/fio:/mnt/ssd3/fio:/mnt/ssd13/fio:/mnt/ssd18/fio:/mnt/ssd22/fio:/mnt/ssd2/fio:/mnt/ssd9/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1957353: Thu Oct  3 20:39:44 2024
+  read: IOPS=27.8k, BW=109GiB/s (117GB/s)(2176GiB/20039msec)
+   bw (  MiB/s): min=106184, max=112800, per=100.00%, avg=111375.24, stdev=255.17, samples=160
+   iops        : min=26544, max=28200, avg=27843.75, stdev=63.86, samples=160
+  cpu          : usr=0.38%, sys=30.92%, ctx=396558, majf=0, minf=602
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=100.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=557176,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=109GiB/s (117GB/s), 109GiB/s-109GiB/s (117GB/s-117GB/s), io=2176GiB (2337GB), run=20039-20039msec
+
+Disk stats (read/write):
+  nvme29n1: ios=491078/0, sectors=251431936/0, merge=12/0, ticks=280740/0, in_queue=280740, util=88.74%
+  nvme20n1: ios=491075/0, sectors=251430400/0, merge=12/0, ticks=662581/0, in_queue=662581, util=90.60%
+  nvme9n1: ios=491078/0, sectors=251431936/0, merge=12/0, ticks=263179/0, in_queue=263179, util=89.73%
+  nvme5n1: ios=491074/0, sectors=251429888/0, merge=12/0, ticks=268393/0, in_queue=268394, util=89.32%
+  nvme23n1: ios=490179/0, sectors=250971648/0, merge=12/0, ticks=17151523/0, in_queue=17151524, util=90.21%
+  nvme17n1: ios=491072/0, sectors=251428864/0, merge=12/0, ticks=270283/0, in_queue=270283, util=89.12%
+  nvme11n1: ios=491072/0, sectors=251428864/0, merge=12/0, ticks=270653/0, in_queue=270653, util=89.70%
+  nvme3n1: ios=491072/0, sectors=251428864/0, merge=12/0, ticks=261956/0, in_queue=261956, util=90.83%
+  nvme24n1: ios=490201/0, sectors=250982912/0, merge=12/0, ticks=17314609/0, in_queue=17314609, util=91.41%
+  nvme21n1: ios=491068/0, sectors=251426816/0, merge=12/0, ticks=685852/0, in_queue=685853, util=90.75%
+  nvme10n1: ios=491064/0, sectors=251424768/0, merge=12/0, ticks=284505/0, in_queue=284505, util=89.53%
+  nvme6n1: ios=491062/0, sectors=251423744/0, merge=12/0, ticks=273135/0, in_queue=273135, util=90.43%
+  nvme26n1: ios=490151/0, sectors=250957312/0, merge=12/0, ticks=17835932/0, in_queue=17835933, util=91.71%
+  nvme22n1: ios=491058/0, sectors=251421696/0, merge=12/0, ticks=691611/0, in_queue=691611, util=91.09%
+  nvme12n1: ios=491062/0, sectors=251423744/0, merge=12/0, ticks=286085/0, in_queue=286084, util=89.50%
+  nvme0n1: ios=491060/0, sectors=251422720/0, merge=12/0, ticks=272861/0, in_queue=272861, util=90.14%
+  nvme25n1: ios=490177/0, sectors=250970624/0, merge=12/0, ticks=17312843/0, in_queue=17312843, util=92.08%
+  nvme18n1: ios=491056/0, sectors=251420672/0, merge=12/0, ticks=275656/0, in_queue=275656, util=90.00%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd6/fio:/mnt/ssd9/fio:/mnt/ssd20/fio:/mnt/ssd22/fio:/mnt/ssd1/fio:/mnt/ssd13/fio:/mnt/ssd19/fio:/mnt/ssd28/fio:/mnt/ssd3/fio:/mnt/ssd11/fio:/mnt/ssd15/fio:/mnt/ssd25/fio:/mnt/ssd0/fio:/mnt/ssd7/fio:/mnt/ssd14/fio:/mnt/ssd27/fio:/mnt/ssd2/fio:/mnt/ssd12/fio:/mnt/ssd21/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1957572: Thu Oct  3 20:40:05 2024
+  read: IOPS=28.3k, BW=111GiB/s (119GB/s)(2215GiB/20037msec)
+   bw (  MiB/s): min=107384, max=114792, per=100.00%, avg=113368.80, stdev=319.01, samples=160
+   iops        : min=26846, max=28698, avg=28342.20, stdev=79.75, samples=160
+  cpu          : usr=0.40%, sys=30.48%, ctx=392087, majf=0, minf=603
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=100.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=567096,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=111GiB/s (119GB/s), 111GiB/s-111GiB/s (119GB/s-119GB/s), io=2215GiB (2379GB), run=20037-20037msec
+
+Disk stats (read/write):
+  nvme29n1: ios=472671/0, sectors=242007552/0, merge=12/0, ticks=258988/0, in_queue=258989, util=86.58%
+  nvme18n1: ios=472671/0, sectors=242007552/0, merge=12/0, ticks=248869/0, in_queue=248869, util=86.11%
+  nvme14n1: ios=472665/0, sectors=242004480/0, merge=12/0, ticks=753311/0, in_queue=753311, util=89.93%
+  nvme0n1: ios=472668/0, sectors=242006016/0, merge=12/0, ticks=275384/0, in_queue=275384, util=86.00%
+  nvme24n1: ios=471765/0, sectors=241543680/0, merge=12/0, ticks=17332934/0, in_queue=17332934, util=90.94%
+  nvme22n1: ios=472657/0, sectors=242000384/0, merge=12/0, ticks=399614/0, in_queue=399613, util=89.96%
+  nvme13n1: ios=472657/0, sectors=242000384/0, merge=12/0, ticks=716289/0, in_queue=716290, util=90.57%
+  nvme6n1: ios=472658/0, sectors=242000896/0, merge=12/0, ticks=259321/0, in_queue=259322, util=87.14%
+  nvme26n1: ios=471795/0, sectors=241559040/0, merge=12/0, ticks=16990384/0, in_queue=16990384, util=91.47%
+  nvme20n1: ios=472656/0, sectors=241999872/0, merge=12/0, ticks=412581/0, in_queue=412580, util=90.10%
+  nvme9n1: ios=472656/0, sectors=241999872/0, merge=12/0, ticks=274122/0, in_queue=274122, util=86.31%
+  nvme3n1: ios=472650/0, sectors=241996800/0, merge=12/0, ticks=257367/0, in_queue=257367, util=87.92%
+  nvme23n1: ios=471763/0, sectors=241542656/0, merge=12/0, ticks=16928761/0, in_queue=16928761, util=91.32%
+  nvme16n1: ios=472641/0, sectors=241992192/0, merge=12/0, ticks=321537/0, in_queue=321537, util=91.27%
+  nvme8n1: ios=472641/0, sectors=241992192/0, merge=12/0, ticks=265883/0, in_queue=265882, util=87.13%
+  nvme5n1: ios=472641/0, sectors=241992192/0, merge=12/0, ticks=255069/0, in_queue=255069, util=88.00%
+  nvme25n1: ios=471779/0, sectors=241550848/0, merge=12/0, ticks=16929461/0, in_queue=16929461, util=92.23%
+  nvme21n1: ios=472629/0, sectors=241986048/0, merge=12/0, ticks=409030/0, in_queue=409029, util=90.45%
+  nvme15n1: ios=472626/0, sectors=241984512/0, merge=12/0, ticks=752136/0, in_queue=752136, util=91.65%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd2/fio:/mnt/ssd9/fio:/mnt/ssd18/fio:/mnt/ssd24/fio:/mnt/ssd6/fio:/mnt/ssd10/fio:/mnt/ssd17/fio:/mnt/ssd28/fio:/mnt/ssd4/fio:/mnt/ssd12/fio:/mnt/ssd20/fio:/mnt/ssd29/fio:/mnt/ssd1/fio:/mnt/ssd11/fio:/mnt/ssd14/fio:/mnt/ssd23/fio:/mnt/ssd0/fio:/mnt/ssd13/fio:/mnt/ssd16/fio:/mnt/ssd22/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1957792: Thu Oct  3 20:40:26 2024
+  read: IOPS=29.0k, BW=113GiB/s (122GB/s)(2270GiB/20047msec)
+   bw (  MiB/s): min=109120, max=119576, per=100.00%, avg=116172.00, stdev=408.46, samples=160
+   iops        : min=27280, max=29894, avg=29043.00, stdev=102.12, samples=160
+  cpu          : usr=0.41%, sys=31.45%, ctx=426714, majf=0, minf=607
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=100.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=581112,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=113GiB/s (122GB/s), 113GiB/s-113GiB/s (122GB/s-122GB/s), io=2270GiB (2437GB), run=20047-20047msec
+
+Disk stats (read/write):
+  nvme25n1: ios=462857/0, sectors=236982784/0, merge=12/0, ticks=23864528/0, in_queue=23864528, util=90.45%
+  nvme18n1: ios=464048/0, sectors=237592576/0, merge=12/0, ticks=227241/0, in_queue=227242, util=87.40%
+  nvme12n1: ios=464048/0, sectors=237592576/0, merge=12/0, ticks=230864/0, in_queue=230864, util=87.08%
+  nvme2n1: ios=464036/0, sectors=237586432/0, merge=12/0, ticks=384276/0, in_queue=384276, util=89.42%
+  nvme29n1: ios=464036/0, sectors=237586432/0, merge=12/0, ticks=233975/0, in_queue=233975, util=87.27%
+  nvme19n1: ios=464032/0, sectors=237584384/0, merge=12/0, ticks=282080/0, in_queue=282079, util=89.83%
+  nvme11n1: ios=464031/0, sectors=237584384/0, merge=12/0, ticks=423601/0, in_queue=423601, util=90.62%
+  nvme6n1: ios=464033/0, sectors=237584896/0, merge=12/0, ticks=233227/0, in_queue=233228, util=86.92%
+  nvme27n1: ios=464032/0, sectors=237584384/0, merge=12/0, ticks=238897/0, in_queue=238898, util=86.83%
+  nvme21n1: ios=464026/0, sectors=237581312/0, merge=12/0, ticks=272744/0, in_queue=272744, util=89.70%
+  nvme14n1: ios=464014/0, sectors=237575168/0, merge=12/0, ticks=231254/0, in_queue=231254, util=87.67%
+  nvme7n1: ios=464015/0, sectors=237575680/0, merge=12/0, ticks=228209/0, in_queue=228208, util=88.41%
+  nvme24n1: ios=462876/0, sectors=236992512/0, merge=12/0, ticks=23162604/0, in_queue=23162604, util=90.94%
+  nvme20n1: ios=464015/0, sectors=237575680/0, merge=12/0, ticks=278449/0, in_queue=278450, util=90.42%
+  nvme8n1: ios=464012/0, sectors=237574144/0, merge=12/0, ticks=440795/0, in_queue=440795, util=91.37%
+  nvme1n1: ios=464011/0, sectors=237573632/0, merge=12/0, ticks=375995/0, in_queue=375996, util=91.13%
+  nvme23n1: ios=462846/0, sectors=236977152/0, merge=12/0, ticks=23631162/0, in_queue=23631161, util=91.87%
+  nvme22n1: ios=464001/0, sectors=237568512/0, merge=12/0, ticks=282977/0, in_queue=282977, util=91.37%
+  nvme10n1: ios=464001/0, sectors=237568512/0, merge=12/0, ticks=451409/0, in_queue=451408, util=91.39%
+  nvme0n1: ios=463999/0, sectors=237567488/0, merge=12/0, ticks=377412/0, in_queue=377412, util=91.13%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd4/fio:/mnt/ssd10/fio:/mnt/ssd21/fio:/mnt/ssd23/fio:/mnt/ssd0/fio:/mnt/ssd7/fio:/mnt/ssd15/fio:/mnt/ssd26/fio:/mnt/ssd5/fio:/mnt/ssd8/fio:/mnt/ssd19/fio:/mnt/ssd22/fio:/mnt/ssd3/fio:/mnt/ssd13/fio:/mnt/ssd18/fio:/mnt/ssd25/fio:/mnt/ssd6/fio:/mnt/ssd11/fio:/mnt/ssd16/fio:/mnt/ssd27/fio:/mnt/ssd2/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1958012: Thu Oct  3 20:40:47 2024
+  read: IOPS=27.2k, BW=106GiB/s (114GB/s)(2131GiB/20049msec)
+   bw (  MiB/s): min=101736, max=110624, per=100.00%, avg=109075.34, stdev=421.69, samples=160
+   iops        : min=25434, max=27656, avg=27268.80, stdev=105.42, samples=160
+  cpu          : usr=0.37%, sys=29.98%, ctx=373377, majf=0, minf=611
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=100.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=545656,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=106GiB/s (114GB/s), 106GiB/s-106GiB/s (114GB/s-114GB/s), io=2131GiB (2289GB), run=20049-20049msec
+
+Disk stats (read/write):
+  nvme27n1: ios=413729/0, sectors=211829248/0, merge=12/0, ticks=15912545/0, in_queue=15912545, util=90.49%
+  nvme19n1: ios=414979/0, sectors=212469248/0, merge=12/0, ticks=233087/0, in_queue=233087, util=81.49%
+  nvme15n1: ios=414980/0, sectors=212469760/0, merge=12/0, ticks=226034/0, in_queue=226034, util=80.59%
+  nvme1n1: ios=414977/0, sectors=212468224/0, merge=12/0, ticks=221029/0, in_queue=221029, util=80.02%
+  nvme23n1: ios=414962/0, sectors=212460544/0, merge=12/0, ticks=9638525/0, in_queue=9638525, util=90.93%
+  nvme16n1: ios=414962/0, sectors=212460544/0, merge=12/0, ticks=247752/0, in_queue=247752, util=84.54%
+  nvme9n1: ios=414965/0, sectors=212462080/0, merge=12/0, ticks=211269/0, in_queue=211269, util=79.34%
+  nvme4n1: ios=414964/0, sectors=212461568/0, merge=12/0, ticks=205664/0, in_queue=205664, util=80.26%
+  nvme28n1: ios=413848/0, sectors=211890176/0, merge=12/0, ticks=13730150/0, in_queue=13730150, util=91.20%
+  nvme17n1: ios=414960/0, sectors=212459520/0, merge=12/0, ticks=214505/0, in_queue=214505, util=79.66%
+  nvme13n1: ios=414948/0, sectors=212453376/0, merge=12/0, ticks=230563/0, in_queue=230563, util=82.05%
+  nvme0n1: ios=414948/0, sectors=212453376/0, merge=12/0, ticks=220939/0, in_queue=220940, util=81.42%
+  nvme26n1: ios=414946/0, sectors=212452352/0, merge=12/0, ticks=8373917/0, in_queue=8373917, util=92.12%
+  nvme22n1: ios=414948/0, sectors=212453376/0, merge=12/0, ticks=238142/0, in_queue=238142, util=82.21%
+  nvme12n1: ios=414946/0, sectors=212452352/0, merge=12/0, ticks=234351/0, in_queue=234351, util=81.82%
+  nvme3n1: ios=414947/0, sectors=212452864/0, merge=12/0, ticks=227100/0, in_queue=227100, util=81.45%
+  nvme29n1: ios=413694/0, sectors=211811328/0, merge=12/0, ticks=15020776/0, in_queue=15020776, util=92.11%
+  nvme20n1: ios=414944/0, sectors=212451328/0, merge=12/0, ticks=235627/0, in_queue=235627, util=82.45%
+  nvme10n1: ios=414942/0, sectors=212450816/0, merge=12/0, ticks=212031/0, in_queue=212032, util=80.40%
+  nvme5n1: ios=414941/0, sectors=212449792/0, merge=12/0, ticks=210422/0, in_queue=210422, util=80.03%
+  nvme25n1: ios=414926/0, sectors=212442112/0, merge=12/0, ticks=8311936/0, in_queue=8311936, util=92.76%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd0/fio:/mnt/ssd13/fio:/mnt/ssd20/fio:/mnt/ssd28/fio:/mnt/ssd5/fio:/mnt/ssd7/fio:/mnt/ssd21/fio:/mnt/ssd29/fio:/mnt/ssd4/fio:/mnt/ssd8/fio:/mnt/ssd15/fio:/mnt/ssd27/fio:/mnt/ssd6/fio:/mnt/ssd9/fio:/mnt/ssd18/fio:/mnt/ssd22/fio:/mnt/ssd1/fio:/mnt/ssd10/fio:/mnt/ssd14/fio:/mnt/ssd23/fio:/mnt/ssd3/fio:/mnt/ssd11/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1958246: Thu Oct  3 20:41:08 2024
+  read: IOPS=28.2k, BW=110GiB/s (118GB/s)(2210GiB/20048msec)
+   bw (  MiB/s): min=105508, max=115456, per=100.00%, avg=113066.34, stdev=399.53, samples=160
+   iops        : min=26374, max=28864, avg=28266.10, stdev=99.95, samples=160
+  cpu          : usr=0.45%, sys=31.07%, ctx=377003, majf=0, minf=615
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=100.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=565752,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=110GiB/s (118GB/s), 110GiB/s-110GiB/s (118GB/s-118GB/s), io=2210GiB (2373GB), run=20048-20048msec
+
+Disk stats (read/write):
+  nvme23n1: ios=409214/0, sectors=209518080/0, merge=12/0, ticks=12278343/0, in_queue=12278343, util=90.46%
+  nvme22n1: ios=410372/0, sectors=210110464/0, merge=12/0, ticks=8227168/0, in_queue=8227168, util=90.03%
+  nvme14n1: ios=410376/0, sectors=210112512/0, merge=12/0, ticks=218417/0, in_queue=218417, util=85.19%
+  nvme6n1: ios=410372/0, sectors=210110464/0, merge=12/0, ticks=218673/0, in_queue=218673, util=84.06%
+  nvme28n1: ios=410233/0, sectors=210039296/0, merge=12/0, ticks=4587043/0, in_queue=4587043, util=91.24%
+  nvme16n1: ios=410361/0, sectors=210104832/0, merge=12/0, ticks=229504/0, in_queue=229504, util=86.89%
+  nvme15n1: ios=410360/0, sectors=210104320/0, merge=12/0, ticks=220135/0, in_queue=220136, util=85.38%
+  nvme7n1: ios=410359/0, sectors=210103808/0, merge=12/0, ticks=215467/0, in_queue=215467, util=84.85%
+  nvme27n1: ios=410269/0, sectors=210057728/0, merge=12/0, ticks=3748546/0, in_queue=3748547, util=91.19%
+  nvme17n1: ios=410358/0, sectors=210103296/0, merge=12/0, ticks=201284/0, in_queue=201284, util=82.31%
+  nvme9n1: ios=410356/0, sectors=210102272/0, merge=12/0, ticks=200218/0, in_queue=200218, util=82.16%
+  nvme5n1: ios=410352/0, sectors=210100224/0, merge=12/0, ticks=213779/0, in_queue=213779, util=85.59%
+  nvme29n1: ios=410289/0, sectors=210067968/0, merge=12/0, ticks=3001832/0, in_queue=3001833, util=91.84%
+  nvme18n1: ios=410352/0, sectors=210100224/0, merge=12/0, ticks=199273/0, in_queue=199273, util=81.72%
+  nvme12n1: ios=410342/0, sectors=210095104/0, merge=12/0, ticks=219510/0, in_queue=219510, util=85.34%
+  nvme0n1: ios=410343/0, sectors=210095616/0, merge=12/0, ticks=199584/0, in_queue=199584, util=82.29%
+  nvme24n1: ios=409312/0, sectors=209567744/0, merge=12/0, ticks=9642753/0, in_queue=9642753, util=92.15%
+  nvme19n1: ios=410335/0, sectors=210091520/0, merge=12/0, ticks=8547242/0, in_queue=8547242, util=91.69%
+  nvme8n1: ios=410342/0, sectors=210095104/0, merge=12/0, ticks=199462/0, in_queue=199462, util=83.00%
+  nvme1n1: ios=410337/0, sectors=210092544/0, merge=12/0, ticks=199212/0, in_queue=199213, util=83.13%
+  nvme26n1: ios=409237/0, sectors=209529344/0, merge=12/0, ticks=11478432/0, in_queue=11478431, util=92.24%
+  nvme20n1: ios=410331/0, sectors=210089472/0, merge=12/0, ticks=8218297/0, in_queue=8218296, util=92.05%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd4/fio:/mnt/ssd7/fio:/mnt/ssd19/fio:/mnt/ssd22/fio:/mnt/ssd2/fio:/mnt/ssd11/fio:/mnt/ssd21/fio:/mnt/ssd23/fio:/mnt/ssd1/fio:/mnt/ssd8/fio:/mnt/ssd18/fio:/mnt/ssd26/fio:/mnt/ssd3/fio:/mnt/ssd10/fio:/mnt/ssd16/fio:/mnt/ssd24/fio:/mnt/ssd5/fio:/mnt/ssd9/fio:/mnt/ssd17/fio:/mnt/ssd25/fio:/mnt/ssd0/fio:/mnt/ssd12/fio:/mnt/ssd15/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1958465: Thu Oct  3 20:41:28 2024
+  read: IOPS=28.4k, BW=111GiB/s (119GB/s)(2225GiB/20035msec)
+   bw (  MiB/s): min=107840, max=115552, per=100.00%, avg=113882.19, stdev=320.72, samples=160
+   iops        : min=26960, max=28888, avg=28470.40, stdev=80.17, samples=160
+  cpu          : usr=0.42%, sys=31.42%, ctx=390965, majf=0, minf=619
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=100.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=569720,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=111GiB/s (119GB/s), 111GiB/s-111GiB/s (119GB/s-119GB/s), io=2225GiB (2390GB), run=20035-20035msec
+
+Disk stats (read/write):
+  nvme27n1: ios=394716/0, sectors=202094592/0, merge=12/0, ticks=196250/0, in_queue=196249, util=76.30%
+  nvme16n1: ios=394714/0, sectors=202093568/0, merge=12/0, ticks=217980/0, in_queue=217979, util=82.93%
+  nvme13n1: ios=394712/0, sectors=202092544/0, merge=12/0, ticks=1095564/0, in_queue=1095564, util=86.24%
+  nvme0n1: ios=394706/0, sectors=202089472/0, merge=12/0, ticks=202824/0, in_queue=202824, util=78.00%
+  nvme25n1: ios=393835/0, sectors=201643520/0, merge=12/0, ticks=15913612/0, in_queue=15913612, util=90.38%
+  nvme20n1: ios=394698/0, sectors=202085376/0, merge=12/0, ticks=383956/0, in_queue=383956, util=86.16%
+  nvme15n1: ios=394703/0, sectors=202088448/0, merge=12/0, ticks=1069299/0, in_queue=1069300, util=85.14%
+  nvme1n1: ios=394704/0, sectors=202088448/0, merge=12/0, ticks=197137/0, in_queue=197137, util=79.37%
+  nvme24n1: ios=393819/0, sectors=201635328/0, merge=12/0, ticks=16065074/0, in_queue=16065074, util=90.91%
+  nvme17n1: ios=394701/0, sectors=202086912/0, merge=12/0, ticks=191715/0, in_queue=191716, util=78.49%
+  nvme12n1: ios=394692/0, sectors=202082304/0, merge=12/0, ticks=1053353/0, in_queue=1053353, util=85.52%
+  nvme4n1: ios=394689/0, sectors=202080768/0, merge=12/0, ticks=190163/0, in_queue=190163, util=79.34%
+  nvme26n1: ios=393831/0, sectors=201641472/0, merge=12/0, ticks=15734685/0, in_queue=15734686, util=91.30%
+  nvme19n1: ios=394688/0, sectors=202080256/0, merge=12/0, ticks=379152/0, in_queue=379152, util=87.61%
+  nvme10n1: ios=394688/0, sectors=202080256/0, merge=12/0, ticks=1110305/0, in_queue=1110304, util=86.65%
+  nvme2n1: ios=394688/0, sectors=202080256/0, merge=12/0, ticks=204379/0, in_queue=204379, util=78.62%
+  nvme28n1: ios=394687/0, sectors=202079744/0, merge=12/0, ticks=192753/0, in_queue=192753, util=78.76%
+  nvme18n1: ios=394687/0, sectors=202080256/0, merge=12/0, ticks=195533/0, in_queue=195533, util=77.77%
+  nvme11n1: ios=394676/0, sectors=202074112/0, merge=12/0, ticks=1304211/0, in_queue=1304212, util=86.85%
+  nvme3n1: ios=394677/0, sectors=202074624/0, merge=12/0, ticks=198650/0, in_queue=198650, util=80.56%
+  nvme23n1: ios=393759/0, sectors=201604608/0, merge=12/0, ticks=16260399/0, in_queue=16260400, util=91.59%
+  nvme21n1: ios=394666/0, sectors=202068992/0, merge=12/0, ticks=387498/0, in_queue=387498, util=86.57%
+  nvme9n1: ios=394673/0, sectors=202072576/0, merge=12/0, ticks=1170703/0, in_queue=1170703, util=86.02%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd5/fio:/mnt/ssd9/fio:/mnt/ssd18/fio:/mnt/ssd25/fio:/mnt/ssd1/fio:/mnt/ssd7/fio:/mnt/ssd19/fio:/mnt/ssd24/fio:/mnt/ssd4/fio:/mnt/ssd13/fio:/mnt/ssd17/fio:/mnt/ssd23/fio:/mnt/ssd2/fio:/mnt/ssd8/fio:/mnt/ssd14/fio:/mnt/ssd28/fio:/mnt/ssd0/fio:/mnt/ssd10/fio:/mnt/ssd20/fio:/mnt/ssd29/fio:/mnt/ssd3/fio:/mnt/ssd11/fio:/mnt/ssd15/fio:/mnt/ssd27/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1958681: Thu Oct  3 20:41:49 2024
+  read: IOPS=29.5k, BW=115GiB/s (124GB/s)(2307GiB/20036msec)
+   bw (  MiB/s): min=112424, max=119216, per=100.00%, avg=118085.87, stdev=282.77, samples=160
+   iops        : min=28106, max=29804, avg=29521.40, stdev=70.69, samples=160
+  cpu          : usr=0.40%, sys=31.69%, ctx=384129, majf=0, minf=623
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=100.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=590712,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=115GiB/s (124GB/s), 115GiB/s-115GiB/s (124GB/s-124GB/s), io=2307GiB (2478GB), run=20036-20036msec
+
+Disk stats (read/write):
+  nvme28n1: ios=391505/0, sectors=200450560/0, merge=8/0, ticks=191224/0, in_queue=191224, util=75.04%
+  nvme18n1: ios=391505/0, sectors=200450560/0, merge=8/0, ticks=193133/0, in_queue=193133, util=74.87%
+  nvme12n1: ios=391500/0, sectors=200448000/0, merge=8/0, ticks=883978/0, in_queue=883978, util=83.18%
+  nvme3n1: ios=391496/0, sectors=200445952/0, merge=8/0, ticks=287281/0, in_queue=287281, util=81.65%
+  nvme24n1: ios=390662/0, sectors=200018944/0, merge=8/0, ticks=14285506/0, in_queue=14285507, util=90.48%
+  nvme16n1: ios=391492/0, sectors=200443904/0, merge=8/0, ticks=216944/0, in_queue=216944, util=80.90%
+  nvme13n1: ios=391492/0, sectors=200443904/0, merge=8/0, ticks=745429/0, in_queue=745429, util=82.82%
+  nvme2n1: ios=391489/0, sectors=200442368/0, merge=8/0, ticks=314250/0, in_queue=314251, util=81.43%
+  nvme27n1: ios=391488/0, sectors=200441856/0, merge=8/0, ticks=198518/0, in_queue=198519, util=75.50%
+  nvme22n1: ios=391472/0, sectors=200433664/0, merge=8/0, ticks=2684556/0, in_queue=2684556, util=89.23%
+  nvme11n1: ios=391482/0, sectors=200438784/0, merge=8/0, ticks=685376/0, in_queue=685375, util=83.71%
+  nvme1n1: ios=391477/0, sectors=200436224/0, merge=8/0, ticks=305320/0, in_queue=305320, util=80.96%
+  nvme25n1: ios=390606/0, sectors=199990272/0, merge=8/0, ticks=14776541/0, in_queue=14776542, util=91.20%
+  nvme17n1: ios=391481/0, sectors=200438272/0, merge=8/0, ticks=190610/0, in_queue=190611, util=76.37%
+  nvme8n1: ios=391478/0, sectors=200436736/0, merge=8/0, ticks=747184/0, in_queue=747185, util=83.51%
+  nvme6n1: ios=391476/0, sectors=200435712/0, merge=8/0, ticks=299234/0, in_queue=299234, util=81.95%
+  nvme23n1: ios=390614/0, sectors=199994368/0, merge=8/0, ticks=14587268/0, in_queue=14587268, util=91.46%
+  nvme19n1: ios=391462/0, sectors=200428544/0, merge=8/0, ticks=2714035/0, in_queue=2714035, util=90.02%
+  nvme14n1: ios=391467/0, sectors=200431104/0, merge=8/0, ticks=728788/0, in_queue=728787, util=83.73%
+  nvme7n1: ios=391465/0, sectors=200430592/0, merge=8/0, ticks=298832/0, in_queue=298831, util=82.36%
+  nvme26n1: ios=390602/0, sectors=199988224/0, merge=8/0, ticks=14640980/0, in_queue=14640981, util=92.20%
+  nvme20n1: ios=391451/0, sectors=200422912/0, merge=8/0, ticks=2520715/0, in_queue=2520714, util=91.34%
+  nvme9n1: ios=391462/0, sectors=200428544/0, merge=8/0, ticks=731776/0, in_queue=731777, util=83.41%
+  nvme5n1: ios=391456/0, sectors=200425472/0, merge=8/0, ticks=296721/0, in_queue=296721, util=81.58%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd4/fio:/mnt/ssd9/fio:/mnt/ssd19/fio:/mnt/ssd28/fio:/mnt/ssd5/fio:/mnt/ssd7/fio:/mnt/ssd18/fio:/mnt/ssd27/fio:/mnt/ssd0/fio:/mnt/ssd13/fio:/mnt/ssd20/fio:/mnt/ssd29/fio:/mnt/ssd6/fio:/mnt/ssd10/fio:/mnt/ssd17/fio:/mnt/ssd26/fio:/mnt/ssd3/fio:/mnt/ssd12/fio:/mnt/ssd21/fio:/mnt/ssd25/fio:/mnt/ssd2/fio:/mnt/ssd11/fio:/mnt/ssd16/fio:/mnt/ssd22/fio:/mnt/ssd1/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1958915: Thu Oct  3 20:42:10 2024
+  read: IOPS=27.9k, BW=109GiB/s (117GB/s)(2184GiB/20035msec)
+   bw (  MiB/s): min=107528, max=113088, per=100.00%, avg=111757.63, stdev=226.08, samples=160
+   iops        : min=26882, max=28272, avg=27939.40, stdev=56.52, samples=160
+  cpu          : usr=0.37%, sys=30.98%, ctx=387364, majf=0, minf=629
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=100.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=559096,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=109GiB/s (117GB/s), 109GiB/s-109GiB/s (117GB/s-117GB/s), io=2184GiB (2345GB), run=20035-20035msec
+
+Disk stats (read/write):
+  nvme27n1: ios=356367/0, sectors=182460416/0, merge=8/0, ticks=233866/0, in_queue=233866, util=69.96%
+  nvme18n1: ios=356368/0, sectors=182460416/0, merge=8/0, ticks=207108/0, in_queue=207108, util=63.74%
+  nvme13n1: ios=356363/0, sectors=182457856/0, merge=8/0, ticks=224685/0, in_queue=224684, util=66.38%
+  nvme6n1: ios=356356/0, sectors=182454272/0, merge=8/0, ticks=215011/0, in_queue=215011, util=65.84%
+  nvme28n1: ios=356355/0, sectors=182453760/0, merge=8/0, ticks=258705/0, in_queue=258705, util=69.64%
+  nvme16n1: ios=356352/0, sectors=182452224/0, merge=8/0, ticks=244591/0, in_queue=244591, util=70.32%
+  nvme12n1: ios=356354/0, sectors=182453248/0, merge=8/0, ticks=218708/0, in_queue=218708, util=66.80%
+  nvme5n1: ios=356352/0, sectors=182452224/0, merge=8/0, ticks=211492/0, in_queue=211492, util=66.18%
+  nvme23n1: ios=355490/0, sectors=182010880/0, merge=8/0, ticks=17172178/0, in_queue=17172177, util=90.62%
+  nvme22n1: ios=356343/0, sectors=182447616/0, merge=8/0, ticks=227014/0, in_queue=227014, util=68.05%
+  nvme14n1: ios=356340/0, sectors=182446080/0, merge=8/0, ticks=224969/0, in_queue=224969, util=68.92%
+  nvme7n1: ios=356342/0, sectors=182447104/0, merge=8/0, ticks=206843/0, in_queue=206844, util=68.55%
+  nvme29n1: ios=356340/0, sectors=182446080/0, merge=8/0, ticks=238437/0, in_queue=238437, util=69.59%
+  nvme19n1: ios=356341/0, sectors=182446592/0, merge=8/0, ticks=226905/0, in_queue=226905, util=68.16%
+  nvme11n1: ios=356336/0, sectors=182444032/0, merge=8/0, ticks=209024/0, in_queue=209024, util=65.74%
+  nvme4n1: ios=356336/0, sectors=182444032/0, merge=8/0, ticks=222877/0, in_queue=222877, util=68.30%
+  nvme26n1: ios=355444/0, sectors=181987328/0, merge=8/0, ticks=17829482/0, in_queue=17829482, util=91.81%
+  nvme21n1: ios=356336/0, sectors=182444032/0, merge=8/0, ticks=218373/0, in_queue=218372, util=68.00%
+  nvme15n1: ios=356336/0, sectors=182444032/0, merge=8/0, ticks=222781/0, in_queue=222781, util=68.88%
+  nvme3n1: ios=356336/0, sectors=182444032/0, merge=8/0, ticks=195227/0, in_queue=195227, util=66.26%
+  nvme25n1: ios=355440/0, sectors=181985280/0, merge=8/0, ticks=17809545/0, in_queue=17809545, util=91.89%
+  nvme20n1: ios=356336/0, sectors=182444032/0, merge=8/0, ticks=229900/0, in_queue=229900, util=68.77%
+  nvme10n1: ios=356336/0, sectors=182444032/0, merge=8/0, ticks=209717/0, in_queue=209716, util=66.01%
+  nvme0n1: ios=356336/0, sectors=182444032/0, merge=8/0, ticks=201059/0, in_queue=201059, util=66.24%
+  nvme24n1: ios=355419/0, sectors=181974528/0, merge=8/0, ticks=17710493/0, in_queue=17710492, util=92.80%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd0/fio:/mnt/ssd8/fio:/mnt/ssd19/fio:/mnt/ssd23/fio:/mnt/ssd1/fio:/mnt/ssd13/fio:/mnt/ssd17/fio:/mnt/ssd22/fio:/mnt/ssd6/fio:/mnt/ssd11/fio:/mnt/ssd16/fio:/mnt/ssd26/fio:/mnt/ssd3/fio:/mnt/ssd7/fio:/mnt/ssd21/fio:/mnt/ssd25/fio:/mnt/ssd5/fio:/mnt/ssd9/fio:/mnt/ssd14/fio:/mnt/ssd28/fio:/mnt/ssd4/fio:/mnt/ssd12/fio:/mnt/ssd18/fio:/mnt/ssd24/fio:/mnt/ssd2/fio:/mnt/ssd10/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1959143: Thu Oct  3 20:42:31 2024
+  read: IOPS=28.9k, BW=113GiB/s (121GB/s)(2264GiB/20035msec)
+   bw (  MiB/s): min=109992, max=119520, per=100.00%, avg=115890.40, stdev=334.95, samples=160
+   iops        : min=27498, max=29880, avg=28972.60, stdev=83.74, samples=160
+  cpu          : usr=0.40%, sys=31.47%, ctx=401055, majf=0, minf=631
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=100.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=579704,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=113GiB/s (121GB/s), 113GiB/s-113GiB/s (121GB/s-121GB/s), io=2264GiB (2431GB), run=20035-20035msec
+
+Disk stats (read/write):
+  nvme23n1: ios=353331/0, sectors=180905984/0, merge=8/0, ticks=17175924/0, in_queue=17175924, util=89.76%
+  nvme17n1: ios=354213/0, sectors=181357056/0, merge=8/0, ticks=180573/0, in_queue=180572, util=67.38%
+  nvme13n1: ios=354211/0, sectors=181356032/0, merge=8/0, ticks=189292/0, in_queue=189293, util=69.73%
+  nvme1n1: ios=354208/0, sectors=181354496/0, merge=8/0, ticks=191450/0, in_queue=191450, util=70.65%
+  nvme24n1: ios=353394/0, sectors=180937728/0, merge=8/0, ticks=16332275/0, in_queue=16332274, util=90.76%
+  nvme22n1: ios=354202/0, sectors=181351424/0, merge=8/0, ticks=988689/0, in_queue=988689, util=89.64%
+  nvme11n1: ios=354208/0, sectors=181354496/0, merge=8/0, ticks=193592/0, in_queue=193593, util=70.72%
+  nvme0n1: ios=354208/0, sectors=181354496/0, merge=8/0, ticks=192208/0, in_queue=192208, util=71.31%
+  nvme29n1: ios=354208/0, sectors=181354496/0, merge=8/0, ticks=209575/0, in_queue=209575, util=75.34%
+  nvme20n1: ios=354191/0, sectors=181345792/0, merge=8/0, ticks=985165/0, in_queue=985165, util=90.47%
+  nvme10n1: ios=354208/0, sectors=181354496/0, merge=8/0, ticks=200695/0, in_queue=200695, util=70.24%
+  nvme4n1: ios=354208/0, sectors=181354496/0, merge=8/0, ticks=179859/0, in_queue=179859, util=68.49%
+  nvme26n1: ios=353318/0, sectors=180898816/0, merge=8/0, ticks=17062363/0, in_queue=17062362, util=90.68%
+  nvme16n1: ios=354197/0, sectors=181348864/0, merge=8/0, ticks=200868/0, in_queue=200868, util=74.33%
+  nvme15n1: ios=354196/0, sectors=181348352/0, merge=8/0, ticks=192757/0, in_queue=192757, util=70.59%
+  nvme3n1: ios=354193/0, sectors=181346816/0, merge=8/0, ticks=197007/0, in_queue=197006, util=72.02%
+  nvme28n1: ios=354192/0, sectors=181346304/0, merge=8/0, ticks=208963/0, in_queue=208963, util=75.56%
+  nvme18n1: ios=354192/0, sectors=181346304/0, merge=8/0, ticks=178076/0, in_queue=178076, util=69.15%
+  nvme8n1: ios=354192/0, sectors=181346304/0, merge=8/0, ticks=187722/0, in_queue=187722, util=72.00%
+  nvme6n1: ios=354192/0, sectors=181346304/0, merge=8/0, ticks=174227/0, in_queue=174227, util=70.52%
+  nvme27n1: ios=354182/0, sectors=181341184/0, merge=8/0, ticks=212385/0, in_queue=212386, util=75.20%
+  nvme21n1: ios=354163/0, sectors=181331456/0, merge=8/0, ticks=943609/0, in_queue=943610, util=90.43%
+  nvme12n1: ios=354183/0, sectors=181341696/0, merge=8/0, ticks=184256/0, in_queue=184257, util=72.13%
+  nvme2n1: ios=354179/0, sectors=181339648/0, merge=8/0, ticks=189252/0, in_queue=189252, util=72.76%
+  nvme25n1: ios=353341/0, sectors=180910592/0, merge=8/0, ticks=16516313/0, in_queue=16516314, util=92.11%
+  nvme19n1: ios=354153/0, sectors=181326336/0, merge=8/0, ticks=999755/0, in_queue=999755, util=91.89%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd1/fio:/mnt/ssd9/fio:/mnt/ssd17/fio:/mnt/ssd29/fio:/mnt/ssd6/fio:/mnt/ssd7/fio:/mnt/ssd15/fio:/mnt/ssd25/fio:/mnt/ssd0/fio:/mnt/ssd10/fio:/mnt/ssd20/fio:/mnt/ssd23/fio:/mnt/ssd2/fio:/mnt/ssd11/fio:/mnt/ssd19/fio:/mnt/ssd24/fio:/mnt/ssd3/fio:/mnt/ssd12/fio:/mnt/ssd21/fio:/mnt/ssd28/fio:/mnt/ssd5/fio:/mnt/ssd13/fio:/mnt/ssd16/fio:/mnt/ssd27/fio:/mnt/ssd4/fio:/mnt/ssd8/fio:/mnt/ssd14/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1959370: Thu Oct  3 20:42:52 2024
+  read: IOPS=28.9k, BW=113GiB/s (121GB/s)(2266GiB/20037msec)
+   bw (  MiB/s): min=111464, max=117344, per=100.00%, avg=115948.59, stdev=258.48, samples=160
+   iops        : min=27866, max=29336, avg=28987.10, stdev=64.66, samples=160
+  cpu          : usr=0.36%, sys=31.54%, ctx=406492, majf=0, minf=635
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=100.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=580024,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=113GiB/s (121GB/s), 113GiB/s-113GiB/s (121GB/s-121GB/s), io=2266GiB (2433GB), run=20037-20037msec
+
+Disk stats (read/write):
+  nvme24n1: ios=340106/0, sectors=174134784/0, merge=8/0, ticks=16737986/0, in_queue=16737986, util=89.50%
+  nvme18n1: ios=340912/0, sectors=174546944/0, merge=8/0, ticks=164649/0, in_queue=164650, util=67.19%
+  nvme11n1: ios=340902/0, sectors=174541824/0, merge=8/0, ticks=435667/0, in_queue=435668, util=85.57%
+  nvme7n1: ios=340907/0, sectors=174544384/0, merge=8/0, ticks=169019/0, in_queue=169020, util=70.05%
+  nvme29n1: ios=340905/0, sectors=174543360/0, merge=8/0, ticks=191102/0, in_queue=191103, util=73.32%
+  nvme16n1: ios=340906/0, sectors=174543872/0, merge=8/0, ticks=184901/0, in_queue=184901, util=73.02%
+  nvme9n1: ios=340890/0, sectors=174535680/0, merge=8/0, ticks=427426/0, in_queue=427426, util=85.64%
+  nvme3n1: ios=340908/0, sectors=174544896/0, merge=8/0, ticks=172927/0, in_queue=172927, util=69.90%
+  nvme23n1: ios=340044/0, sectors=174102528/0, merge=8/0, ticks=17611645/0, in_queue=17611646, util=90.03%
+  nvme19n1: ios=340896/0, sectors=174538752/0, merge=8/0, ticks=273093/0, in_queue=273093, util=78.50%
+  nvme14n1: ios=340896/0, sectors=174538752/0, merge=8/0, ticks=184924/0, in_queue=184925, util=74.87%
+  nvme1n1: ios=340896/0, sectors=174538752/0, merge=8/0, ticks=173076/0, in_queue=173076, util=70.28%
+  nvme25n1: ios=340051/0, sectors=174106112/0, merge=8/0, ticks=17251879/0, in_queue=17251879, util=90.71%
+  nvme20n1: ios=340892/0, sectors=174536704/0, merge=8/0, ticks=275838/0, in_queue=275838, util=79.83%
+  nvme13n1: ios=340896/0, sectors=174538752/0, merge=8/0, ticks=192338/0, in_queue=192339, util=73.70%
+  nvme2n1: ios=340896/0, sectors=174538752/0, merge=8/0, ticks=172577/0, in_queue=172576, util=70.89%
+  nvme26n1: ios=340044/0, sectors=174102528/0, merge=8/0, ticks=17349514/0, in_queue=17349513, util=91.59%
+  nvme21n1: ios=340888/0, sectors=174534656/0, merge=8/0, ticks=266665/0, in_queue=266665, util=80.51%
+  nvme15n1: ios=340888/0, sectors=174534656/0, merge=8/0, ticks=202370/0, in_queue=202370, util=72.96%
+  nvme6n1: ios=340884/0, sectors=174532608/0, merge=8/0, ticks=172212/0, in_queue=172212, util=70.57%
+  nvme28n1: ios=340885/0, sectors=174533120/0, merge=8/0, ticks=186409/0, in_queue=186409, util=75.45%
+  nvme22n1: ios=340875/0, sectors=174528000/0, merge=8/0, ticks=267264/0, in_queue=267264, util=79.76%
+  nvme10n1: ios=340870/0, sectors=174525440/0, merge=8/0, ticks=430676/0, in_queue=430676, util=86.43%
+  nvme5n1: ios=340880/0, sectors=174530560/0, merge=8/0, ticks=172325/0, in_queue=172325, util=70.52%
+  nvme27n1: ios=340880/0, sectors=174530560/0, merge=8/0, ticks=191540/0, in_queue=191540, util=74.49%
+  nvme17n1: ios=340880/0, sectors=174530560/0, merge=8/0, ticks=163229/0, in_queue=163229, util=70.34%
+  nvme8n1: ios=340863/0, sectors=174521856/0, merge=8/0, ticks=425101/0, in_queue=425102, util=88.46%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd6/fio:/mnt/ssd12/fio:/mnt/ssd16/fio:/mnt/ssd22/fio:/mnt/ssd0/fio:/mnt/ssd7/fio:/mnt/ssd14/fio:/mnt/ssd23/fio:/mnt/ssd1/fio:/mnt/ssd11/fio:/mnt/ssd20/fio:/mnt/ssd25/fio:/mnt/ssd4/fio:/mnt/ssd13/fio:/mnt/ssd18/fio:/mnt/ssd26/fio:/mnt/ssd5/fio:/mnt/ssd9/fio:/mnt/ssd21/fio:/mnt/ssd29/fio:/mnt/ssd2/fio:/mnt/ssd8/fio:/mnt/ssd17/fio:/mnt/ssd28/fio:/mnt/ssd3/fio:/mnt/ssd10/fio:/mnt/ssd15/fio:/mnt/ssd24/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1959597: Thu Oct  3 20:43:13 2024
+  read: IOPS=29.4k, BW=115GiB/s (123GB/s)(2301GiB/20035msec)
+   bw (  MiB/s): min=112704, max=120224, per=100.00%, avg=117746.40, stdev=316.92, samples=160
+   iops        : min=28176, max=30056, avg=29436.60, stdev=79.23, samples=160
+  cpu          : usr=0.38%, sys=32.78%, ctx=395938, majf=0, minf=639
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=100.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=588984,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=115GiB/s (123GB/s), 115GiB/s-115GiB/s (123GB/s-123GB/s), io=2301GiB (2470GB), run=20035-20035msec
+
+Disk stats (read/write):
+  nvme29n1: ios=333777/0, sectors=170893824/0, merge=8/0, ticks=187541/0, in_queue=187540, util=72.96%
+  nvme21n1: ios=333767/0, sectors=170888704/0, merge=8/0, ticks=405628/0, in_queue=405628, util=85.16%
+  nvme10n1: ios=333763/0, sectors=170886656/0, merge=8/0, ticks=642032/0, in_queue=642032, util=87.08%
+  nvme0n1: ios=333768/0, sectors=170889216/0, merge=8/0, ticks=245455/0, in_queue=245455, util=77.88%
+  nvme23n1: ios=332899/0, sectors=170444288/0, merge=8/0, ticks=17094378/0, in_queue=17094378, util=90.08%
+  nvme16n1: ios=333768/0, sectors=170889216/0, merge=8/0, ticks=176477/0, in_queue=176478, util=72.53%
+  nvme8n1: ios=333744/0, sectors=170876928/0, merge=8/0, ticks=619731/0, in_queue=619731, util=87.34%
+  nvme1n1: ios=333761/0, sectors=170885632/0, merge=8/0, ticks=240912/0, in_queue=240912, util=78.26%
+  nvme24n1: ios=332949/0, sectors=170469888/0, merge=8/0, ticks=16252837/0, in_queue=16252837, util=90.84%
+  nvme20n1: ios=333751/0, sectors=170880512/0, merge=8/0, ticks=391886/0, in_queue=391887, util=86.35%
+  nvme14n1: ios=333760/0, sectors=170885120/0, merge=8/0, ticks=178150/0, in_queue=178150, util=74.19%
+  nvme3n1: ios=333760/0, sectors=170885120/0, merge=8/0, ticks=237847/0, in_queue=237847, util=79.46%
+  nvme27n1: ios=333760/0, sectors=170885120/0, merge=8/0, ticks=188092/0, in_queue=188092, util=73.54%
+  nvme22n1: ios=333747/0, sectors=170878464/0, merge=8/0, ticks=399153/0, in_queue=399153, util=86.98%
+  nvme12n1: ios=333756/0, sectors=170883072/0, merge=8/0, ticks=183019/0, in_queue=183019, util=73.70%
+  nvme4n1: ios=333754/0, sectors=170882048/0, merge=8/0, ticks=174746/0, in_queue=174746, util=72.99%
+  nvme28n1: ios=333753/0, sectors=170881536/0, merge=8/0, ticks=184454/0, in_queue=184453, util=74.41%
+  nvme18n1: ios=333748/0, sectors=170878976/0, merge=8/0, ticks=158224/0, in_queue=158224, util=68.64%
+  nvme15n1: ios=333745/0, sectors=170877440/0, merge=8/0, ticks=183514/0, in_queue=183515, util=73.60%
+  nvme7n1: ios=333745/0, sectors=170877440/0, merge=8/0, ticks=175147/0, in_queue=175146, util=72.98%
+  nvme25n1: ios=332935/0, sectors=170462720/0, merge=8/0, ticks=16173129/0, in_queue=16173129, util=91.44%
+  nvme17n1: ios=333745/0, sectors=170877440/0, merge=8/0, ticks=158915/0, in_queue=158915, util=68.77%
+  nvme11n1: ios=333726/0, sectors=170867712/0, merge=8/0, ticks=591240/0, in_queue=591240, util=88.95%
+  nvme6n1: ios=333744/0, sectors=170876928/0, merge=8/0, ticks=174447/0, in_queue=174447, util=72.54%
+  nvme26n1: ios=332878/0, sectors=170433536/0, merge=8/0, ticks=16968419/0, in_queue=16968420, util=92.20%
+  nvme19n1: ios=333728/0, sectors=170868736/0, merge=8/0, ticks=406707/0, in_queue=406706, util=87.87%
+  nvme9n1: ios=333721/0, sectors=170865152/0, merge=8/0, ticks=609525/0, in_queue=609525, util=89.25%
+  nvme2n1: ios=333736/0, sectors=170872832/0, merge=8/0, ticks=238862/0, in_queue=238862, util=80.02%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd1/fio:/mnt/ssd13/fio:/mnt/ssd17/fio:/mnt/ssd29/fio:/mnt/ssd5/fio:/mnt/ssd10/fio:/mnt/ssd18/fio:/mnt/ssd27/fio:/mnt/ssd0/fio:/mnt/ssd7/fio:/mnt/ssd16/fio:/mnt/ssd23/fio:/mnt/ssd4/fio:/mnt/ssd11/fio:/mnt/ssd21/fio:/mnt/ssd28/fio:/mnt/ssd3/fio:/mnt/ssd12/fio:/mnt/ssd20/fio:/mnt/ssd25/fio:/mnt/ssd6/fio:/mnt/ssd9/fio:/mnt/ssd15/fio:/mnt/ssd26/fio:/mnt/ssd2/fio:/mnt/ssd8/fio:/mnt/ssd14/fio:/mnt/ssd22/fio:/mnt/ssd19/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1959823: Thu Oct  3 20:43:34 2024
+  read: IOPS=27.9k, BW=109GiB/s (117GB/s)(2184GiB/20042msec)
+   bw (  MiB/s): min=106392, max=114544, per=100.00%, avg=111722.39, stdev=393.38, samples=160
+   iops        : min=26598, max=28636, avg=27930.20, stdev=98.29, samples=160
+  cpu          : usr=0.39%, sys=31.69%, ctx=408416, majf=0, minf=646
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=100.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=559032,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=109GiB/s (117GB/s), 109GiB/s-109GiB/s (117GB/s-117GB/s), io=2184GiB (2345GB), run=20042-20042msec
+
+Disk stats (read/write):
+  nvme24n1: ios=305487/0, sectors=156409856/0, merge=8/0, ticks=206695/0, in_queue=206695, util=66.50%
+  nvme22n1: ios=305486/0, sectors=156408832/0, merge=8/0, ticks=171817/0, in_queue=171817, util=64.19%
+  nvme11n1: ios=304460/0, sectors=155883520/0, merge=8/0, ticks=14772505/0, in_queue=14772504, util=89.81%
+  nvme7n1: ios=305480/0, sectors=156405760/0, merge=8/0, ticks=165457/0, in_queue=165457, util=61.68%
+  nvme28n1: ios=305475/0, sectors=156403200/0, merge=8/0, ticks=162772/0, in_queue=162772, util=62.43%
+  nvme19n1: ios=305473/0, sectors=156402176/0, merge=8/0, ticks=174913/0, in_queue=174913, util=64.12%
+  nvme12n1: ios=305460/0, sectors=156395520/0, merge=8/0, ticks=4188121/0, in_queue=4188121, util=88.68%
+  nvme5n1: ios=305465/0, sectors=156398080/0, merge=8/0, ticks=163308/0, in_queue=163309, util=63.08%
+  nvme23n1: ios=305456/0, sectors=156393472/0, merge=8/0, ticks=205690/0, in_queue=205690, util=66.38%
+  nvme16n1: ios=305455/0, sectors=156392960/0, merge=8/0, ticks=169088/0, in_queue=169089, util=65.98%
+  nvme10n1: ios=304796/0, sectors=156055552/0, merge=8/0, ticks=9794278/0, in_queue=9794279, util=91.34%
+  nvme1n1: ios=305456/0, sectors=156393472/0, merge=8/0, ticks=156367/0, in_queue=156368, util=62.15%
+  nvme27n1: ios=305448/0, sectors=156389376/0, merge=8/0, ticks=159064/0, in_queue=159063, util=63.17%
+  nvme20n1: ios=305449/0, sectors=156389888/0, merge=8/0, ticks=172674/0, in_queue=172673, util=65.39%
+  nvme15n1: ios=305444/0, sectors=156387328/0, merge=8/0, ticks=4943711/0, in_queue=4943710, util=89.88%
+  nvme6n1: ios=305443/0, sectors=156386816/0, merge=8/0, ticks=162144/0, in_queue=162144, util=63.66%
+  nvme26n1: ios=305441/0, sectors=156385792/0, merge=8/0, ticks=203916/0, in_queue=203917, util=67.62%
+  nvme21n1: ios=305440/0, sectors=156385280/0, merge=8/0, ticks=171535/0, in_queue=171535, util=64.26%
+  nvme14n1: ios=305440/0, sectors=156385280/0, merge=8/0, ticks=5365103/0, in_queue=5365104, util=90.04%
+  nvme3n1: ios=305440/0, sectors=156385280/0, merge=8/0, ticks=156889/0, in_queue=156889, util=62.23%
+  nvme29n1: ios=305440/0, sectors=156385280/0, merge=8/0, ticks=160135/0, in_queue=160135, util=63.96%
+  nvme18n1: ios=305440/0, sectors=156385280/0, merge=8/0, ticks=148885/0, in_queue=148885, util=62.28%
+  nvme9n1: ios=304463/0, sectors=155885568/0, merge=8/0, ticks=14454673/0, in_queue=14454673, util=92.23%
+  nvme4n1: ios=305440/0, sectors=156385280/0, merge=8/0, ticks=161709/0, in_queue=161709, util=64.53%
+  nvme25n1: ios=305440/0, sectors=156385280/0, merge=8/0, ticks=209355/0, in_queue=209355, util=67.74%
+  nvme17n1: ios=305440/0, sectors=156385280/0, merge=8/0, ticks=150137/0, in_queue=150136, util=61.66%
+  nvme8n1: ios=304686/0, sectors=155999232/0, merge=8/0, ticks=10783027/0, in_queue=10783027, util=92.17%
+  nvme0n1: ios=305440/0, sectors=156385280/0, merge=8/0, ticks=155803/0, in_queue=155803, util=62.32%
+  nvme13n1: ios=305432/0, sectors=156381184/0, merge=8/0, ticks=5163421/0, in_queue=5163421, util=90.46%
+
+Fio command: fio --name=all_ssd --filename=/mnt/ssd5/fio:/mnt/ssd10/fio:/mnt/ssd14/fio:/mnt/ssd28/fio:/mnt/ssd1/fio:/mnt/ssd12/fio:/mnt/ssd16/fio:/mnt/ssd27/fio:/mnt/ssd6/fio:/mnt/ssd13/fio:/mnt/ssd18/fio:/mnt/ssd23/fio:/mnt/ssd3/fio:/mnt/ssd7/fio:/mnt/ssd17/fio:/mnt/ssd24/fio:/mnt/ssd4/fio:/mnt/ssd8/fio:/mnt/ssd19/fio:/mnt/ssd29/fio:/mnt/ssd0/fio:/mnt/ssd9/fio:/mnt/ssd20/fio:/mnt/ssd26/fio:/mnt/ssd2/fio:/mnt/ssd11/fio:/mnt/ssd21/fio:/mnt/ssd25/fio:/mnt/ssd15/fio:/mnt/ssd22/fio --filesize=100g --rw=read --bs=4M --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --gtod_reduce=1 --direct=1 --ioengine=io_uring --registerfiles --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1960049: Thu Oct  3 20:43:55 2024
+  read: IOPS=28.5k, BW=111GiB/s (119GB/s)(2228GiB/20038msec)
+   bw (  MiB/s): min=110280, max=117208, per=100.00%, avg=114034.40, stdev=357.38, samples=160
+   iops        : min=27570, max=29302, avg=28508.60, stdev=89.35, samples=160
+  cpu          : usr=0.40%, sys=32.43%, ctx=390520, majf=0, minf=647
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=100.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=570424,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=111GiB/s (119GB/s), 111GiB/s-111GiB/s (119GB/s-119GB/s), io=2228GiB (2393GB), run=20038-20038msec
+
+Disk stats (read/write):
+  nvme28n1: ios=304240/0, sectors=155770880/0, merge=8/0, ticks=155575/0, in_queue=155575, util=65.04%
+  nvme19n1: ios=304240/0, sectors=155770880/0, merge=8/0, ticks=169298/0, in_queue=169299, util=66.63%
+  nvme8n1: ios=304240/0, sectors=155770880/0, merge=8/0, ticks=4092098/0, in_queue=4092097, util=89.16%
+  nvme6n1: ios=304240/0, sectors=155770880/0, merge=8/0, ticks=695683/0, in_queue=695682, util=72.54%
+  nvme24n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=205289/0, in_queue=205289, util=68.97%
+  nvme21n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=167249/0, in_queue=167248, util=66.31%
+  nvme10n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=4606467/0, in_queue=4606467, util=89.80%
+  nvme5n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=549320/0, in_queue=549321, util=72.89%
+  nvme29n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=157881/0, in_queue=157881, util=65.81%
+  nvme22n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=170542/0, in_queue=170541, util=66.84%
+  nvme12n1: ios=303765/0, sectors=155527680/0, merge=8/0, ticks=12266305/0, in_queue=12266306, util=90.92%
+  nvme1n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=674722/0, in_queue=674722, util=74.51%
+  nvme26n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=203057/0, in_queue=203057, util=69.18%
+  nvme16n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=158511/0, in_queue=158511, util=67.35%
+  nvme11n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=5911557/0, in_queue=5911557, util=90.73%
+  nvme2n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=557570/0, in_queue=557570, util=74.47%
+  nvme27n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=157741/0, in_queue=157741, util=66.14%
+  nvme17n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=145204/0, in_queue=145204, util=62.28%
+  nvme13n1: ios=303981/0, sectors=155638272/0, merge=8/0, ticks=10455083/0, in_queue=10455083, util=91.42%
+  nvme7n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=612630/0, in_queue=612629, util=74.35%
+  nvme23n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=198783/0, in_queue=198783, util=69.49%
+  nvme18n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=140014/0, in_queue=140014, util=61.65%
+  nvme14n1: ios=303830/0, sectors=155560960/0, merge=8/0, ticks=12703850/0, in_queue=12703849, util=92.10%
+  nvme4n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=553395/0, in_queue=553395, util=74.12%
+  nvme25n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=207420/0, in_queue=207420, util=69.60%
+  nvme20n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=168629/0, in_queue=168629, util=68.52%
+  nvme15n1: ios=303828/0, sectors=155559936/0, merge=8/0, ticks=11910559/0, in_queue=11910559, util=92.50%
+  nvme3n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=507987/0, in_queue=507988, util=75.89%
+  nvme9n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=4676387/0, in_queue=4676387, util=91.69%
+  nvme0n1: ios=304224/0, sectors=155762688/0, merge=8/0, ticks=576143/0, in_queue=576143, util=75.41%
+

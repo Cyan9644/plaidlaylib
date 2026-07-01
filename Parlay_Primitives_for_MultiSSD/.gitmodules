@@ -1,0 +1,7 @@
+[submodule "graph"]
+	path = graph
+	url = git@github.com:lihaohong6/EM-graph.git
+	branch = master
+[submodule "Plaidlay/parlaylib"]
+	path = Plaidlay/parlaylib
+	url = https://github.com/Cyan9644/Parlay_Primitives_for_MultiSSD

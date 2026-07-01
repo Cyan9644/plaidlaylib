@@ -1,0 +1,105 @@
+Jobs: 4
+Fio command: fio --name=all_ssd --filename=/dev/disk/by-path/pci-0000\:07\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2f\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:48\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:68\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:06\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2e\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:47\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:67\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:05\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2d\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:46\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:66\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:04\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2c\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:45\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:65\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:03\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2b\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:44\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:64\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:02\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2a\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:43\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:63\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:01\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:23\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:42\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:62\:00.0-nvme-1 --filesize=100g --rw=read --bs=4m --group_reporting --time_based=1 --runtime=20 --numjobs=4 --overwrite=0 --readonly --gtod_reduce=1 --direct=0 --ioengine=io_uring --registerfiles --fixedbufs --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 4 processes
+
+all_ssd: (groupid=0, jobs=4): err= 0: pid=1515154: Wed Oct  2 18:23:32 2024
+  read: IOPS=5396, BW=21.1GiB/s (22.6GB/s)(422GiB/20019msec)
+   bw (  MiB/s): min=19288, max=21800, per=99.79%, avg=21539.20, stdev=92.70, samples=160
+   iops        : min= 4822, max= 5450, avg=5384.80, stdev=23.18, samples=160
+  cpu          : usr=0.17%, sys=99.21%, ctx=95, majf=0, minf=15
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.1%, >=64=99.8%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=108024,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=21.1GiB/s (22.6GB/s), 21.1GiB/s-21.1GiB/s (22.6GB/s-22.6GB/s), io=422GiB (453GB), run=20019-20019msec
+
+Jobs: 8
+Fio command: fio --name=all_ssd --filename=/dev/disk/by-path/pci-0000\:07\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2f\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:48\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:68\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:06\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2e\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:47\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:67\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:05\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2d\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:46\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:66\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:04\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2c\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:45\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:65\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:03\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2b\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:44\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:64\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:02\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2a\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:43\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:63\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:01\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:23\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:42\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:62\:00.0-nvme-1 --filesize=100g --rw=read --bs=4m --group_reporting --time_based=1 --runtime=20 --numjobs=8 --overwrite=0 --readonly --gtod_reduce=1 --direct=0 --ioengine=io_uring --registerfiles --fixedbufs --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 8 processes
+
+all_ssd: (groupid=0, jobs=8): err= 0: pid=1515348: Wed Oct  2 18:23:54 2024
+  read: IOPS=4169, BW=16.3GiB/s (17.5GB/s)(326GiB/20011msec)
+   bw (  MiB/s): min= 8800, max=36528, per=100.00%, avg=34901.05, stdev=771.89, samples=152
+   iops        : min= 2200, max= 9132, avg=8725.26, stdev=192.97, samples=152
+  cpu          : usr=0.10%, sys=99.41%, ctx=1628, majf=0, minf=31
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.2%, 32=0.3%, >=64=99.4%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=83440,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=16.3GiB/s (17.5GB/s), 16.3GiB/s-16.3GiB/s (17.5GB/s-17.5GB/s), io=326GiB (350GB), run=20011-20011msec
+
+Jobs: 16
+Fio command: fio --name=all_ssd --filename=/dev/disk/by-path/pci-0000\:07\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2f\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:48\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:68\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:06\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2e\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:47\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:67\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:05\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2d\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:46\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:66\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:04\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2c\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:45\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:65\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:03\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2b\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:44\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:64\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:02\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2a\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:43\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:63\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:01\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:23\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:42\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:62\:00.0-nvme-1 --filesize=100g --rw=read --bs=4m --group_reporting --time_based=1 --runtime=20 --numjobs=16 --overwrite=0 --readonly --gtod_reduce=1 --direct=0 --ioengine=io_uring --registerfiles --fixedbufs --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 16 processes
+
+all_ssd: (groupid=0, jobs=16): err= 0: pid=1515487: Wed Oct  2 18:24:16 2024
+  read: IOPS=9825, BW=38.4GiB/s (41.2GB/s)(768GiB/20006msec)
+   bw (  MiB/s): min=33152, max=50640, per=100.00%, avg=43670.36, stdev=133.72, samples=575
+   iops        : min= 8288, max=12660, avg=10917.59, stdev=33.43, samples=575
+  cpu          : usr=0.15%, sys=99.27%, ctx=1191, majf=0, minf=67
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=0.3%, >=64=99.5%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=196576,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=38.4GiB/s (41.2GB/s), 38.4GiB/s-38.4GiB/s (41.2GB/s-41.2GB/s), io=768GiB (824GB), run=20006-20006msec
+
+Jobs: 32
+Fio command: fio --name=all_ssd --filename=/dev/disk/by-path/pci-0000\:07\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2f\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:48\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:68\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:06\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2e\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:47\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:67\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:05\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2d\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:46\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:66\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:04\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2c\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:45\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:65\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:03\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2b\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:44\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:64\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:02\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2a\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:43\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:63\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:01\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:23\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:42\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:62\:00.0-nvme-1 --filesize=100g --rw=read --bs=4m --group_reporting --time_based=1 --runtime=20 --numjobs=32 --overwrite=0 --readonly --gtod_reduce=1 --direct=0 --ioengine=io_uring --registerfiles --fixedbufs --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 32 processes
+
+all_ssd: (groupid=0, jobs=32): err= 0: pid=1515642: Wed Oct  2 18:24:39 2024
+  read: IOPS=12.8k, BW=49.9GiB/s (53.6GB/s)(1003GiB/20090msec)
+   bw (  MiB/s): min=29969, max=57331, per=99.74%, avg=50992.10, stdev=123.31, samples=1278
+   iops        : min= 7487, max=14332, avg=12747.26, stdev=30.85, samples=1278
+  cpu          : usr=0.17%, sys=98.80%, ctx=2830, majf=0, minf=138
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.2%, 32=0.4%, >=64=99.2%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=256768,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=49.9GiB/s (53.6GB/s), 49.9GiB/s-49.9GiB/s (53.6GB/s-53.6GB/s), io=1003GiB (1077GB), run=20090-20090msec
+
+Jobs: 64
+Fio command: fio --name=all_ssd --filename=/dev/disk/by-path/pci-0000\:07\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2f\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:48\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:68\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:06\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2e\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:47\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:67\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:05\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2d\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:46\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:66\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:04\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2c\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:45\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:65\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:03\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2b\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:44\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:64\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:02\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:2a\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:43\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:63\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:01\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:23\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:42\:00.0-nvme-1:/dev/disk/by-path/pci-0000\:62\:00.0-nvme-1 --filesize=100g --rw=read --bs=4m --group_reporting --time_based=1 --runtime=20 --numjobs=64 --overwrite=0 --readonly --gtod_reduce=1 --direct=0 --ioengine=io_uring --registerfiles --fixedbufs --iodepth=64
+all_ssd: (g=0): rw=read, bs=(R) 4096KiB-4096KiB, (W) 4096KiB-4096KiB, (T) 4096KiB-4096KiB, ioengine=io_uring, iodepth=64
+...
+fio-3.37
+Starting 64 processes
+
+all_ssd: (groupid=0, jobs=64): err= 0: pid=1515872: Wed Oct  2 18:25:02 2024
+  read: IOPS=13.3k, BW=51.8GiB/s (55.6GB/s)(1046GiB/20187msec)
+   bw (  MiB/s): min=16044, max=60768, per=98.91%, avg=52490.99, stdev=106.02, samples=2551
+   iops        : min= 4007, max=15192, avg=13122.69, stdev=26.51, samples=2551
+  cpu          : usr=0.19%, sys=97.88%, ctx=4718, majf=0, minf=274
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.2%, 16=0.4%, 32=0.8%, >=64=98.5%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=267840,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=51.8GiB/s (55.6GB/s), 51.8GiB/s-51.8GiB/s (55.6GB/s-55.6GB/s), io=1046GiB (1123GB), run=20187-20187msec
+

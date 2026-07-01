@@ -1,0 +1,16 @@
+MODULE.bazel.lock
+.clwb
+.idea
+/bazel-*
+/perf.data*
+
+# these are from the makefile I made and other misc stuff - Peter (undergrad Peter)
+/benchmarks
+/deps
+/utils
+.direnv
+.cache
+/compile_commands.json
+
+Makefile
+TODO.txt

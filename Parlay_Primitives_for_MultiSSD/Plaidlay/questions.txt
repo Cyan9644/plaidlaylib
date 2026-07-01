@@ -1,0 +1,63 @@
+1. right now, becasue the extern seq is writing to disk, we had the asumpton that it could only use PODs.
+this means it can't keep a seq as its datatype (like a vector)
+if the vals are sequences, how do you get the block size? also with pointers when you read them back you can't tell whether the heap has changed
+
+
+
+2. Laxman ssaid a lazy filter could be good
+hwoever one thing that's bad here but works in ram is that 
+if you want to do a lazy filter for each block that makes an alloc for each surviving subarray
+
+this works in ram bc of the heap
+
+but if you want to write to disk it's not really possible
+
+you may as well just make filter eager and consume the sequence 
+
+
+3. Filter and flatten in BID -- the lazy part is that wehn you rquest a block is that it gives you a stream with indexes between blcoks
+
+slices that live partly in one block and partly in the next 
+
+in our setting you would need to read both blcoks
+you need to walk the whole stream -- in our implementation you might need to read from the end and beginning of the next block
+the end is an issue because we need to iterate, but the beginning is not an issue since we can issue smaler reads than writes
+
+
+4. Flatten:
+What does doing a flatten actually mean in this external memory setting?
+Probably we're given a sequence of external (living on SSD) sequences and want to make it a single external sequence.
+To do this, just append the chunk header list to an existing list.
+The problem with this approach is that there'll now be duplicate indices that can't exist for operations like filter, which require
+an ordering on the headers to ensure stability. So... how do we assign new indices for duplicates and ensure consistency within the flatten?
+
+Let's first look at how it's done in a std::vector. If you flatten here, there's no order change at all becuase nothing needs to be appended,
+it's just immediately accessible via indexing. The underlying issue is that the index in an array is not intrinsic to that data,
+but a product of its position in the array. This is not the case for external seqeunces, as index is a field of the chunks and does not change when 
+they are put into a different header list.
+
+Maybe the solution is to give the struct a global ordering field,
+but another option is to simply loop through all chunks with a running counter and assign them a new index
+
+
+Another option which may be better is to evaluate it lazily by creating a small indexable list of offset index, chunk header list pairs
+
+
+
+
+NOtes:
+
+Move string to wrapper struct
+
+we would like to bound teh number of blocks that are underfull
+we can design a solution around this
+
+
+peter's implementation also needs to be parallelized more
+
+
+we can argue that each block is at least partially full
+
+hash array map trie
+
+rbt -- immutable sequence that's concatenable 

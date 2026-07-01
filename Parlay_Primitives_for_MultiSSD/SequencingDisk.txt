@@ -1,0 +1,14 @@
+Here are some ideas:
+We need to distribute data ~evenly across disks to avoid root complex bottlenecks and SSD memory bottlenecks (i.e. we can't put all data into a single root complex or a single SSD that we do parallel reads from).
+So, the first ideas that come to mind are round-robin with blocks and hashing, both of which will hopefully distribute data evenly (though round robin has issues if for some reason the disks are reordered).
+Another idea is to distribute to the SSD that has the smallest amount of written blocks on it, but this ends up being identical to round-robin and has synchronization overhead.
+Raid 0 is significantly more challenging to implement and hardware RAID cannot be relied on.
+
+
+Another idea:
+
+hashing for root complex and a second hash for individual SSD
+
+Round robin has issues with concurrent access: 
+
+each thread needs to start at a different disk and have its own individual round-robin counter to avoid synchronization overhead and SSD bandwidth bottlenecks

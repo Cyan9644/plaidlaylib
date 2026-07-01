@@ -1,0 +1,13 @@
+(chmod 700 virtual_ssd.sh, chmod 700 physical_ssd.sh)
+./virtual_ssd.sh
+
+./ramdisk_up.sh
+
+./bazel-bin/externalSeqMain
+
+./bazel-bin/primesScaling
+
+
+./physical_ssd.sh
+
+./ramdisk_down.sh

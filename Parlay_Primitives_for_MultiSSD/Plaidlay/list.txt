@@ -1,0 +1,14 @@
+Peter:
+Monday: wrapping peter's implementations into c++ class and wrote a small program 
+
+Afterwards studied reader and thinks it was good. Design of what we're doing does need to be aware of the fact that the reader can give us whateever files we request in blcoks that are out of order
+how do you lay out the sequence in files across SSDS
+thought about parallelism using block of streams and stream of blocks
+
+
+Alex:
+
+block implementations of flatten, scan, and filter with debugging, documented existing filter method and debugged it,
+
+debugged the existing I/O uring code, currently making a parallel filter for SSDs
+
