@@ -1,0 +1,3 @@
+[submodule "chunk-sequence/PLAID"]
+	path = chunk-sequence/PLAID
+	url = https://github.com/ParAlg/PLAID
