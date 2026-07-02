@@ -21,9 +21,13 @@ The written CSVs use the same descriptive column names / units as the
 predecessor's standalone plotters, and the plots follow the same two-panel
 (read-bound map|map|reduce vs write-bound force(map|map)) base-2 log-log style.
 
-At the start of the run the script best-effort `fstrim`s the SSD mounts once
-(fstrim can be slow on real SSDs, so it is not repeated between points; a no-op
-on a tmpfs dev box, where FITRIM is unsupported — skipped quietly).
+To keep data off the drives, the script deletes the benchmarks' data files
+(`perm<drive>` inputs + `bw_*` intermediates) between every sweep point and after
+the run, so nothing accumulates (the C++ binaries clean their own intermediates,
+but delayed_compare leaves its `perm` input behind).  It also best-effort
+`fstrim`s the mounts once at startup (fstrim can be slow on real SSDs, so it is
+not repeated between points; a no-op on a tmpfs dev box, where FITRIM is
+unsupported — skipped quietly).  `--no-clean` / `--no-fstrim` disable each.
 
 Every run carries a cross-substrate correctness check (agree=1).  If any point
 reports agree=0 or a binary exits non-zero, this script prints the offending
@@ -83,6 +87,29 @@ def _f(s):
 
 # ── device maintenance ──────────────────────────────────────────────────────
 _fstrim_warned = False
+
+# File-name globs (per mount) of every prefix the benchmarks write: the shared
+# `perm<drive>` input plus each pipeline's intermediates.  Used to clear the
+# drives between points so nothing accumulates — the C++ binaries clean their
+# own intermediates, but delayed_compare leaves its `perm` input behind.
+BENCH_FILE_GLOBS = ("perm[0-9]*", "bw_dl_*", "bw_cs_*")
+
+
+def clear_bench_data(glob_pat, enabled):
+    """Best-effort unlink of leftover bench files under every mount in glob_pat."""
+    if not enabled:
+        return
+    removed = 0
+    for m in sorted(glob.glob(glob_pat)):
+        for pat in BENCH_FILE_GLOBS:
+            for f in glob.glob(os.path.join(m, pat)):
+                try:
+                    os.unlink(f)
+                    removed += 1
+                except OSError:
+                    pass
+    if removed:
+        print(f"  cleared {removed} leftover bench files", flush=True)
 
 
 def fstrim_mounts(glob_pat, enabled):
@@ -147,7 +174,7 @@ DELAYED_COLS = ["n", "raw_read_s", "eager_mr_s", "delayed_mr_s", "inmem_mr_s",
                 "eager_fmm_s", "delayed_fmm_s", "inmem_fmm_s", "agree"]
 
 
-def run_delayed(n_values, extra_args):
+def run_delayed(n_values, extra_args, clear_glob, clear_enabled):
     make("bin/delayedCompare")
     binary = os.path.join(BINDIR, "delayedCompare")
     rows = []
@@ -158,6 +185,7 @@ def run_delayed(n_values, extra_args):
         if row["agree"].strip() != "1":
             sys.exit(f"\n*** agree={row['agree']} at n={n} — aborting ***")
         rows.append(row)
+        clear_bench_data(clear_glob, clear_enabled)   # don't leave input on the drives
     return rows
 
 
@@ -167,7 +195,7 @@ CHUNK_COLS = ["chunk_size_bytes", "n", "raw_s", "eager_mr_s", "delayed_mr_s",
               "eager_mmr_s", "delayed_mmr_s", "eager_fmm_s", "delayed_fmm_s", "agree"]
 
 
-def run_chunk_size(chunk_sizes, n, extra_args):
+def run_chunk_size(chunk_sizes, n, extra_args, clear_glob, clear_enabled):
     rows = []
     for cs in chunk_sizes:
         make(f"bin/chunkSizeCompare_{cs}")
@@ -178,6 +206,7 @@ def run_chunk_size(chunk_sizes, n, extra_args):
         if row["agree"].strip() != "1":
             sys.exit(f"\n*** agree={row['agree']} at chunk_bytes={cs} — aborting ***")
         rows.append(row)
+        clear_bench_data(clear_glob, clear_enabled)   # don't leave input on the drives
     return rows
 
 
@@ -320,6 +349,8 @@ def main():
                     help="glob of mounts to fstrim once at startup (default: /mnt/ssd*)")
     ap.add_argument("--no-fstrim", action="store_true",
                     help="disable the startup fstrim")
+    ap.add_argument("--no-clean", action="store_true",
+                    help="leave bench data files on the mounts (default: clear between points)")
     args = ap.parse_args()
 
     do_delayed = args.all or args.delayed
@@ -332,25 +363,27 @@ def main():
     chunk_sizes = [parse_bytes(x) for x in args.chunk_sizes.split()]
     chunk_n = parse_count(args.n)
     fstrim_enabled = not args.no_fstrim
+    clear_enabled = not args.no_clean
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     outdir = os.path.join(REPO_ROOT, args.outdir, stamp)
     os.makedirs(outdir, exist_ok=True)
     print(f"Run directory: {outdir}\n")
 
-    # One trim up front (fstrim can be slow on real SSDs, so we don't repeat it
-    # between points); a no-op on tmpfs, skipped quietly.
+    # Start from clean drives, then trim once up front (fstrim can be slow on
+    # real SSDs, so we don't repeat it between points); both no-ops on tmpfs.
+    clear_bench_data(args.fstrim_glob, clear_enabled)
     fstrim_mounts(args.fstrim_glob, fstrim_enabled)
 
     if do_delayed:
         print("######## delayed scale ########")
-        rows = run_delayed(n_values, extra)
+        rows = run_delayed(n_values, extra, args.fstrim_glob, clear_enabled)
         write_csv(os.path.join(outdir, "delayed_scale.csv"), DELAYED_COLS, rows)
         plot_delayed(rows, os.path.join(outdir, "delayed_scale.png"))
 
     if do_chunk:
         print("\n######## chunk size ########")
-        rows = run_chunk_size(chunk_sizes, chunk_n, extra)
+        rows = run_chunk_size(chunk_sizes, chunk_n, extra, args.fstrim_glob, clear_enabled)
         write_csv(os.path.join(outdir, "chunk_size.csv"), CHUNK_COLS, rows)
         plot_chunk_size(rows, os.path.join(outdir, "chunk_size.png"))
 

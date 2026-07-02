@@ -95,10 +95,12 @@ test.
 
 `make bench` defaults are sized for a ~5 GiB tmpfs dev box; override via env or
 the driver's flags, e.g. `make bench BENCH_CHUNK_SIZES="2097152 8388608"` or
-`python3 benchmarks/run_benches.py --delayed --n-values "1M 8M 64M"`.  At startup
-the driver best-effort `fstrim`s the mounts once (`--fstrim-glob`, default
-`/mnt/ssd*`; a no-op on tmpfs, `--no-fstrim` to disable) — once rather than
-between points, since fstrim can be slow on real SSDs.
+`python3 benchmarks/run_benches.py --delayed --n-values "1M 8M 64M"`.  The driver
+deletes the benchmarks' data files (`perm<drive>` + `bw_*`) between every sweep
+point and after the run so nothing accumulates on the drives (`--no-clean` to
+disable).  It also best-effort `fstrim`s the mounts once at startup
+(`--fstrim-glob`, default `/mnt/ssd*`; a no-op on tmpfs, `--no-fstrim` to
+disable) — once rather than between points, since fstrim can be slow on real SSDs.
 
 `make bench-full` runs the same sweeps tuned for the benchmark machine (500 GiB
 RAM, 30x 1TB SSDs): delayed scale over `2^30 … 2^39` elements (8 B each) and the
