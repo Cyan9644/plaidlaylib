@@ -59,14 +59,14 @@ utils/                        vendored shared I/O utilities
 ChunkSequence/
   chunk_seq.h                 chunk / chunk_seq structs, tabulate, perm, consolidate
   chunk_seq_reader.h          ChunkSequenceReader<T> — the standardized async reader
-  external_engine.h           ChunkEmitter + ExternalTransform + DrainPerWorker
+  external_engine.h           ChunkEmitter + ExternalTransform + RemoveWorker
   dense_pack.h                shared batch/carry/prefix/scatter packer
   chunk_map.h                 ChunkMap        (thin body on ExternalTransform)
-  chunk_reduce.h              ChunkReduce     (fold on DrainPerWorker)
-  chunk_scan.h                ChunkScan       (pass1 DrainPerWorker + pass2 ExternalTransform)
+  chunk_reduce.h              ChunkReduce     (fold on RemoveWorker)
+  chunk_scan.h                ChunkScan       (pass1 RemoveWorker + pass2 ExternalTransform)
   chunk_filter.h              ChunkFilter     (thin producer on DensePack)
   chunk_flat_tabulate.h       ChunkFlatTabulate (thin producer on DensePack)
-  chunk_find_if.h             ChunkFindIf     (fold on DrainPerWorker)
+  chunk_find_if.h             ChunkFindIf     (fold on RemoveWorker)
   chunk_delayed.h             delayed (fused) map/reduce/scan/filter/tabulate — untouched
   tests/                      correctness tests (→ permTest … findIfTest)
 deps/                         fetched by `make deps` (parlaylib, abseil); gitignored
@@ -103,7 +103,7 @@ three building blocks in `namespace ChunkSequenceOps`:
   then sort emitted chunks by index and (if `compact`) renumber to a dense
   0..k-1.  Ownership rule: the engine frees each input buffer after `body`
   returns, so a body copies what it needs into fresh emitted blocks.
-- **`DrainPerWorker<T>(seq, reader_threads, worker)`** — the scalar-fold family:
+- **`RemoveWorker<T>(seq, reader_threads, worker)`** — the scalar-fold family:
   each parlay worker polls the reader to exhaustion and returns a local
   accumulator (no writer).
 
@@ -112,9 +112,9 @@ Primitive mapping:
 | primitive | built on |
 |---|---|
 | `ChunkMap`          | `ExternalTransform` (FANOUT emits when `sizeof(R) > sizeof(T)`) |
-| `ChunkReduce`       | `DrainPerWorker` + `parlay::reduce` |
-| `ChunkScan`         | pass 1 `DrainPerWorker` → per-chunk sums; sequential block prefix; pass 2 `ExternalTransform` seeded per chunk. Returns `{seq, total}` |
-| `ChunkFindIf`       | `DrainPerWorker` (per-worker min matching index; `n` if none) |
+| `ChunkReduce`       | `RemoveWorker` + `parlay::reduce` |
+| `ChunkScan`         | pass 1 `RemoveWorker` → per-chunk sums; sequential block prefix; pass 2 `ExternalTransform` seeded per chunk. Returns `{seq, total}` |
+| `ChunkFindIf`       | `RemoveWorker` (per-worker min matching index; `n` if none) |
 | `ChunkFilter`       | `DensePack` (reader source + predicate compaction) |
 | `ChunkFlatTabulate` | `DensePack` (generator source, `f(start,end) -> sequence<R>`) |
 | `tabulate` / `perm` | own writer pipeline (`chunk_seq.h`) — no reader stage to unify |

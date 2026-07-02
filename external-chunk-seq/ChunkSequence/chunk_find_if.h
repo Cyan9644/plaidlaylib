@@ -15,7 +15,7 @@ namespace ChunkSequenceOps {
  * match (matching parlay::find_if's "not found" convention).
  *
  * Ported from the Parlay_Primitives_for_MultiSSD external find_if.  Each parlay
- * worker (via DrainPerWorker) scans the chunks it is handed, tracking the
+ * worker (via RemoveWorker) scans the chunks it is handed, tracking the
  * smallest matching global index it sees; the per-worker minima are then
  * combined.  A chunk's elements start at global position idx * (CHUNK_SIZE /
  * sizeof(T)) because the index-ordered dense invariant means every chunk but
@@ -36,7 +36,7 @@ size_t ChunkFindIf(const chunk_seq& seq, F pred) {
     for (const auto& c : seq.chunks) n += c.used / sizeof(T);
     if (n == 0) return 0;
 
-    auto locals = DrainPerWorker<T>(seq, /*reader_threads=*/10,
+    auto locals = RemoveWorker<T>(seq, /*reader_threads=*/10,
         [&, n, epct](ChunkSequenceReader<T>& reader) {
             size_t best = n;
             while (true) {

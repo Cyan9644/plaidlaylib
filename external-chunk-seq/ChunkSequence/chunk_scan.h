@@ -23,7 +23,7 @@ namespace ChunkSequenceOps {
  *
  * Out-of-core two-level (block) scan.  There is one accumulator per chunk, so
  * the O(c) block-sum array fits in DRAM:
- *   1. Pass 1 (DrainPerWorker): reduce each chunk independently into
+ *   1. Pass 1 (RemoveWorker): reduce each chunk independently into
  *      chunk_sums[chunk_idx].
  *   2. Sequential exclusive prefix over chunk_sums -> offset[i] (the seed for
  *      chunk i); the running accumulator after the last chunk is the total.
@@ -44,7 +44,7 @@ std::pair<chunk_seq, R> ChunkScan(const chunk_seq& seq,
 
     // ── pass 1: per-chunk reductions into chunk_sums[chunk_idx] ───────────────
     std::vector<R> chunk_sums(n_chunks);
-    DrainPerWorker<T>(seq, /*reader_threads=*/10,
+    RemoveWorker<T>(seq, /*reader_threads=*/10,
         [&](ChunkSequenceReader<T>& reader) {
             while (true) {
                 auto [ptr, n, chunk_idx] = reader.Poll();

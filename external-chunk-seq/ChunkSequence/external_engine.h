@@ -33,7 +33,7 @@ namespace ChunkSequenceOps {
  *                          recording a chunk descriptor for each.
  *   - ExternalTransform  : drive read -> body -> emit -> write for the
  *                          "one-or-more emit(s) per input chunk" family.
- *   - DrainPerWorker     : drive read -> per-worker fold for the scalar family
+ *   - RemoveWorker     : drive read -> per-worker fold for the scalar family
  *                          (ChunkReduce, ChunkFindIf, ChunkScan pass 1).
  *
  * All three route through the single standardized reader (ChunkSequenceReader)
@@ -191,7 +191,7 @@ chunk_seq ExternalTransform(const chunk_seq& seq,
  * (as ChunkScan's pass 1 does) and return a placeholder.
  */
 template<typename T, typename WorkerFn>
-auto DrainPerWorker(const chunk_seq& seq, size_t reader_threads, WorkerFn worker)
+auto RemoveWorker(const chunk_seq& seq, size_t reader_threads, WorkerFn worker)
     -> parlay::sequence<std::invoke_result_t<WorkerFn, ChunkSequenceReader<T>&>> {
     ChunkSequenceReader<T> reader;
     reader.PrepChunks(seq);

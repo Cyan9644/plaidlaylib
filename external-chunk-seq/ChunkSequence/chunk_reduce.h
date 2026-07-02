@@ -12,7 +12,7 @@ namespace ChunkSequenceOps {
  * Reduce all elements across every chunk in seq using a parlay-compatible
  * monoid (monoid.identity, monoid(a, b)).
  *
- * Each parlay worker accumulates a local partial via DrainPerWorker, then
+ * Each parlay worker accumulates a local partial via RemoveWorker, then
  * parlay::reduce combines the per-worker results with the same monoid.
  *
  * @tparam T       Element type stored in the chunks.
@@ -21,7 +21,7 @@ namespace ChunkSequenceOps {
  */
 template<typename T, typename R = T, typename Monoid>
 R ChunkReduce(const chunk_seq& seq, Monoid monoid) {
-    auto locals = DrainPerWorker<T>(seq, /*reader_threads=*/10,
+    auto locals = RemoveWorker<T>(seq, /*reader_threads=*/10,
         [&](ChunkSequenceReader<T>& reader) {
             R local = monoid.identity;
             while (true) {
