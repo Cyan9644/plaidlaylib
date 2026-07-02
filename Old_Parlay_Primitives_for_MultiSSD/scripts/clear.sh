@@ -1,1 +1,0 @@
-find /mnt -path "/mnt/ssd*/*" -delete
