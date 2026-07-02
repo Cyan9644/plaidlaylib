@@ -21,9 +21,9 @@ The written CSVs use the same descriptive column names / units as the
 predecessor's standalone plotters, and the plots follow the same two-panel
 (read-bound map|map|reduce vs write-bound force(map|map)) base-2 log-log style.
 
-Between sweep points the script best-effort `fstrim`s the SSD mounts so freed
-blocks are discarded before the next point regenerates its input (a no-op on a
-tmpfs dev box, where FITRIM is unsupported — skipped quietly).
+At the start of the run the script best-effort `fstrim`s the SSD mounts once
+(fstrim can be slow on real SSDs, so it is not repeated between points; a no-op
+on a tmpfs dev box, where FITRIM is unsupported — skipped quietly).
 
 Every run carries a cross-substrate correctness check (agree=1).  If any point
 reports agree=0 or a binary exits non-zero, this script prints the offending
@@ -147,7 +147,7 @@ DELAYED_COLS = ["n", "raw_read_s", "eager_mr_s", "delayed_mr_s", "inmem_mr_s",
                 "eager_fmm_s", "delayed_fmm_s", "inmem_fmm_s", "agree"]
 
 
-def run_delayed(n_values, extra_args, fstrim_glob, fstrim_enabled):
+def run_delayed(n_values, extra_args):
     make("bin/delayedCompare")
     binary = os.path.join(BINDIR, "delayedCompare")
     rows = []
@@ -158,7 +158,6 @@ def run_delayed(n_values, extra_args, fstrim_glob, fstrim_enabled):
         if row["agree"].strip() != "1":
             sys.exit(f"\n*** agree={row['agree']} at n={n} — aborting ***")
         rows.append(row)
-        fstrim_mounts(fstrim_glob, fstrim_enabled)
     return rows
 
 
@@ -168,7 +167,7 @@ CHUNK_COLS = ["chunk_size_bytes", "n", "raw_s", "eager_mr_s", "delayed_mr_s",
               "eager_mmr_s", "delayed_mmr_s", "eager_fmm_s", "delayed_fmm_s", "agree"]
 
 
-def run_chunk_size(chunk_sizes, n, extra_args, fstrim_glob, fstrim_enabled):
+def run_chunk_size(chunk_sizes, n, extra_args):
     rows = []
     for cs in chunk_sizes:
         make(f"bin/chunkSizeCompare_{cs}")
@@ -179,7 +178,6 @@ def run_chunk_size(chunk_sizes, n, extra_args, fstrim_glob, fstrim_enabled):
         if row["agree"].strip() != "1":
             sys.exit(f"\n*** agree={row['agree']} at chunk_bytes={cs} — aborting ***")
         rows.append(row)
-        fstrim_mounts(fstrim_glob, fstrim_enabled)
     return rows
 
 
@@ -319,9 +317,9 @@ def main():
                     help="extra global flags passed to each binary (e.g. '--num_ssd=4')")
     ap.add_argument("--fstrim-glob",
                     default=os.environ.get("BENCH_FSTRIM_GLOB", DEFAULT_FSTRIM_GLOB),
-                    help="glob of mounts to fstrim between points (default: /mnt/ssd*)")
+                    help="glob of mounts to fstrim once at startup (default: /mnt/ssd*)")
     ap.add_argument("--no-fstrim", action="store_true",
-                    help="disable the between-point fstrim")
+                    help="disable the startup fstrim")
     args = ap.parse_args()
 
     do_delayed = args.all or args.delayed
@@ -340,15 +338,19 @@ def main():
     os.makedirs(outdir, exist_ok=True)
     print(f"Run directory: {outdir}\n")
 
+    # One trim up front (fstrim can be slow on real SSDs, so we don't repeat it
+    # between points); a no-op on tmpfs, skipped quietly.
+    fstrim_mounts(args.fstrim_glob, fstrim_enabled)
+
     if do_delayed:
         print("######## delayed scale ########")
-        rows = run_delayed(n_values, extra, args.fstrim_glob, fstrim_enabled)
+        rows = run_delayed(n_values, extra)
         write_csv(os.path.join(outdir, "delayed_scale.csv"), DELAYED_COLS, rows)
         plot_delayed(rows, os.path.join(outdir, "delayed_scale.png"))
 
     if do_chunk:
         print("\n######## chunk size ########")
-        rows = run_chunk_size(chunk_sizes, chunk_n, extra, args.fstrim_glob, fstrim_enabled)
+        rows = run_chunk_size(chunk_sizes, chunk_n, extra)
         write_csv(os.path.join(outdir, "chunk_size.csv"), CHUNK_COLS, rows)
         plot_chunk_size(rows, os.path.join(outdir, "chunk_size.png"))
 
