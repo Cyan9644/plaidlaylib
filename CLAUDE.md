@@ -69,10 +69,12 @@ ChunkSequence/
   chunk_find_if.h             ChunkFindIf     (fold on RemoveWorker)
   chunk_delayed.h             delayed (fused) map/reduce/scan/filter/tabulate — untouched
   tests/                      correctness tests (→ permTest … findIfTest)
+  examples/                   demonstration programs (→ primesExample); dual-purpose
+    primes.cpp                out-of-core prime sieve on ChunkFlatTabulate
 benchmarks/                   perf benchmarks + single-file Python runner/plotter
   delayed_compare.cpp         in-mem delayed vs chunk-eager vs chunk-delayed (sweep n)
   chunk_size_compare.cpp      eager vs delayed across CHUNK_SIZE (-DCHUNK_SIZE_BYTES)
-  run_benches.py              runs both sweeps + plots to timestamped results/
+  run_benches.py              runs the sweeps (incl. examples) + plots to timestamped results/
 deps/                         fetched by `make deps` (parlaylib, abseil); gitignored
 results/                      timestamped benchmark output (PNG + CSV); gitignored
 ```
@@ -107,6 +109,28 @@ RAM, 30x 1TB SSDs): delayed scale over `2^30 … 2^39` elements (8 B each) and t
 chunk-size test at `268435456` elements across `256KiB … 16MiB` chunks.  This is
 multi-TB of I/O — intended for the real machine, not a tmpfs dev box.  (`fstrim`
 does real work there and may need privileges — run under `sudo` or `--no-fstrim`.)
+
+## Examples
+
+`ChunkSequence/examples/` holds demonstration programs that use the primitives on
+a real problem.  Each is **dual-purpose** like the benchmarks: run by hand it
+prints human-readable output, and it always ends with a machine-readable `CSV,`
+line the runner greps.  `make examples` builds them all (one per file, to
+`bin/<name>Example` via the `%Example` pattern rule).
+
+- `primes.cpp` → `bin/primesExample [n] [out_path]`: out-of-core Eratosthenes
+  sieve on `ChunkFlatTabulate`.  Prints `pi(n)`, output throughput, and the last
+  few primes; consolidating the full list to a local file is opt-in via
+  `out_path` (skipped at bench scale).  Emits `CSV,n,time_s,count,throughput_gb_s`.
+
+Examples are benchmarked by a **separate opt-in sweep** (they carry no
+cross-substrate `agree` check — they just time and report).  `make bench-examples`
+sweeps each example over `n` with dev-box (tmpfs) sizes and writes
+`<name>_scale.{csv,png}` into the same timestamped `results/` dir as the other
+benchmarks; `make bench-examples-full` uses benchmark-machine sizes (sieve range
+`2^32 … 2^40`).  Add an example by dropping a `.cpp` in `examples/` and appending
+one entry to the `EXAMPLES` registry in `run_benches.py`.  The examples sweep is
+**not** part of `make bench` / `--all`.
 
 ## Data model
 

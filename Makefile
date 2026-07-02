@@ -40,9 +40,12 @@ TEST_BINARIES := $(BINDIR)/permTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/delayedTest $(BINDIR)/flatTabulateTest $(BINDIR)/findIfTest \
                  $(BINDIR)/histogramTest
 
+# ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
+EXAMPLE_BINARIES := $(BINDIR)/primesExample
+
 LINK = $(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
-.PHONY: all clean distclean deps test bench bench-full
+.PHONY: all clean distclean deps test examples bench bench-full bench-examples bench-examples-full
 
 all:
 	$(MAKE) deps
@@ -129,6 +132,15 @@ $(BINDIR)/findIfTest: ChunkSequence/tests/find_if_test.cpp $(UTIL_OBJS)
 $(BINDIR)/histogramTest: ChunkSequence/tests/histogram_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
+# ── examples ───────────────────────────────────────────────────────────────────
+
+# Build every example.  Each example lives in ChunkSequence/examples/<name>.cpp
+# and builds to bin/<name>Example via the generic pattern rule below.
+examples: $(EXAMPLE_BINARIES)
+
+$(BINDIR)/%Example: ChunkSequence/examples/%.cpp $(UTIL_OBJS)
+	$(LINK)
+
 # ── benchmarks ─────────────────────────────────────────────────────────────────
 
 # delayed_compare: one binary, swept over n at runtime.
@@ -157,10 +169,22 @@ bench-full:
 	    --n 268435456 \
 	    --chunk-sizes "256KiB 512KiB 1MiB 2MiB 4MiB 8MiB 16MiB"
 
+# Opt-in examples sweep: time each example across a sweep of n.  Kept separate
+# from `bench`/`bench-full` (examples are heterogeneous and some are expensive).
+# `bench-examples` uses small dev-box (tmpfs) defaults.
+bench-examples:
+	python3 benchmarks/run_benches.py --examples --outdir results
+
+# Full-scale examples sweep tuned for the benchmark machine (500 GiB RAM, 30x 1TB
+# SSDs): sieve range 2^32 .. 2^40.  Multi-TB of I/O — not for a tmpfs dev box.
+bench-examples-full:
+	python3 benchmarks/run_benches.py --examples --outdir results \
+	    --example-n-values "2^32 2^34 2^36 2^38 2^40"
+
 # ── cleanup ────────────────────────────────────────────────────────────────────
 
 clean:
-	rm -f $(UTIL_OBJS) $(TEST_BINARIES) \
+	rm -f $(UTIL_OBJS) $(TEST_BINARIES) $(EXAMPLE_BINARIES) \
 	      $(BINDIR)/delayedCompare $(BINDIR)/chunkSizeCompare_*
 
 distclean: clean

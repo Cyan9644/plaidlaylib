@@ -52,7 +52,21 @@ BINDIR = os.path.join(REPO_ROOT, "bin")
 DEFAULT_N_VALUES = "1M 2M 4M 8M 16M 32M 64M"          # element counts
 DEFAULT_CHUNK_SIZES = "512KiB 1MiB 2MiB 4MiB 8MiB 16MiB"
 DEFAULT_CHUNK_N = "32M"                                # fixed n for chunk sweep
+DEFAULT_EXAMPLE_N_VALUES = "2^24 2^25 2^26 2^27 2^28 2^29 2^30"  # examples sweep (dev/tmpfs)
 DEFAULT_FSTRIM_GLOB = "/mnt/ssd*"
+
+# ── examples registry ───────────────────────────────────────────────────────
+# Each example is a dual-purpose binary (bin/<name>Example) that prints a
+# `CSV,<cols...>` line the sweep greps.  `cols` names those fields in order,
+# `data_glob` is the per-mount glob of files the example leaves on the drives
+# (cleared between sweep points).  Add a new example by appending one entry.
+EXAMPLES = [
+    {"name": "primes", "target": "bin/primesExample",
+     "cols": ["n", "time_s", "count", "throughput_gb_s"],
+     "xlabel": "n (sieve range)",
+     "title": "Out-of-core prime sieve (ChunkFlatTabulate) — scaling",
+     "data_glob": "primes[0-9]*"},
+]
 
 
 # ── size parsing ────────────────────────────────────────────────────────────
@@ -86,13 +100,12 @@ def _f(s):
 
 
 # ── device maintenance ──────────────────────────────────────────────────────
-_fstrim_warned = False
-
 # File-name globs (per mount) of every prefix the benchmarks write: the shared
 # `perm<drive>` input plus each pipeline's intermediates.  Used to clear the
 # drives between points so nothing accumulates — the C++ binaries clean their
 # own intermediates, but delayed_compare leaves its `perm` input behind.
-BENCH_FILE_GLOBS = ("perm[0-9]*", "bw_dl_*", "bw_cs_*")
+BENCH_FILE_GLOBS = ("perm[0-9]*", "bw_dl_*", "bw_cs_*") + \
+    tuple(e["data_glob"] for e in EXAMPLES)
 
 
 def clear_bench_data(glob_pat, enabled):
@@ -115,24 +128,29 @@ def clear_bench_data(glob_pat, enabled):
 def fstrim_mounts(glob_pat, enabled):
     """Best-effort `fstrim` of every mount matching glob_pat.
 
-    On a tmpfs dev box FITRIM is unsupported and fstrim exits non-zero; we warn
-    once and keep going.  (fstrim may also need privileges on real SSDs.)
+    Announces itself (fstrim can be slow, so an unexplained pause is worse than a
+    line of output) and reports how many mounts were trimmed.  On a tmpfs dev box
+    FITRIM is unsupported and fstrim exits non-zero; we note it and keep going.
+    (fstrim may also need privileges on real SSDs.)
     """
-    global _fstrim_warned
     if not enabled:
         return
     mounts = sorted(glob.glob(glob_pat))
     if not mounts:
         return
-    failed = None
+    print(f"  fstrim {len(mounts)} mount(s) matching {glob_pat} ...", flush=True)
+    ok, failed = 0, None
     for m in mounts:
         r = subprocess.run(["fstrim", m], stdout=subprocess.PIPE,
                            stderr=subprocess.STDOUT, text=True)
-        if r.returncode != 0:
+        if r.returncode == 0:
+            ok += 1
+        else:
             failed = r.stdout.strip() or f"fstrim {m} exit {r.returncode}"
-    if failed and not _fstrim_warned:
-        print(f"  (fstrim skipped/unsupported: {failed})", flush=True)
-        _fstrim_warned = True
+    if ok:
+        print(f"  fstrim ok on {ok} mount(s)", flush=True)
+    if failed:
+        print(f"  (fstrim skipped/unsupported on some mounts: {failed})", flush=True)
 
 
 # ── running binaries ────────────────────────────────────────────────────────
@@ -207,6 +225,25 @@ def run_chunk_size(chunk_sizes, n, extra_args, clear_glob, clear_enabled):
             sys.exit(f"\n*** agree={row['agree']} at chunk_bytes={cs} — aborting ***")
         rows.append(row)
         clear_bench_data(clear_glob, clear_enabled)   # don't leave input on the drives
+    return rows
+
+
+# ── examples sweep ──────────────────────────────────────────────────────────
+def run_example(entry, n_values, extra_args, clear_glob, clear_enabled):
+    """Sweep one example over n_values; return parsed rows.
+
+    Examples carry no cross-substrate correctness check (unlike the substrate
+    benchmarks), so there is no agree=1 enforcement here — we just time and
+    record what the binary reports.
+    """
+    make(entry["target"])
+    binary = os.path.join(BINDIR, os.path.basename(entry["target"]))
+    rows = []
+    for n in n_values:
+        print(f"\n=== example {entry['name']}: n={n} ===", flush=True)
+        fields = run_binary(binary, [n] + extra_args)
+        rows.append(dict(zip(entry["cols"], fields)))
+        clear_bench_data(clear_glob, clear_enabled)   # don't leave output on the drives
     return rows
 
 
@@ -326,6 +363,22 @@ def plot_chunk_size(rows, path):
     print(f"  wrote {path}", flush=True)
 
 
+def plot_example(rows, entry, path):
+    """Single-panel log-log plot of an example's runtime vs n."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    xs = [int(r["n"]) for r in rows]
+    fig, ax = plt.subplots(figsize=(7, 5.5), constrained_layout=True)
+    _draw_panel(ax, xs, [
+        (entry["name"], _series(rows, "time_s"), "o-"),
+    ], entry["xlabel"], entry["title"], xfmt=_pow2_fmt)
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"  wrote {path}", flush=True)
+
+
 # ── main ────────────────────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
@@ -333,6 +386,7 @@ def main():
     ap.add_argument("--all", action="store_true", help="run both benchmarks")
     ap.add_argument("--delayed", action="store_true", help="run the delayed-scale sweep")
     ap.add_argument("--chunk-size", action="store_true", help="run the chunk-size sweep")
+    ap.add_argument("--examples", action="store_true", help="run the examples sweep")
     ap.add_argument("--outdir", default=os.environ.get("BENCH_OUTDIR", "results"),
                     help="parent dir for the timestamped run (default: results)")
     ap.add_argument("--n-values", default=os.environ.get("BENCH_N_VALUES", DEFAULT_N_VALUES),
@@ -342,6 +396,9 @@ def main():
                     help="chunk-size sweep (space-separated, e.g. '512KiB 4MiB')")
     ap.add_argument("--n", default=os.environ.get("BENCH_CHUNK_N", DEFAULT_CHUNK_N),
                     help="fixed n for the chunk-size sweep (default: 32M)")
+    ap.add_argument("--example-n-values",
+                    default=os.environ.get("BENCH_EXAMPLE_N_VALUES", DEFAULT_EXAMPLE_N_VALUES),
+                    help="examples n sweep (space-separated, e.g. '2^24 2^28 2^30')")
     ap.add_argument("--ssd-args", default=os.environ.get("BENCH_SSD_ARGS", ""),
                     help="extra global flags passed to each binary (e.g. '--num_ssd=4')")
     ap.add_argument("--fstrim-glob",
@@ -355,13 +412,15 @@ def main():
 
     do_delayed = args.all or args.delayed
     do_chunk = args.all or args.chunk_size
-    if not (do_delayed or do_chunk):
-        ap.error("nothing to run: pass --all, --delayed, and/or --chunk-size")
+    do_examples = args.examples          # opt-in only; not part of --all
+    if not (do_delayed or do_chunk or do_examples):
+        ap.error("nothing to run: pass --all, --delayed, --chunk-size, and/or --examples")
 
     extra = args.ssd_args.split() if args.ssd_args else []
     n_values = [parse_count(x) for x in args.n_values.split()]
     chunk_sizes = [parse_bytes(x) for x in args.chunk_sizes.split()]
     chunk_n = parse_count(args.n)
+    example_n_values = [parse_count(x) for x in args.example_n_values.split()]
     fstrim_enabled = not args.no_fstrim
     clear_enabled = not args.no_clean
 
@@ -386,6 +445,15 @@ def main():
         rows = run_chunk_size(chunk_sizes, chunk_n, extra, args.fstrim_glob, clear_enabled)
         write_csv(os.path.join(outdir, "chunk_size.csv"), CHUNK_COLS, rows)
         plot_chunk_size(rows, os.path.join(outdir, "chunk_size.png"))
+
+    if do_examples:
+        for entry in EXAMPLES:
+            print(f"\n######## example: {entry['name']} ########")
+            rows = run_example(entry, example_n_values, extra,
+                               args.fstrim_glob, clear_enabled)
+            write_csv(os.path.join(outdir, f"{entry['name']}_scale.csv"),
+                      entry["cols"], rows)
+            plot_example(rows, entry, os.path.join(outdir, f"{entry['name']}_scale.png"))
 
     print(f"\nDone. Results in {outdir}")
 
