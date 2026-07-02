@@ -42,7 +42,7 @@ TEST_BINARIES := $(BINDIR)/permTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
 
 LINK = $(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
-.PHONY: all clean distclean deps test
+.PHONY: all clean distclean deps test bench bench-full
 
 all:
 	$(MAKE) deps
@@ -129,10 +129,39 @@ $(BINDIR)/findIfTest: ChunkSequence/tests/find_if_test.cpp $(UTIL_OBJS)
 $(BINDIR)/histogramTest: ChunkSequence/tests/histogram_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
+# ── benchmarks ─────────────────────────────────────────────────────────────────
+
+# delayed_compare: one binary, swept over n at runtime.
+$(BINDIR)/delayedCompare: benchmarks/delayed_compare.cpp $(UTIL_OBJS)
+	$(LINK)
+
+# chunk_size_compare: compiled once per CHUNK_SIZE via -DCHUNK_SIZE_BYTES=<stem>.
+# e.g. `make bin/chunkSizeCompare_2097152` bakes in a 2 MiB chunk size.
+$(BINDIR)/chunkSizeCompare_%: benchmarks/chunk_size_compare.cpp $(UTIL_OBJS)
+	$(CXX) $(CXXFLAGS) -DCHUNK_SIZE_BYTES=$* $(INCLUDES) $^ -o $@ \
+	    $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
+
+# Run both benchmark sweeps and write timestamped images + CSVs under results/.
+# The Python driver builds each binary via make, runs the sweep, and plots.
+# Override the sweep via env, e.g. `make bench BENCH_CHUNK_SIZES="2097152 8388608"`.
+# `bench` uses small dev-box (tmpfs) defaults.
+bench:
+	python3 benchmarks/run_benches.py --all --outdir results
+
+# Full-scale sweep tuned for the benchmark machine (500 GiB RAM, 30x 1TB SSDs):
+# delayed scale 2^30..2^39 elements (8 B each), chunk-size test at 2^28 elements.
+# Multi-TB of I/O — intended for the real machine, not a tmpfs dev box.
+bench-full:
+	python3 benchmarks/run_benches.py --all --outdir results \
+	    --n-values "2^30 2^31 2^32 2^33 2^34 2^35 2^36 2^37 2^38 2^39" \
+	    --n 268435456 \
+	    --chunk-sizes "256KiB 512KiB 1MiB 2MiB 4MiB 8MiB 16MiB"
+
 # ── cleanup ────────────────────────────────────────────────────────────────────
 
 clean:
-	rm -f $(UTIL_OBJS) $(TEST_BINARIES)
+	rm -f $(UTIL_OBJS) $(TEST_BINARIES) \
+	      $(BINDIR)/delayedCompare $(BINDIR)/chunkSizeCompare_*
 
 distclean: clean
 	rm -rf deps $(BINDIR) $(OBJDIR)

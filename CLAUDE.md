@@ -69,8 +69,41 @@ ChunkSequence/
   chunk_find_if.h             ChunkFindIf     (fold on RemoveWorker)
   chunk_delayed.h             delayed (fused) map/reduce/scan/filter/tabulate — untouched
   tests/                      correctness tests (→ permTest … findIfTest)
+benchmarks/                   perf benchmarks + single-file Python runner/plotter
+  delayed_compare.cpp         in-mem delayed vs chunk-eager vs chunk-delayed (sweep n)
+  chunk_size_compare.cpp      eager vs delayed across CHUNK_SIZE (-DCHUNK_SIZE_BYTES)
+  run_benches.py              runs both sweeps + plots to timestamped results/
 deps/                         fetched by `make deps` (parlaylib, abseil); gitignored
+results/                      timestamped benchmark output (PNG + CSV); gitignored
 ```
+
+## Benchmarks
+
+`make bench` builds the two benchmark binaries, runs both parameter sweeps, and
+writes plots + raw CSVs to `results/<YYYYmmdd-HHMMSS>/`.  A single Python driver
+(`benchmarks/run_benches.py`) orchestrates: it shells out to `make` to build
+each binary (all compilation stays in the Makefile), runs the sweep, parses the
+`CSV,` line each binary prints, and plots with matplotlib (provided by
+`shell.nix`).  Both benchmarks carry a cross-substrate correctness check, so a
+`agree=0` mismatch aborts `make bench` non-zero — it doubles as a differential
+test.
+
+- **delayed scale** (`bin/delayedCompare`): fixed chunk size, sweep `n`.
+- **chunk size** (`bin/chunkSizeCompare_<bytes>`): fixed `n`, sweep `CHUNK_SIZE`.
+  One binary is compiled per size via the `chunkSizeCompare_%` pattern rule,
+  which passes `-DCHUNK_SIZE_BYTES=$*` (the stem = size in bytes).
+
+`make bench` defaults are sized for a ~5 GiB tmpfs dev box; override via env or
+the driver's flags, e.g. `make bench BENCH_CHUNK_SIZES="2097152 8388608"` or
+`python3 benchmarks/run_benches.py --delayed --n-values "1M 8M 64M"`.  Between
+sweep points the driver best-effort `fstrim`s the mounts (`--fstrim-glob`,
+default `/mnt/ssd*`; a no-op on tmpfs, `--no-fstrim` to disable).
+
+`make bench-full` runs the same sweeps tuned for the benchmark machine (500 GiB
+RAM, 30x 1TB SSDs): delayed scale over `2^30 … 2^39` elements (8 B each) and the
+chunk-size test at `268435456` elements across `256KiB … 16MiB` chunks.  This is
+multi-TB of I/O — intended for the real machine, not a tmpfs dev box.  (`fstrim`
+does real work there and may need privileges — run under `sudo` or `--no-fstrim`.)
 
 ## Data model
 
