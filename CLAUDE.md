@@ -3,6 +3,7 @@
 Research library implementing Parlay-style parallel primitives (map, reduce,
 filter, scan, flat-tabulate, find_if, …) for data stored across many SSDs.  Data
 is too large for DRAM; all I/O goes through `io_uring` with `O_DIRECT`.
+The primary goal of the project/library is to demonstrate that multi-SSD programming can be made relatively ergonomic with carefully chosen abstractions, while maintaining parallelism to rival in memory parallel algorithm implementations via techniques such as delaying to reduce IO trips. Examples are free to make calls into the reader and writer but these should be temporary solutions to reveal what abstractions are later needed; the ultimate goal is a useable set of abstractions that avoid burdening the user with the drive setup itself.
 
 This folder is the **merge** of two predecessor projects, `chunk-sequence` and
 `Parlay_Primitives_for_MultiSSD`, which implemented the same idea with different
@@ -69,8 +70,10 @@ ChunkSequence/
   chunk_find_if.h             ChunkFindIf     (fold on RemoveWorker)
   chunk_delayed.h             delayed (fused) map/reduce/scan/filter/tabulate — untouched
   tests/                      correctness tests (→ permTest … findIfTest)
-  examples/                   demonstration programs (→ primesExample); dual-purpose
+  examples/                   demonstration programs (→ primesExample …); dual-purpose
     primes.cpp                out-of-core prime sieve on ChunkFlatTabulate
+    chunk_kmp.h  kmp.cpp      out-of-core KMP search (ChunkKmp, a producer on DensePack)
+    chunk_rabin_karp.h  rabin_karp.cpp  out-of-core Rabin-Karp search (same shape as KMP)
 benchmarks/                   perf benchmarks + single-file Python runner/plotter
   delayed_compare.cpp         in-mem delayed vs chunk-eager vs chunk-delayed (sweep n)
   chunk_size_compare.cpp      eager vs delayed across CHUNK_SIZE (-DCHUNK_SIZE_BYTES)
@@ -122,6 +125,22 @@ line the runner greps.  `make examples` builds them all (one per file, to
   sieve on `ChunkFlatTabulate`.  Prints `pi(n)`, output throughput, and the last
   few primes; consolidating the full list to a local file is opt-in via
   `out_path` (skipped at bench scale).  Emits `CSV,n,time_s,count,throughput_gb_s`.
+- `kmp.cpp` → `bin/kmpExample [n] [m]`: out-of-core KMP string search over an
+  n-char synthetic text (pattern = the text's first m chars, m constant across
+  the sweep).  The algorithm itself, `ChunkKmp` (`examples/chunk_kmp.h`, tested
+  by `kmpTest`), is a `DensePack` producer: per-chunk sequential KMP with
+  cross-chunk matches caught via batch-local overlap — chunk k+1's head is
+  already in DRAM in the same batch; one small sync read per batch seam
+  (requires pattern ≤ one chunk).  It lives in `examples/` rather than the
+  library proper.  Emits `CSV,n,m,build_s,search_s,count,throughput_gb_s`; the
+  sweep plots `search_s`.
+- `rabin_karp.cpp` → `bin/rabin_karpExample [n] [m]`: out-of-core Rabin-Karp
+  search, same driver shape and chunk structure as `kmp.cpp` (`ChunkRabinKarp`
+  in `examples/chunk_rabin_karp.h`, tested by `rabinKarpTest`).  Within a chunk
+  it uses a rolling polynomial hash mod the Mersenne prime 2^31−1 (Horner
+  orientation, so no modular inverse; hash hits are double-checked) rather than
+  parlaylib's prefix-hash scans, which out-of-core would write an 8x hash array
+  to disk.  Emits the same CSV columns; the sweep plots `search_s`.
 
 Examples are benchmarked by a **separate opt-in sweep** (they carry no
 cross-substrate `agree` check — they just time and report).  `make bench-examples`

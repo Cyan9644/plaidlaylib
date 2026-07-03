@@ -38,10 +38,11 @@ UTIL_OBJS := $(OBJDIR)/logger.o $(OBJDIR)/command_line.o $(OBJDIR)/file_utils.o
 TEST_BINARIES := $(BINDIR)/permTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/filterTest $(BINDIR)/scanTest $(BINDIR)/combinedTest \
                  $(BINDIR)/delayedTest $(BINDIR)/flatTabulateTest $(BINDIR)/findIfTest \
-                 $(BINDIR)/histogramTest
+                 $(BINDIR)/histogramTest $(BINDIR)/kmpTest $(BINDIR)/rabinKarpTest
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
-EXAMPLE_BINARIES := $(BINDIR)/primesExample
+EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
+                    $(BINDIR)/rabin_karpExample
 
 LINK = $(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
@@ -130,6 +131,12 @@ $(BINDIR)/findIfTest: ChunkSequence/tests/find_if_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
 $(BINDIR)/histogramTest: ChunkSequence/tests/histogram_test.cpp $(UTIL_OBJS)
+	$(LINK)
+
+$(BINDIR)/kmpTest: ChunkSequence/tests/kmp_test.cpp $(UTIL_OBJS)
+	$(LINK)
+
+$(BINDIR)/rabinKarpTest: ChunkSequence/tests/rabin_karp_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
 # ── examples ───────────────────────────────────────────────────────────────────

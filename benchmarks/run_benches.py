@@ -66,6 +66,22 @@ EXAMPLES = [
      "xlabel": "n (sieve range)",
      "title": "Out-of-core prime sieve (ChunkFlatTabulate) — scaling",
      "data_glob": "primes[0-9]*"},
+    # kmpExample sweeps n with the pattern length m at its constant built-in
+    # default; the plotted time is the search pass only (text build excluded).
+    {"name": "kmp", "target": "bin/kmpExample",
+     "cols": ["n", "m", "build_s", "search_s", "count", "throughput_gb_s"],
+     "time_col": "search_s",
+     "xlabel": "n (text length, chars)",
+     "title": "Out-of-core KMP search (ChunkKmp) — scaling",
+     "data_glob": "kmp_*"},
+    # rabin_karpExample: same driver shape as kmp (constant m, sweep n),
+    # rolling-hash search instead of the KMP automaton.
+    {"name": "rabin_karp", "target": "bin/rabin_karpExample",
+     "cols": ["n", "m", "build_s", "search_s", "count", "throughput_gb_s"],
+     "time_col": "search_s",
+     "xlabel": "n (text length, chars)",
+     "title": "Out-of-core Rabin-Karp search (ChunkRabinKarp) — scaling",
+     "data_glob": "rk_*"},
 ]
 
 
@@ -372,7 +388,7 @@ def plot_example(rows, entry, path):
     xs = [int(r["n"]) for r in rows]
     fig, ax = plt.subplots(figsize=(7, 5.5), constrained_layout=True)
     _draw_panel(ax, xs, [
-        (entry["name"], _series(rows, "time_s"), "o-"),
+        (entry["name"], _series(rows, entry.get("time_col", "time_s")), "o-"),
     ], entry["xlabel"], entry["title"], xfmt=_pow2_fmt)
     fig.savefig(path, dpi=150)
     plt.close(fig)
