@@ -126,12 +126,26 @@ line the runner greps.  `make examples` builds them all (one per file, to
 
 Each example also times **the corresponding upstream parlaylib example**
 (`deps/parlaylib-examples/`, fetched by `make deps`) in DRAM as an in-memory
-baseline, gated by a RAM budget exactly like `delayed_compare`: half of
+baseline.  The fetch **patches three upstream bugs** (see the sed commands and
+comments in the Makefile rule: an `int` loop index that segfaults KMP past
+2^31 chars, a missing KMP state reset after a match that reads past the
+pattern, and Rabin-Karp comparing the last window against the powers-scan
+total `x^n` instead of the text-hash total, dropping a match at position n−m);
+all three were confirmed and the fixes verified against brute force with
+exact-position property tests.  **Checkouts that fetched
+`deps/parlaylib-examples` before the patches existed must
+`rm -rf deps/parlaylib-examples && make deps` to re-fetch.**  The baseline is
+gated by a RAM budget exactly like `delayed_compare`: half of
 physical RAM, overridable via `EXAMPLE_INMEM_BUDGET_BYTES`; past the budget the
 run is skipped and the CSV field left blank, so the plotted in-mem line stops
-at the RAM cliff.  When the baseline does run, the binary cross-checks its
-count against the out-of-core count and exits non-zero on a mismatch (the
-runner aborts) — a differential test in the spirit of the benchmarks' `agree`.
+at the RAM cliff.  When the baseline does run, the binary cross-checks the
+count **and the full contents** (the out-of-core output is read back and
+compared element-wise) and exits non-zero on a mismatch — a differential test
+in the spirit of the benchmarks' `agree`.  Unlike the substrate benchmarks,
+the examples sweep does **not** abort on a problem (mismatch or crash): the
+runner warns immediately, drops any point that produced no CSV line, keeps
+sweeping, and repeats all warnings in the end-of-run summary (also persisted
+to `warnings.txt` in the results dir, next to the fstrim outcome note).
 
 - `primes.cpp` → `bin/primesExample [n] [out_path]`: out-of-core Eratosthenes
   sieve on `ChunkFlatTabulate`.  Prints `pi(n)`, output throughput, and the last

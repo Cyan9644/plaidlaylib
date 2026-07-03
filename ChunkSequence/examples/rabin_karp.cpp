@@ -15,8 +15,9 @@
 //
 // When it fits in RAM the driver also times parlaylib's own in-memory
 // Rabin-Karp (deps/parlaylib-examples/rabin_karp.h) on the same text as a
-// DRAM baseline, and cross-checks the match counts (exits non-zero on a
-// mismatch).  Unlike the chunk version's rolling hash, the upstream algorithm
+// DRAM baseline, and cross-checks the match count and the exact positions
+// (read back element-wise; exits non-zero on a mismatch).  Unlike the chunk
+// version's rolling hash, the upstream algorithm
 // materializes two length-n prefix-hash scans (~8 B per char on top of the
 // text), so its footprint is ~9n bytes.  Budget: half of physical RAM,
 // override via EXAMPLE_INMEM_BUDGET_BYTES; when skipped the CSV field is left
@@ -36,11 +37,14 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <fcntl.h>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <unistd.h>
+
+#include "absl/log/check.h"
 
 #include "parlay/primitives.h"
 
@@ -51,6 +55,7 @@
 
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/logger.h"
 #include "ChunkSequence/examples/chunk_rabin_karp.h"
 #include "ChunkSequence/chunk_seq.h"
 
@@ -63,6 +68,31 @@ static double to_gb(size_t bytes) { return (double)bytes / (1024.0 * 1024.0 * 10
 static void cleanup_prefix(const std::string& prefix) {
     const auto& ssds = GetSSDList();
     for (size_t d = 0; d < ssds.size(); d++) unlink(GetFileName(prefix, d).c_str());
+}
+
+// Element-wise check of an out-of-core uint64_t result against the in-mem
+// baseline's sequence: read each output chunk back off the drives in index
+// order and compare every value.  Only called when the baseline ran, so
+// `expected` fits in RAM by construction.
+template <typename Seq>
+static bool contents_equal(const chunk_seq& cs, const Seq& expected) {
+    void* buf = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
+    CHECK(buf != nullptr);
+    bool ok = true;
+    size_t j = 0;
+    for (const chunk& c : cs.chunks) {
+        if (!ok || c.used == 0) continue;
+        int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+        SYSCALL(fd);
+        SYSCALL(pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
+        close(fd);
+        const uint64_t* elems = reinterpret_cast<const uint64_t*>(buf);
+        const size_t cnt = c.used / sizeof(uint64_t);
+        for (size_t i = 0; i < cnt && ok; i++, j++)
+            ok = j < expected.size() && elems[i] == (uint64_t)expected[j];
+    }
+    free(buf);
+    return ok && j == expected.size();
 }
 
 // Deterministic 4-letter text: char i of the text, computable anywhere.
@@ -126,6 +156,10 @@ int main(int argc, char* argv[]) {
         if (matches_mem.size() != count) {
             std::cout << "*** MISMATCH: in-mem count " << matches_mem.size()
                       << " != out-of-core count " << count << " ***\n";
+            agree = false;
+        } else if (!contents_equal(matches, matches_mem)) {
+            std::cout << "*** MISMATCH: in-mem match positions differ from "
+                      << "out-of-core output ***\n";
             agree = false;
         }
     } else {

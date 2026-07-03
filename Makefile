@@ -83,12 +83,30 @@ deps/parlaylib:
 # primes.h, …), used as the in-memory comparison baselines by the examples.
 # A separate clone of the same pinned commit: the deps/parlaylib rule above
 # keeps only include/, and won't re-fire on checkouts that already have it.
+#
+# Three upstream bugs are patched after the fetch (each confirmed, and the
+# fix verified, with an exact-position brute-force property test):
+#  1. kmp: the search loop index is `int`, so any text over 2^31 chars
+#     truncates it negative -> wild read -> SIGSEGV.
+#  2. kmp: after a full match the automaton state is never reset, so the next
+#     comparison reads pattern[m] (one past the end); if that garbage byte
+#     matches the text the state runs away off both arrays.  Fix = take the
+#     failure transition when reporting, the standard KMP step.
+#  3. rabin_karp: the last window is compared against `total` (the powers-scan
+#     total, x^n) instead of `sum` (the text-hash total), so a match at the
+#     final position n-m is missed.
 deps/parlaylib-examples:
 	mkdir -p deps
 	git clone https://github.com/ParAlg/parlaylib.git deps/parlaylib-examples-full
 	cd deps/parlaylib-examples-full && git checkout 6b4a4cdbfeb3c481608a42db0230eb6ebb87bf8d
 	mv deps/parlaylib-examples-full/examples deps/parlaylib-examples
 	rm -rf deps/parlaylib-examples-full
+	sed -i 's/for (int i=start;/for (long i=start;/' \
+	    deps/parlaylib-examples/knuth_morris_pratt.h
+	sed -i 's/if (tail == n-1) out.push_back(i - tail);/if (tail == n-1) { out.push_back(i - tail); tail = failure_p[tail]; }/' \
+	    deps/parlaylib-examples/knuth_morris_pratt.h
+	sed -i 's/total = total\] (long i)/total = sum] (long i)/' \
+	    deps/parlaylib-examples/rabin_karp.h
 
 deps/abseil-cpp/install:
 	mkdir -p deps

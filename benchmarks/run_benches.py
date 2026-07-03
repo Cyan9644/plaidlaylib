@@ -32,6 +32,10 @@ unsupported — skipped quietly).  `--no-clean` / `--no-fstrim` disable each.
 Every run carries a cross-substrate correctness check (agree=1).  If any point
 reports agree=0 or a binary exits non-zero, this script prints the offending
 output and exits non-zero — so `make bench` doubles as a differential test.
+The examples sweep is softer: each example binary verifies its result against
+the in-memory parlaylib baseline itself (when it fits in RAM) and a problem
+(mismatch, crash) is warned about — immediately and again at the end of the
+run — but does not stop the sweep; a point that produced no CSV is dropped.
 
 Defaults are sized for a ~5 GiB tmpfs dev box; override via flags or env.
 """
@@ -149,16 +153,18 @@ def clear_bench_data(glob_pat, enabled):
 def fstrim_mounts(glob_pat, enabled):
     """Best-effort `fstrim` of every mount matching glob_pat.
 
-    Announces itself (fstrim can be slow, so an unexplained pause is worse than a
-    line of output) and reports how many mounts were trimmed.  On a tmpfs dev box
-    FITRIM is unsupported and fstrim exits non-zero; we note it and keep going.
-    (fstrim may also need privileges on real SSDs.)
+    Announces itself (fstrim can be slow, so an unexplained pause is worse than
+    a line of output) but returns the outcome as a note string for the
+    end-of-run summary instead of printing it here, where it would scroll away
+    (fstrim may need privileges on real SSDs, and on a tmpfs dev box FITRIM is
+    unsupported — both worth noticing).  Returns None when disabled or no
+    mounts match.
     """
     if not enabled:
-        return
+        return None
     mounts = sorted(glob.glob(glob_pat))
     if not mounts:
-        return
+        return None
     print(f"  fstrim {len(mounts)} mount(s) matching {glob_pat} ...", flush=True)
     ok, failed = 0, None
     for m in mounts:
@@ -168,10 +174,10 @@ def fstrim_mounts(glob_pat, enabled):
             ok += 1
         else:
             failed = r.stdout.strip() or f"fstrim {m} exit {r.returncode}"
-    if ok:
-        print(f"  fstrim ok on {ok} mount(s)", flush=True)
+    note = f"fstrim: ok on {ok} of {len(mounts)} mount(s)"
     if failed:
-        print(f"  (fstrim skipped/unsupported on some mounts: {failed})", flush=True)
+        note += f"; skipped/unsupported on the rest: {failed}"
+    return note
 
 
 # ── running binaries ────────────────────────────────────────────────────────
@@ -184,26 +190,34 @@ def make(target):
         sys.exit(f"make {target} failed (exit {r.returncode})")
 
 
-def run_binary(path, args):
-    """Run a benchmark binary, echo its output, return the parsed CSV fields.
+def run_binary(path, args, fatal=True):
+    """Run a benchmark binary, echo its output, return (csv_fields, problem).
 
-    Exits non-zero on binary failure or a agree=0 correctness mismatch.
+    `problem` is None on a clean run, else a short description (crash,
+    verification mismatch, missing CSV line).  With fatal=True (the substrate
+    benchmarks) any problem aborts the whole run; with fatal=False (the
+    examples sweep) it is returned so the caller can warn and keep sweeping.
+    `csv_fields` is None if the binary printed no CSV line (e.g. it crashed).
     """
     cmd = [path] + [str(a) for a in args]
     print(f"  $ {' '.join(cmd)}", flush=True)
     r = subprocess.run(cmd, cwd=REPO_ROOT,
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     print(r.stdout, end="", flush=True)
-    if r.returncode != 0:
-        sys.exit(f"\n*** {os.path.basename(path)} exited {r.returncode} "
-                 f"(likely a correctness mismatch) — aborting ***")
     csv = None
     for line in r.stdout.splitlines():
         if line.startswith("CSV,"):
             csv = line[len("CSV,"):].split(",")
-    if csv is None:
-        sys.exit(f"\n*** no CSV line from {os.path.basename(path)} — aborting ***")
-    return csv
+    problem = None
+    if r.returncode != 0:
+        why = ("killed by a signal (crash)" if r.returncode < 0
+               else "correctness mismatch or error")
+        problem = f"exited {r.returncode} ({why})"
+    elif csv is None:
+        problem = "no CSV line in output"
+    if problem and fatal:
+        sys.exit(f"\n*** {os.path.basename(path)} {problem} — aborting ***")
+    return csv, problem
 
 
 # ── delayed scale sweep ─────────────────────────────────────────────────────
@@ -219,7 +233,7 @@ def run_delayed(n_values, extra_args, clear_glob, clear_enabled):
     rows = []
     for n in n_values:
         print(f"\n=== delayed scale: n={n} ===", flush=True)
-        fields = run_binary(binary, [n] + extra_args)
+        fields, _ = run_binary(binary, [n] + extra_args)
         row = dict(zip(DELAYED_COLS, fields))
         if row["agree"].strip() != "1":
             sys.exit(f"\n*** agree={row['agree']} at n={n} — aborting ***")
@@ -240,7 +254,7 @@ def run_chunk_size(chunk_sizes, n, extra_args, clear_glob, clear_enabled):
         make(f"bin/chunkSizeCompare_{cs}")
         binary = os.path.join(BINDIR, f"chunkSizeCompare_{cs}")
         print(f"\n=== chunk size: {cs} bytes, n={n} ===", flush=True)
-        fields = run_binary(binary, [n] + extra_args)
+        fields, _ = run_binary(binary, [n] + extra_args)
         row = dict(zip(CHUNK_COLS, fields))
         if row["agree"].strip() != "1":
             sys.exit(f"\n*** agree={row['agree']} at chunk_bytes={cs} — aborting ***")
@@ -250,21 +264,30 @@ def run_chunk_size(chunk_sizes, n, extra_args, clear_glob, clear_enabled):
 
 
 # ── examples sweep ──────────────────────────────────────────────────────────
-def run_example(entry, n_values, extra_args, clear_glob, clear_enabled):
+def run_example(entry, n_values, extra_args, clear_glob, clear_enabled, warnings):
     """Sweep one example over n_values; return parsed rows.
 
     Correctness is checked inside the binary: when the in-memory parlaylib
     baseline runs (sizes within its RAM budget) the binary cross-checks the
-    counts and exits non-zero on a mismatch, which run_binary turns into an
-    abort.  There is no separate agree column to enforce here.
+    count and the full contents against the out-of-core result and exits
+    non-zero on a mismatch.  Unlike the substrate benchmarks' hard agree=1
+    enforcement, a problem here (mismatch, crash) does NOT stop the sweep: it
+    is appended to `warnings` (echoed again at the end of the run) and the
+    sweep continues — a crashed point that printed no CSV line is dropped.
     """
     make(entry["target"])
     binary = os.path.join(BINDIR, os.path.basename(entry["target"]))
     rows = []
     for n in n_values:
         print(f"\n=== example {entry['name']}: n={n} ===", flush=True)
-        fields = run_binary(binary, [n] + extra_args)
-        rows.append(dict(zip(entry["cols"], fields)))
+        fields, problem = run_binary(binary, [n] + extra_args, fatal=False)
+        if problem:
+            w = (f"example {entry['name']} at n={n}: {problem}"
+                 + ("" if fields else " — point dropped"))
+            print(f"  !!! {w}", flush=True)
+            warnings.append(w)
+        if fields:
+            rows.append(dict(zip(entry["cols"], fields)))
         clear_bench_data(clear_glob, clear_enabled)   # don't leave output on the drives
     return rows
 
@@ -461,8 +484,9 @@ def main():
 
     # Start from clean drives, then trim once up front (fstrim can be slow on
     # real SSDs, so we don't repeat it between points); both no-ops on tmpfs.
+    # The fstrim outcome is reported in the end-of-run summary.
     clear_bench_data(args.fstrim_glob, clear_enabled)
-    fstrim_mounts(args.fstrim_glob, fstrim_enabled)
+    fstrim_note = fstrim_mounts(args.fstrim_glob, fstrim_enabled)
 
     if do_delayed:
         print("######## delayed scale ########")
@@ -476,15 +500,32 @@ def main():
         write_csv(os.path.join(outdir, "chunk_size.csv"), CHUNK_COLS, rows)
         plot_chunk_size(rows, os.path.join(outdir, "chunk_size.png"))
 
+    warnings = []
     if do_examples:
         for entry in EXAMPLES:
             print(f"\n######## example: {entry['name']} ########")
             rows = run_example(entry, example_n_values, extra,
-                               args.fstrim_glob, clear_enabled)
+                               args.fstrim_glob, clear_enabled, warnings)
             write_csv(os.path.join(outdir, f"{entry['name']}_scale.csv"),
                       entry["cols"], rows)
             plot_example(rows, entry, os.path.join(outdir, f"{entry['name']}_scale.png"))
 
+    # ── end-of-run summary — repeated here (and warnings persisted next to the
+    # results) so problems can't get lost in the sweep output above.
+    print("\n======== run summary ========")
+    if fstrim_note:
+        print(f"  {fstrim_note}")
+    if warnings:
+        print(f"  !!! {len(warnings)} example warning(s) "
+              "(sweep continued past them):")
+        for w in warnings:
+            print(f"  !!!   {w}")
+        wpath = os.path.join(outdir, "warnings.txt")
+        with open(wpath, "w") as f:
+            f.write("\n".join(warnings) + "\n")
+        print(f"  !!! (also written to {wpath})")
+    else:
+        print("  no example warnings")
     print(f"\nDone. Results in {outdir}")
 
 
