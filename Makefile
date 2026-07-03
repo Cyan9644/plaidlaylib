@@ -1,8 +1,9 @@
 CXX      := g++
 CXXFLAGS := -std=c++17 -O2 -Wall -fno-omit-frame-pointer
 # -I. lets local headers resolve by repo-root-relative path
-# ("ChunkSequence/…", "utils/…", "configs.h").
-INCLUDES := -I. -Ideps/parlaylib -Ideps/abseil-cpp/install/include
+# ("ChunkSequence/…", "utils/…", "configs.h").  -Ideps lets the fetched
+# upstream example headers resolve as "parlaylib-examples/<name>.h".
+INCLUDES := -I. -Ideps -Ideps/parlaylib -Ideps/abseil-cpp/install/include
 LDFLAGS  := -luring -lpthread
 
 BINDIR := bin
@@ -69,7 +70,7 @@ test: $(TEST_BINARIES)
 
 # ── dependency fetching ────────────────────────────────────────────────────────
 
-deps: deps/parlaylib deps/abseil-cpp/install
+deps: deps/parlaylib deps/parlaylib-examples deps/abseil-cpp/install
 
 deps/parlaylib:
 	mkdir -p deps
@@ -77,6 +78,17 @@ deps/parlaylib:
 	cd deps/parlaylib-full && git checkout 6b4a4cdbfeb3c481608a42db0230eb6ebb87bf8d
 	mv deps/parlaylib-full/include deps/parlaylib
 	rm -rf deps/parlaylib-full
+
+# Upstream parlaylib example algorithms (knuth_morris_pratt.h, rabin_karp.h,
+# primes.h, …), used as the in-memory comparison baselines by the examples.
+# A separate clone of the same pinned commit: the deps/parlaylib rule above
+# keeps only include/, and won't re-fire on checkouts that already have it.
+deps/parlaylib-examples:
+	mkdir -p deps
+	git clone https://github.com/ParAlg/parlaylib.git deps/parlaylib-examples-full
+	cd deps/parlaylib-examples-full && git checkout 6b4a4cdbfeb3c481608a42db0230eb6ebb87bf8d
+	mv deps/parlaylib-examples-full/examples deps/parlaylib-examples
+	rm -rf deps/parlaylib-examples-full
 
 deps/abseil-cpp/install:
 	mkdir -p deps
@@ -145,7 +157,10 @@ $(BINDIR)/rabinKarpTest: ChunkSequence/tests/rabin_karp_test.cpp $(UTIL_OBJS)
 # and builds to bin/<name>Example via the generic pattern rule below.
 examples: $(EXAMPLE_BINARIES)
 
-$(BINDIR)/%Example: ChunkSequence/examples/%.cpp $(UTIL_OBJS)
+# Order-only prereq: examples include upstream parlaylib example headers
+# ("parlaylib-examples/…") as their in-memory baselines, and run_benches.py
+# builds these targets directly (not via `make all`, which runs `deps` first).
+$(BINDIR)/%Example: ChunkSequence/examples/%.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # ── benchmarks ─────────────────────────────────────────────────────────────────

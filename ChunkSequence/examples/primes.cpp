@@ -9,12 +9,21 @@
 // machine-readable "CSV," line that benchmarks/run_benches.py greps.  The examples
 // sweep (make bench-examples) times chunk_primes() across a sweep of n.
 //
+// When it fits in RAM the driver also times parlaylib's own in-memory sieve
+// (deps/parlaylib-examples/primes.h, the upstream original of in_mem_primes
+// below) over the full range as a DRAM baseline, and cross-checks the prime
+// counts (exits non-zero on a mismatch).  Its footprint is ~10n bytes (n+1
+// flags + a materialized iota + the output).  Budget: half of physical RAM,
+// override via EXAMPLE_INMEM_BUDGET_BYTES; when skipped the CSV field is left
+// blank so the plotted in-mem line stops at the RAM cliff (as in
+// delayed_compare).
+//
 //   usage: primesExample [global --flags] [n] [consolidate_out_path]
 //     n                    sieve range (default 1e6)
 //     consolidate_out_path if given, write the full prime list as packed
 //                          uint64_t to this local file (skipped at bench scale)
 //
-// CSV line: CSV,<n>,<time_s>,<count>,<throughput_gb_s>
+// CSV line: CSV,<n>,<time_s>,<inmem_time_s>,<count>,<throughput_gb_s>
 //
 // Complexity: O(n log log n) work, O(c log n) span, c = n / ELEMS_PER_CHUNK.
 
@@ -22,6 +31,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <fcntl.h>
 #include <iomanip>
 #include <iostream>
@@ -35,6 +45,12 @@
 #include "parlay/parallel.h"
 #include "parlay/primitives.h"
 #include "parlay/sequence.h"
+
+// Upstream parlaylib example (fetched by `make deps`), used only as the
+// in-memory comparison baseline; the out-of-core sieve below stays
+// self-contained on its own in_mem_primes.  Defines global primes(long) —
+// no clash with anything here.
+#include "parlaylib-examples/primes.h"
 
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
@@ -112,6 +128,14 @@ int main(int argc, char* argv[]) {
     const size_t n = (argc > 1) ? std::stoull(argv[1]) : 1'000'000;
     const std::string out_path = (argc > 2) ? argv[2] : "";  // opt-in consolidate
 
+    // RAM budget for the in-memory parlaylib baseline (as in delayed_compare):
+    // resident set ≈ n+1 bool flags + the materialized iota(n+1) it filters
+    // (8 B each) + the output ≈ 10n bytes.
+    const size_t phys = (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
+    size_t budget = phys / 2;
+    if (const char* e = getenv("EXAMPLE_INMEM_BUDGET_BYTES")) budget = std::stoull(e);
+    const bool inmem_ok = n * 10 <= budget;
+
     std::cout << "Sieving primes in [0, " << n << ")..." << std::flush;
     const std::string prefix = "primes";
     auto t0 = Clock::now();
@@ -129,6 +153,27 @@ int main(int argc, char* argv[]) {
               << std::fixed << std::setprecision(4) << secs << "s   "
               << std::setprecision(2) << to_gb(out_bytes) / secs
               << " GB/s (eff. output)\n";
+
+    // In-memory baseline: parlaylib's primes(n) over the full range (returns
+    // primes <= n, matching chunk_primes's inclusive range), cross-checked by
+    // prime count.
+    bool agree = true;
+    double inmem_secs = 0;
+    if (inmem_ok) {
+        auto t1 = Clock::now();
+        auto primes_mem = primes((long)n);
+        inmem_secs = elapsed(t1);
+        std::cout << "in-mem parlaylib sieve: pi(" << n << ") = " << primes_mem.size()
+                  << "   " << std::setprecision(4) << inmem_secs << "s\n";
+        if (primes_mem.size() != count) {
+            std::cout << "*** MISMATCH: in-mem count " << primes_mem.size()
+                      << " != out-of-core count " << count << " ***\n";
+            agree = false;
+        }
+    } else {
+        std::cout << "in-mem parlaylib sieve: skipped (~10n footprint exceeds "
+                  << "RAM budget " << std::setprecision(2) << to_gb(budget) << " GB)\n";
+    }
 
     // Read the last output chunk and print the final few primes (cheap: one chunk).
     if (count > 0) {
@@ -159,11 +204,13 @@ int main(int argc, char* argv[]) {
     }
 
     // Machine-readable line for benchmarks/run_benches.py (examples sweep).
-    // Columns: n,time_s,count,throughput_gb_s
+    // Columns: n,time_s,inmem_time_s,count,throughput_gb_s
+    // (inmem_time_s blank when the footprint exceeds the RAM budget).
     auto f9 = [](double v) { std::ostringstream o; o << std::setprecision(9) << v; return o.str(); };
-    std::cout << "CSV," << n << ',' << f9(secs) << ',' << count
+    std::cout << "CSV," << n << ',' << f9(secs) << ','
+              << (inmem_ok ? f9(inmem_secs) : std::string()) << ',' << count
               << ',' << f9(to_gb(out_bytes) / secs) << '\n';
 
     cleanup_prefix(prefix);  // don't leave the output on the drives across sweep points
-    return 0;
+    return agree ? 0 : 1;
 }

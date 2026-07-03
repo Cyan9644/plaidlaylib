@@ -21,7 +21,8 @@ Uses **Make**.  Requires `g++` (C++17), `cmake`, `git`, and system `liburing`
 submodule** — the shared I/O utilities are vendored under `utils/`.
 
 ```bash
-# 1. First-time setup: fetch parlaylib + build abseil from source.
+# 1. First-time setup: fetch parlaylib (+ its upstream examples, used as the
+#    examples' in-memory baselines) + build abseil from source.
 make deps
 
 # 2. Build + run the correctness tests (outputs to bin/).
@@ -34,7 +35,8 @@ make distclean   # also remove deps/ and bin/
 ```
 
 **Key flags**: `-std=c++17 -O2`; link `-luring -lpthread` plus abseil static libs.
-Include roots: `-I.` (this repo) → `deps/parlaylib` → `deps/abseil-cpp/install/include`.
+Include roots: `-I.` (this repo) → `-Ideps` (upstream example headers as
+`"parlaylib-examples/<name>.h"`) → `deps/parlaylib` → `deps/abseil-cpp/install/include`.
 Nix liburing paths are auto-detected from `NIX_CFLAGS_COMPILE`/`NIX_LDFLAGS`.
 
 > The Makefile tracks no header dependencies, so editing a header will not
@@ -78,7 +80,7 @@ benchmarks/                   perf benchmarks + single-file Python runner/plotte
   delayed_compare.cpp         in-mem delayed vs chunk-eager vs chunk-delayed (sweep n)
   chunk_size_compare.cpp      eager vs delayed across CHUNK_SIZE (-DCHUNK_SIZE_BYTES)
   run_benches.py              runs the sweeps (incl. examples) + plots to timestamped results/
-deps/                         fetched by `make deps` (parlaylib, abseil); gitignored
+deps/                         fetched by `make deps` (parlaylib, parlaylib-examples, abseil); gitignored
 results/                      timestamped benchmark output (PNG + CSV); gitignored
 ```
 
@@ -119,12 +121,25 @@ does real work there and may need privileges — run under `sudo` or `--no-fstri
 a real problem.  Each is **dual-purpose** like the benchmarks: run by hand it
 prints human-readable output, and it always ends with a machine-readable `CSV,`
 line the runner greps.  `make examples` builds them all (one per file, to
-`bin/<name>Example` via the `%Example` pattern rule).
+`bin/<name>Example` via the `%Example` pattern rule; order-only dep on
+`deps/parlaylib-examples`).
+
+Each example also times **the corresponding upstream parlaylib example**
+(`deps/parlaylib-examples/`, fetched by `make deps`) in DRAM as an in-memory
+baseline, gated by a RAM budget exactly like `delayed_compare`: half of
+physical RAM, overridable via `EXAMPLE_INMEM_BUDGET_BYTES`; past the budget the
+run is skipped and the CSV field left blank, so the plotted in-mem line stops
+at the RAM cliff.  When the baseline does run, the binary cross-checks its
+count against the out-of-core count and exits non-zero on a mismatch (the
+runner aborts) — a differential test in the spirit of the benchmarks' `agree`.
 
 - `primes.cpp` → `bin/primesExample [n] [out_path]`: out-of-core Eratosthenes
   sieve on `ChunkFlatTabulate`.  Prints `pi(n)`, output throughput, and the last
   few primes; consolidating the full list to a local file is opt-in via
-  `out_path` (skipped at bench scale).  Emits `CSV,n,time_s,count,throughput_gb_s`.
+  `out_path` (skipped at bench scale).  Baseline: upstream `primes(n)`
+  (`primes.h`, the original of the local `in_mem_primes`, which stays so the
+  out-of-core sieve is self-contained); ~10n-byte footprint.  Emits
+  `CSV,n,time_s,inmem_time_s,count,throughput_gb_s`.
 - `kmp.cpp` → `bin/kmpExample [n] [m]`: out-of-core KMP string search over an
   n-char synthetic text (pattern = the text's first m chars, m constant across
   the sweep).  The algorithm itself, `ChunkKmp` (`examples/chunk_kmp.h`, tested
@@ -132,24 +147,34 @@ line the runner greps.  `make examples` builds them all (one per file, to
   cross-chunk matches caught via batch-local overlap — chunk k+1's head is
   already in DRAM in the same batch; one small sync read per batch seam
   (requires pattern ≤ one chunk).  It lives in `examples/` rather than the
-  library proper.  Emits `CSV,n,m,build_s,search_s,count,throughput_gb_s`; the
-  sweep plots `search_s`.
+  library proper.  Baseline: upstream `knuth_morris_pratt.h` on the same text
+  (~n-byte footprint).  Emits
+  `CSV,n,m,build_s,search_s,inmem_search_s,count,throughput_gb_s`; the sweep
+  plots `search_s` (text build excluded from both series).
 - `rabin_karp.cpp` → `bin/rabin_karpExample [n] [m]`: out-of-core Rabin-Karp
   search, same driver shape and chunk structure as `kmp.cpp` (`ChunkRabinKarp`
   in `examples/chunk_rabin_karp.h`, tested by `rabinKarpTest`).  Within a chunk
   it uses a rolling polynomial hash mod the Mersenne prime 2^31−1 (Horner
   orientation, so no modular inverse; hash hits are double-checked) rather than
   parlaylib's prefix-hash scans, which out-of-core would write an 8x hash array
-  to disk.  Emits the same CSV columns; the sweep plots `search_s`.
+  to disk.  Baseline: upstream `rabin_karp.h`, which *does* materialize those
+  prefix-hash scans in DRAM (~9n-byte footprint) — that contrast is the point
+  of the comparison.  Emits the same CSV columns as kmp; the sweep plots
+  `search_s`.
 
-Examples are benchmarked by a **separate opt-in sweep** (they carry no
-cross-substrate `agree` check — they just time and report).  `make bench-examples`
+Examples are benchmarked by a **separate opt-in sweep**.  `make bench-examples`
 sweeps each example over `n` with dev-box (tmpfs) sizes and writes
-`<name>_scale.{csv,png}` into the same timestamped `results/` dir as the other
-benchmarks; `make bench-examples-full` uses benchmark-machine sizes (sieve range
-`2^32 … 2^40`).  Add an example by dropping a `.cpp` in `examples/` and appending
-one entry to the `EXAMPLES` registry in `run_benches.py`.  The examples sweep is
-**not** part of `make bench` / `--all`.
+`<name>_scale.{csv,png}` (both series per plot) into the same timestamped
+`results/` dir as the other benchmarks; `make bench-examples-full` uses
+benchmark-machine sizes (sieve range `2^32 … 2^40`).  Add an example by dropping
+a `.cpp` in `examples/` and appending one entry to the `EXAMPLES` registry in
+`run_benches.py`.  **Name-clash warning**: the upstream parlaylib example
+headers define their symbols at global scope with no include guards (e.g.
+`field` in `rabin_karp.h`, `primes(long)` in `primes.h`), so when a new example
+pulls one in, check carefully for clashes against the chunk-side code (our
+ports live in `ChunkSequenceOps::detail` for exactly this reason) and don't
+include more than one upstream header per translation unit without verifying
+they coexist.  The examples sweep is **not** part of `make bench` / `--all`.
 
 ## Data model
 

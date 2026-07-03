@@ -60,27 +60,32 @@ DEFAULT_FSTRIM_GLOB = "/mnt/ssd*"
 # `CSV,<cols...>` line the sweep greps.  `cols` names those fields in order,
 # `data_glob` is the per-mount glob of files the example leaves on the drives
 # (cleared between sweep points).  Add a new example by appending one entry.
+# `inmem_col` is the in-memory parlaylib baseline the binary also times for
+# sizes within its RAM budget (blank field past the cliff -> point dropped).
 EXAMPLES = [
     {"name": "primes", "target": "bin/primesExample",
-     "cols": ["n", "time_s", "count", "throughput_gb_s"],
+     "cols": ["n", "time_s", "inmem_time_s", "count", "throughput_gb_s"],
+     "inmem_col": "inmem_time_s",
      "xlabel": "n (sieve range)",
-     "title": "Out-of-core prime sieve (ChunkFlatTabulate) — scaling",
+     "title": "Prime sieve: out-of-core (ChunkFlatTabulate) vs in-mem parlaylib",
      "data_glob": "primes[0-9]*"},
     # kmpExample sweeps n with the pattern length m at its constant built-in
     # default; the plotted time is the search pass only (text build excluded).
     {"name": "kmp", "target": "bin/kmpExample",
-     "cols": ["n", "m", "build_s", "search_s", "count", "throughput_gb_s"],
-     "time_col": "search_s",
+     "cols": ["n", "m", "build_s", "search_s", "inmem_search_s", "count",
+              "throughput_gb_s"],
+     "time_col": "search_s", "inmem_col": "inmem_search_s",
      "xlabel": "n (text length, chars)",
-     "title": "Out-of-core KMP search (ChunkKmp) — scaling",
+     "title": "KMP search: out-of-core (ChunkKmp) vs in-mem parlaylib",
      "data_glob": "kmp_*"},
     # rabin_karpExample: same driver shape as kmp (constant m, sweep n),
     # rolling-hash search instead of the KMP automaton.
     {"name": "rabin_karp", "target": "bin/rabin_karpExample",
-     "cols": ["n", "m", "build_s", "search_s", "count", "throughput_gb_s"],
-     "time_col": "search_s",
+     "cols": ["n", "m", "build_s", "search_s", "inmem_search_s", "count",
+              "throughput_gb_s"],
+     "time_col": "search_s", "inmem_col": "inmem_search_s",
      "xlabel": "n (text length, chars)",
-     "title": "Out-of-core Rabin-Karp search (ChunkRabinKarp) — scaling",
+     "title": "Rabin-Karp search: out-of-core (ChunkRabinKarp) vs in-mem parlaylib",
      "data_glob": "rk_*"},
 ]
 
@@ -248,9 +253,10 @@ def run_chunk_size(chunk_sizes, n, extra_args, clear_glob, clear_enabled):
 def run_example(entry, n_values, extra_args, clear_glob, clear_enabled):
     """Sweep one example over n_values; return parsed rows.
 
-    Examples carry no cross-substrate correctness check (unlike the substrate
-    benchmarks), so there is no agree=1 enforcement here — we just time and
-    record what the binary reports.
+    Correctness is checked inside the binary: when the in-memory parlaylib
+    baseline runs (sizes within its RAM budget) the binary cross-checks the
+    counts and exits non-zero on a mismatch, which run_binary turns into an
+    abort.  There is no separate agree column to enforce here.
     """
     make(entry["target"])
     binary = os.path.join(BINDIR, os.path.basename(entry["target"]))
@@ -380,7 +386,12 @@ def plot_chunk_size(rows, path):
 
 
 def plot_example(rows, entry, path):
-    """Single-panel log-log plot of an example's runtime vs n."""
+    """Single-panel log-log plot of an example's runtime vs n.
+
+    Two series, styled like plot_delayed: the in-memory parlaylib baseline
+    (which stops at the RAM cliff — blank CSV fields are dropped) and the
+    out-of-core chunk implementation.
+    """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -388,8 +399,11 @@ def plot_example(rows, entry, path):
     xs = [int(r["n"]) for r in rows]
     fig, ax = plt.subplots(figsize=(7, 5.5), constrained_layout=True)
     _draw_panel(ax, xs, [
-        (entry["name"], _series(rows, entry.get("time_col", "time_s")), "o-"),
-    ], entry["xlabel"], entry["title"], xfmt=_pow2_fmt)
+        ("in-mem parlaylib (DRAM)", _series(rows, entry["inmem_col"]), "o-"),
+        ("out-of-core (chunk)", _series(rows, entry.get("time_col", "time_s")), "s-"),
+    ], entry["xlabel"],
+       entry["title"] + "\n(in-mem line stops where the input exceeds the RAM budget)",
+       xfmt=_pow2_fmt)
     fig.savefig(path, dpi=150)
     plt.close(fig)
     print(f"  wrote {path}", flush=True)
