@@ -34,7 +34,7 @@ auto kth_smallest(Range&& in, long k, Less less = {}) {
     return ss.rank(in[i], less);});
 
   // Count how many in keys are each bucket
-  auto sums = parlay::histogram_by_index(ids, (size_t)sample_size+1);
+  auto sums = parlay::histogram_by_index(ids, (long)sample_size + 1);
 
   // find which bucket k belongs in, and pack the keys in that bucket into next
   auto [offsets, total] = parlay::scan(sums);
