@@ -7,12 +7,12 @@
 #include <parlay/primitives.h>
 #include <parlay/random.h>
 #include "ChunkSequence/chunk_map.h"
-#include "ChunkSequence/ExternalPrimitives/external_histogram_by_index.h"
+#include "ChunkSequence/chunk_histogram_by_index.h"
 #include "ChunkSequence/ExternalPrimitives/materialize.h"
 #include "ChunkSequence/chunk_pack.h"
 // parlay::internal::heap_tree comes in via <parlay/primitives.h> above; its
 // header has no include guard, so do NOT include it a second time here.
-#include "ChunkSequence/ExternalPrimitives/LinearFind.h"
+#include "ChunkSequence/ExternalPrimitives/scan_find.h"
 
 
 
@@ -31,8 +31,9 @@ n+= seq.chunks[r].used; //add the used size of each chunk to the n; this tells u
   if (n < 1536){ //1536 elements is the point at which we say we can materialize and sort directly
 
     auto i = ChunkSequenceOps::materialize<T>(seq); //materialize external sequence to parlay sequence (not yet cleanly implemented)
-    //ok but there's not really a reason to sort
-    return parlay::sort(i,less1)[k];
+    //no reason to sort over select
+    std::nth_element(i.begin(), i.begin() + k, i.end(), less1);
+    return i[k];
 
   } 
 
@@ -67,12 +68,14 @@ n+= seq.chunks[r].used; //add the used size of each chunk to the n; this tells u
         
     //     pivots[count].second = LinearFind<T>(seq, pivots[count].first); //this is intended to find the value in question
     // }
-    parlay::parallel_for(0, sample_size * over, [&](size_t count)){
+    parlay::sequence<size_t> scan_seq(seq.chunks.size());
+    scan_size<T>(seq, scan_seq);
+
+    parlay::parallel_for(0, sample_size * over, [&](size_t count){
   
-        pivots[count].second = LinearFind<T>(seq, pivots[count].first); //this is intended to find the value in question
-    }
-    }
-    
+        pivots[count].second = scan_find<T>(seq, scan_seq, pivots[count].first); //this is intended to find the value in question
+    });
+
     //we now have the values of the pivots in memory
 
     //take the oversampleth pivots
@@ -97,20 +100,17 @@ auto ids = ChunkMap<T, unsigned char>(seq, "id_" + std::to_string(n),[&](T e){
 });
   // Count how many in keys are each bucket
 //   auto sums = ChunkSequenceOps::histogram_by_index(ids, sample_size+1);
-auto sums = ChunkSequenceOps::histogram_by_index<unsigned char>(ids, sample_size+1);
+auto sums = ChunkSequenceOps::ChunkHistogramByIndex<unsigned char>(ids, sample_size+1);
 
   // find which bucket k belongs in, and pack the keys in that bucket into next
   auto [offsets, total] = parlay::scan(sums);
   auto id = std::upper_bound(offsets.begin(), offsets.end(), k) - offsets.begin() - 1;
-//   auto next = ChunkSequenceOps::pack(seq, "next_prefix", parlay::delayed_map(ids, [=] (auto b) {return b == id;}));
-auto flags=ChunkMap<unsigned char, bool>(ids, "flags_" + std::to_string(n),[=] (unsigned char b){ 
-    return b == id;
-}
-);
-auto next= ChunkSequenceOps::pack<T>(seq, "next_" +std::to_string(n), flags);
-  // recurse on much smaller set, adjusting k as needed
-    //note that currently this is on a parlay sequence:: we'll want to make this an external sequence 
-    //as soon as we can implement the pack method
+// auto flags = ChunkSequenceOps::delayed::force(ChunkSequenceOps::delayed::map(ChunkSequenceOps::delayed::delay<unsigned char>(ids),[=](unsigned char b){ return b == id; }),"flags_" + std::to_string(n));auto next= ChunkSequenceOps::pack<T>(seq, "next_" +std::to_string(n), flags);
+
+auto next = ChunkSequenceOps::pack_if<T, unsigned char>(
+    seq, "next_" + std::to_string(n), ids,
+    [id](unsigned char b){ return b == id; });
+  // recur on much smaller set, adjusting k as needed
   return kth_smallest<T>(next, k - offsets[id], less1);
 }
 

@@ -230,6 +230,105 @@ chunk_seq pack(const chunk_seq& seq,
         });
 }
 
+/**
+ * Like the chunk-parallel pack overload, but the gate is a predicate evaluated
+ * against a chunk-parallel selector of arbitrary type U rather than a
+ * precomputed bool chunk_seq.  keep_seq must be chunk-parallel to seq (one
+ * selector chunk per data chunk, identical per-chunk element counts, index
+ * aligned); element g of seq survives iff pred(keep_seq[g]) is true.
+ *
+ * This exists to fuse "map to a flag, force the flag to disk, then pack by it"
+ * into a single pass: callers that already hold a chunk-parallel selector on
+ * SSD (e.g. bucket ids from ChunkMap) can pack directly on `pred(id) == ...`
+ * without materializing an intermediate bool chunk_seq — saving a full read of
+ * the selector, a full write of the flags, and a full read of the flags.
+ *
+ * @tparam T     Element type stored in seq.
+ * @tparam U     Element type stored in keep_seq (the selector).
+ * @tparam Pred  Callable U -> bool.
+ */
+template<typename T, typename U, typename Pred>
+chunk_seq pack_if(const chunk_seq& seq,
+                  const std::string& result_prefix,
+                  const chunk_seq& keep_seq,
+                  Pred pred) {
+    const size_t n_in = seq.chunks.size();
+    if (n_in == 0) return {};
+    // keep_seq must be chunk-parallel to seq (one selector chunk per data chunk).
+    assert(keep_seq.chunks.size() == n_in &&
+           "keep_seq must have the same chunk count as seq");
+
+    return DensePack<T>(n_in, result_prefix,
+        [&](size_t base, size_t batch_n) {
+            // Read this batch's data slice and its parallel selector slice, each
+            // with its own reader so completions can only belong to this batch.
+            chunk_seq data_sub, keep_sub;
+            data_sub.chunks.assign(seq.chunks.begin() + base,
+                                   seq.chunks.begin() + base + batch_n);
+            keep_sub.chunks.assign(keep_seq.chunks.begin() + base,
+                                   keep_seq.chunks.begin() + base + batch_n);
+
+            auto reader = std::make_unique<ChunkSequenceReader<T>>();
+            reader->PrepChunks(data_sub);
+            reader->Start(5, 32, 16);
+
+            // The selector reader is drained within this producer, so it may be
+            // a local destroyed at scope exit (after its buffers are freed),
+            // unlike the data reader which the batch must keep alive.
+            ChunkSequenceReader<U> keep_reader;
+            keep_reader.PrepChunks(keep_sub);
+            keep_reader.Start(5, 32, 16);
+
+            struct FC { T* buf; size_t n; size_t idx; };
+            std::vector<FC> fc(batch_n);
+            for (size_t i = 0; i < batch_n; i++) {
+                auto [ptr, n, cidx] = reader->Poll();
+                fc[i] = {ptr, n, cidx};
+            }
+            // Restore logical order before packing.
+            std::sort(fc.begin(), fc.end(),
+                      [](const FC& a, const FC& b) { return a.idx < b.idx; });
+
+            struct KC { U* buf; size_t n; size_t idx; };
+            std::vector<KC> kc(batch_n);
+            for (size_t i = 0; i < batch_n; i++) {
+                auto [ptr, n, cidx] = keep_reader.Poll();
+                kc[i] = {ptr, n, cidx};
+            }
+            std::sort(kc.begin(), kc.end(),
+                      [](const KC& a, const KC& b) { return a.idx < b.idx; });
+
+            // Compact survivors to the front of each data buffer, in parallel,
+            // gated by pred() over the same-index selector buffer.  Both slices
+            // cover the index range [base, base+batch_n), so after sorting each
+            // by index, position b lines up in both.
+            detail::PackBatch<T> batch;
+            batch.reader = std::move(reader);
+            batch.bufs.resize(batch_n);
+            batch.counts.resize(batch_n);
+            parlay::parallel_for(0, batch_n, [&](size_t b) {
+                assert(fc[b].idx == kc[b].idx &&
+                       "selector chunk not aligned to data chunk");
+                assert(kc[b].n >= fc[b].n &&
+                       "selector chunk shorter than data chunk");
+                T* buf = fc[b].buf;
+                const U* keep = kc[b].buf;
+                const size_t n = fc[b].n;
+                size_t s = 0;
+                for (size_t j = 0; j < n; j++)
+                    if (pred(keep[j])) buf[s++] = buf[j];
+                batch.bufs[b]   = buf;
+                batch.counts[b] = s;
+            }, /*granularity=*/1);
+
+            // Selector buffers are fully consumed; return them to their pool
+            // before keep_reader is destroyed at scope exit.
+            for (const auto& e : kc) keep_reader.allocator.Free(e.buf);
+
+            return batch;
+        });
+}
+
 } // namespace ChunkSequenceOps
 
 #endif // CHUNK_PACK_H

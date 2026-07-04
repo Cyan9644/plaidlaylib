@@ -7,8 +7,6 @@
 
 #include <parlay/primitives.h>
 
-// Brings in chunk_seq, CHUNK_SIZE, O_DIRECT_MEMORY_ALIGNMENT (configs.h),
-// AlignUp (utils/file_utils.h), and SYSCALL/CHECK (utils/logger.h + absl).
 #include "ChunkSequence/chunk_seq.h"
 
 // template<typename T>
@@ -33,12 +31,10 @@ T LinearFind(const chunk_seq& seq,size_t g) {
     for(const auto& c: seq.chunks){
         const size_t cnt = c.used / sizeof(T);   
         if (g < cnt) {
-            //pretty sure you don't need an aligned buffer for reading 
             T* buf = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
             CHECK(buf != nullptr) << "allocation wrong";
             int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
             SYSCALL(fd);
-            offset = AlignDown(begin_addr + g*sizeof(T))
             SYSCALL(pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
             close(fd);
             T val = buf[g];

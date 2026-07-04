@@ -1,5 +1,5 @@
-#ifndef EXTERNAL_HISTOGRAM_H
-#define EXTERNAL_HISTOGRAM_H
+#ifndef CHUNK_HISTOGRAM_BY_INDEX_H
+#define CHUNK_HISTOGRAM_BY_INDEX_H
 #include <pthread.h>
 #include "ChunkSequence/external_engine.h"
 #include <cassert>
@@ -83,15 +83,17 @@
 //     // return seq;
 // }
 
+namespace ChunkSequenceOps {
+
 template<typename T>
-parlay::sequence<size_t> ExternalHistogramByIndex(const chunk_seq& seq, size_t num_unique){
+parlay::sequence<size_t> ChunkHistogramByIndex(const chunk_seq& seq, size_t num_unique){
     //as I understand it::
     //removeworker is a function template that starts the reader's io_uring producer threads then generates
     //one worker tas per hardware worker polling a single reader
     //an arbitrary worker takes the next chunk to enforce load balancing
     //poll blocks if the queue is empty but filling, will return nulptr once all readers have finished and the queue is empty
     //this stops the workers
-    auto remove_from_queue = ChunkSequenceOps::RemoveWorker<T>(seq,  /*reader_threads=*/10, [&](ChunkSequenceOps::ChunkSequenceReader<T>& reader){
+    auto remove_from_queue = ChunkSequenceOps::RemoveWorker<T>(seq,  /*reader_threads=*/10, [&](ChunkSequenceReader<T>& reader){
         //create parlay seq init to 0 with num_unique values
         parlay::sequence<size_t> remove(num_unique, 0);
         while(true){
@@ -120,9 +122,9 @@ parlay::sequence<size_t> ExternalHistogramByIndex(const chunk_seq& seq, size_t n
         });
     }
     return total;
-    
+
 }
 
-
+}  // namespace ChunkSequenceOps
 
 #endif

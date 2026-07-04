@@ -54,8 +54,8 @@
 // Out-of-core algorithm under test and the in-memory parlaylib baseline it is
 // modelled on.  Both are pulled in here so the driver can time them head-to-head
 // on identical keys.
-#include "ChunkSequence/Examples/external/ExternalKthSmallest.h"
-#include "ChunkSequence/Examples/in_memory/kth_smallest.h"
+#include "ChunkSequence/examples/external/ExternalKthSmallest.h"
+#include "ChunkSequence/examples/in_memory/kth_smallest.h"
 
 using Clock = std::chrono::steady_clock;
 static double elapsed(Clock::time_point t0) {
