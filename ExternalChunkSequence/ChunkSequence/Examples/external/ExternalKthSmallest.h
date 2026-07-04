@@ -31,6 +31,7 @@ n+= seq.chunks[r].used; //add the used size of each chunk to the n; this tells u
   if (n < 1536){ //1536 elements is the point at which we say we can materialize and sort directly
 
     auto i = ChunkSequenceOps::materialize<T>(seq); //materialize external sequence to parlay sequence (not yet cleanly implemented)
+    //ok but there's not really a reason to sort
     return parlay::sort(i,less1)[k];
 
   } 
@@ -62,9 +63,14 @@ n+= seq.chunks[r].used; //add the used size of each chunk to the n; this tells u
     // });
 
     //we now have the random indices, so we just need to figure out where these live in the actual chunk sequence
-    for(size_t count = 0; count < sample_size * over; count++){
+    // for(size_t count = 0; count < sample_size * over; count++){
         
+    //     pivots[count].second = LinearFind<T>(seq, pivots[count].first); //this is intended to find the value in question
+    // }
+    parlay::parallel_for(0, sample_size * over, [&](size_t count)){
+  
         pivots[count].second = LinearFind<T>(seq, pivots[count].first); //this is intended to find the value in question
+    }
     }
     
     //we now have the values of the pivots in memory

@@ -30,7 +30,7 @@
 
 template<typename T>
 T LinearFind(const chunk_seq& seq,size_t g) {
-    for(const auto& c: seq.chunks) {
+    for(const auto& c: seq.chunks){
         const size_t cnt = c.used / sizeof(T);   
         if (g < cnt) {
             //pretty sure you don't need an aligned buffer for reading 
@@ -38,6 +38,7 @@ T LinearFind(const chunk_seq& seq,size_t g) {
             CHECK(buf != nullptr) << "allocation wrong";
             int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
             SYSCALL(fd);
+            offset = AlignDown(begin_addr + g*sizeof(T))
             SYSCALL(pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
             close(fd);
             T val = buf[g];
