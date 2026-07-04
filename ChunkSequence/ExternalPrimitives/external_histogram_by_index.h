@@ -83,17 +83,15 @@
 //     // return seq;
 // }
 
-namespace ChunkSequenceOps {
-
 template<typename T>
-parlay::sequence<size_t> histogram_by_index(const chunk_seq& seq, size_t num_unique){
+parlay::sequence<size_t> ExternalHistogramByIndex(const chunk_seq& seq, size_t num_unique){
     //as I understand it::
     //removeworker is a function template that starts the reader's io_uring producer threads then generates
     //one worker tas per hardware worker polling a single reader
     //an arbitrary worker takes the next chunk to enforce load balancing
     //poll blocks if the queue is empty but filling, will return nulptr once all readers have finished and the queue is empty
     //this stops the workers
-    auto remove_from_queue = ChunkSequenceOps::RemoveWorker<T>(seq,  /*reader_threads=*/10, [&](ChunkSequenceReader<T>& reader){
+    auto remove_from_queue = ChunkSequenceOps::RemoveWorker<T>(seq,  /*reader_threads=*/10, [&](ChunkSequenceOps::ChunkSequenceReader<T>& reader){
         //create parlay seq init to 0 with num_unique values
         parlay::sequence<size_t> remove(num_unique, 0);
         while(true){
@@ -117,14 +115,14 @@ parlay::sequence<size_t> histogram_by_index(const chunk_seq& seq, size_t num_uni
         // });
 
         //add the local buffer counts to the total
-        total = parlay::tabulate(num_unique, [&](size_t j){
+        total = parlay::map(total, [&](size_t j){
             return total[j] + remove[j];
         });
     }
     return total;
-
+    
 }
 
-} // namespace ChunkSequenceOps
+
 
 #endif
