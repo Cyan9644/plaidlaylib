@@ -111,15 +111,9 @@ parlay::sequence<size_t> ChunkHistogramByIndex(const chunk_seq& seq, size_t num_
     });
     parlay::sequence<size_t> total(num_unique, 0); //final counts sequence
     for(auto& remove : remove_from_queue){
-        //inner loops is parallel so there are no race conditions, 
-        // parlay::parallel_for(0, num_unique, [&](size_t j){
-        //     total[j] += remove[j];
-        // });
-
-        //add the local buffer counts to the total
-        total = parlay::map(total, [&](size_t j){
-            return total[j] + remove[j];
-        });
+        for(size_t j = 0; j < num_unique; j++){
+            total[j] += remove[j];
+        }
     }
     return total;
 
