@@ -61,36 +61,22 @@ DEFAULT_FSTRIM_GLOB = "/mnt/ssd*"
 
 # ── examples registry ───────────────────────────────────────────────────────
 # Each example is a dual-purpose binary (bin/<name>Example) that prints a
-# `CSV,<cols...>` line the sweep greps.  `cols` names those fields in order,
-# `data_glob` is the per-mount glob of files the example leaves on the drives
-# (cleared between sweep points).  Add a new example by appending one entry.
-# `inmem_col` is the in-memory parlaylib baseline the binary also times for
-# sizes within its RAM budget (blank field past the cliff -> point dropped).
+# `CSV,<cols...>` line the sweep greps.  `cols` names those fields in order;
+# `time_col`/`inmem_col` pick the plotted out-of-core / in-memory series;
+# `data_globs` lists the per-mount globs of files the example leaves on the
+# drives (cleared between sweep points).  Add a new example by appending one
+# entry (and, if it lives in examples/external/, an explicit Makefile rule).
 EXAMPLES = [
-    {"name": "primes", "target": "bin/primesExample",
-     "cols": ["n", "time_s", "inmem_time_s", "count", "throughput_gb_s"],
-     "inmem_col": "inmem_time_s",
-     "xlabel": "n (sieve range)",
-     "title": "Prime sieve: out-of-core (ChunkFlatTabulate) vs in-mem parlaylib",
-     "data_glob": "primes[0-9]*"},
-    # kmpExample sweeps n with the pattern length m at its constant built-in
-    # default; the plotted time is the search pass only (text build excluded).
-    {"name": "kmp", "target": "bin/kmpExample",
-     "cols": ["n", "m", "build_s", "search_s", "inmem_search_s", "count",
+    # kth_smallestExample sweeps n with k at the median (n/2); the plotted time
+    # is the selection pass only (input build excluded).  Its recursion leaves
+    # id_/flags_/next_ intermediates in addition to the kth_in input.
+    {"name": "kth_smallest", "target": "bin/kth_smallestExample",
+     "cols": ["n", "k", "build_s", "select_s", "inmem_select_s", "result",
               "throughput_gb_s"],
-     "time_col": "search_s", "inmem_col": "inmem_search_s",
-     "xlabel": "n (text length, chars)",
-     "title": "KMP search: out-of-core (ChunkKmp) vs in-mem parlaylib",
-     "data_glob": "kmp_*"},
-    # rabin_karpExample: same driver shape as kmp (constant m, sweep n),
-    # rolling-hash search instead of the KMP automaton.
-    {"name": "rabin_karp", "target": "bin/rabin_karpExample",
-     "cols": ["n", "m", "build_s", "search_s", "inmem_search_s", "count",
-              "throughput_gb_s"],
-     "time_col": "search_s", "inmem_col": "inmem_search_s",
-     "xlabel": "n (text length, chars)",
-     "title": "Rabin-Karp search: out-of-core (ChunkRabinKarp) vs in-mem parlaylib",
-     "data_glob": "rk_*"},
+     "time_col": "select_s", "inmem_col": "inmem_select_s",
+     "xlabel": "n (number of keys)",
+     "title": "kth-smallest: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
+     "data_globs": ["kth_in*", "id_*", "flags_*", "next_*"]},
 ]
 
 
@@ -130,7 +116,7 @@ def _f(s):
 # drives between points so nothing accumulates — the C++ binaries clean their
 # own intermediates, but delayed_compare leaves its `perm` input behind.
 BENCH_FILE_GLOBS = ("perm[0-9]*", "bw_dl_*", "bw_cs_*") + \
-    tuple(e["data_glob"] for e in EXAMPLES)
+    tuple(g for e in EXAMPLES for g in e["data_globs"])
 
 
 def clear_bench_data(glob_pat, enabled):

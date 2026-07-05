@@ -43,7 +43,7 @@ TEST_BINARIES := $(BINDIR)/permTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
-                    $(BINDIR)/rabin_karpExample
+                    $(BINDIR)/rabin_karpExample $(BINDIR)/kth_smallestExample
 
 LINK = $(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
@@ -179,6 +179,12 @@ examples: $(EXAMPLE_BINARIES)
 # ("parlaylib-examples/…") as their in-memory baselines, and run_benches.py
 # builds these targets directly (not via `make all`, which runs `deps` first).
 $(BINDIR)/%Example: ChunkSequence/examples/%.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(LINK)
+
+# kth_smallest (the External-primitives example) lives one level deeper, in
+# examples/external/, than the %Example pattern rule reaches, so it needs an
+# explicit rule.  Same recipe.
+$(BINDIR)/kth_smallestExample: ChunkSequence/examples/external/kth_smallest.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # ── benchmarks ─────────────────────────────────────────────────────────────────
