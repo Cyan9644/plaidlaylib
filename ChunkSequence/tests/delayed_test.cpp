@@ -382,6 +382,119 @@ static void run_zip_multibatch() {
     cleanup_prefix("perm"); cleanup_prefix("permB");
 }
 
+// ── nested / composed zip ─────────────────────────────────────────────────────
+// The recursive node model lets zip take zips, maps, and scans as operands.
+static void run_zip_compose() {
+    const size_t n = 2 * ELEMS_PER_CHUNK + 37;
+    std::cout << "  zip composition  n=" << n << "\n";
+    chunk_seq A = ChunkSequenceOps::perm(n);                                        // i
+    chunk_seq B = ChunkSequenceOps::tabulate<uint64_t>(n, "cmpB", [](size_t i){ return (uint64_t)10 * i; });
+    chunk_seq C = ChunkSequenceOps::tabulate<uint64_t>(n, "cmpC", [](size_t i){ return (uint64_t)100 * i; });
+
+    // zip of a zip (3-way via nesting): ((a,b),c) -> a+b+c = 111 i
+    {
+        auto z = cd::zip(cd::zip(cd::delay(A), cd::delay(B)), cd::delay(C));
+        chunk_seq out = cd::force(
+            cd::map(z, [](std::pair<std::pair<uint64_t, uint64_t>, uint64_t> p) {
+                return p.first.first + p.first.second + p.second; }), "cmpO");
+        std::vector<uint64_t> expected(n);
+        for (size_t i = 0; i < n; i++) expected[i] = 111 * (uint64_t)i;
+        expect_eq_vec<uint64_t>("zip(zip(A,B),C)  3-way", out, expected);
+        cleanup_prefix("cmpO");
+    }
+
+    // zip with a delayed (mapped) operand: (i, 10i+1) -> 11i+1
+    {
+        auto z = cd::zip(cd::delay(A), cd::map(cd::delay(B), [](uint64_t x){ return x + 1; }));
+        chunk_seq out = cd::force(
+            cd::map(z, [](std::pair<uint64_t, uint64_t> p){ return p.first + p.second; }), "cmpO");
+        std::vector<uint64_t> expected(n);
+        for (size_t i = 0; i < n; i++) expected[i] = (uint64_t)i + (10 * (uint64_t)i + 1);
+        expect_eq_vec<uint64_t>("zip(A, map(B))  operand", out, expected);
+        cleanup_prefix("cmpO");
+    }
+
+    // zip a sequence with a SCAN of a zip: (a_i, prefix_i), prefix_i = sum_{j<i}(a_j+b_j)
+    {
+        auto [S, tot] = cd::scan(cd::map(cd::zip(cd::delay(A), cd::delay(B)), add_pair), SumMonoid{});
+        (void)tot;
+        auto z = cd::zip(cd::delay(A), S);
+        chunk_seq out = cd::force(
+            cd::map(z, [](std::pair<uint64_t, uint64_t> p){ return p.first + p.second; }), "cmpO");
+        std::vector<uint64_t> expected(n);
+        uint64_t run = 0;
+        for (size_t i = 0; i < n; i++) { expected[i] = (uint64_t)i + run; run += 11 * (uint64_t)i; }
+        expect_eq_vec<uint64_t>("zip(A, scan(map(zip(A,B))))", out, expected);
+        cleanup_prefix("cmpO");
+    }
+
+    cleanup_prefix("perm"); cleanup_prefix("cmpB"); cleanup_prefix("cmpC");
+}
+
+// ── big-integer addition via nested zip (carry-lookahead) ─────────────────────
+// C = scan(map(zip(A,B,pad), status)) is the carry-in per limb; then
+// map(zip(zip(A,B,pad), C), (a,b,c) -> a+b+(c&1)) forms each result limb — the
+// literal nested-zip pipeline the recursive node model unlocks (no scan_with_input).
+static uint64_t bi_h(uint64_t x) {                       // a cheap per-index hash
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL;
+    x ^= x >> 33; x *= 0xc4ceb9fe1a85ec53ULL; x ^= x >> 33; return x;
+}
+static uint64_t bi_a(size_t i) { return bi_h(i); }
+static uint64_t bi_b(size_t i) { return (i % 7 == 0) ? ~bi_h(i)            // force propagates
+                                                     : bi_h(i ^ 0xABCDu); }
+// carry status packed bit0=generate, bit1=propagate (kill = 0).
+static uint8_t carry_status(std::pair<uint64_t, uint64_t> p) {
+    unsigned __int128 s = (unsigned __int128)p.first + p.second;
+    return (uint8_t)(((s >> 64) != 0) | ((((uint64_t)s) == ~(uint64_t)0) << 1));
+}
+struct CarryMonoid {                                     // compose lower x with higher y
+    uint8_t identity = 2;                                // (g=0,p=1): pass carry through
+    uint8_t operator()(uint8_t x, uint8_t y) const {
+        uint8_t gx = x & 1, px = (x >> 1) & 1, gy = y & 1, py = (y >> 1) & 1;
+        return (uint8_t)((gy | (py & gx)) | ((py & px) << 1));
+    }
+};
+// result limb from ((a,b), carry_in)
+static uint64_t bi_limb(std::pair<std::pair<uint64_t, uint64_t>, uint8_t> pr) {
+    return pr.first.first + pr.first.second + (uint64_t)(pr.second & 1);
+}
+
+static void run_bigint_add() {
+    const size_t na = 2 * ELEMS_PER_CHUNK + 100, nb = ELEMS_PER_CHUNK + 50;
+    std::cout << "  bigint add (nested zip)  na=" << na << " nb=" << nb << "\n";
+
+    // schoolbook serial reference
+    std::vector<uint64_t> ref(na);
+    unsigned __int128 carry = 0;
+    for (size_t i = 0; i < na; i++) {
+        unsigned __int128 s = (unsigned __int128)bi_a(i) + (i < nb ? bi_b(i) : 0ull) + carry;
+        ref[i] = (uint64_t)s; carry = s >> 64;
+    }
+    const uint8_t ref_cout = (uint8_t)carry;
+
+    chunk_seq A = ChunkSequenceOps::tabulate<uint64_t>(na, "biA", [](size_t i){ return bi_a(i); });
+    chunk_seq B = ChunkSequenceOps::tabulate<uint64_t>(nb, "biB", [](size_t i){ return bi_b(i); });
+    auto [C, cout] = cd::scan(cd::map(cd::zip(cd::delay(A), cd::delay(B), (uint64_t)0), carry_status),
+                              CarryMonoid{});                                // carry-in per limb
+    auto z = cd::zip(cd::zip(cd::delay(A), cd::delay(B), (uint64_t)0), C);   // ((a,b), carry)
+    chunk_seq out = cd::force(cd::map(z, bi_limb), "biOut");
+    expect_eq_vec<uint64_t>("bigint add digits", out, ref);
+    expect_scalar("bigint add final carry-out", (uint64_t)(cout & 1), ref_cout);
+    cleanup_prefix("biA"); cleanup_prefix("biB"); cleanup_prefix("biOut");
+
+    // full carry chain across chunks: all-ones + 1 -> all-zero digits, carry-out 1
+    const size_t m = ELEMS_PER_CHUNK + 3;
+    chunk_seq A2 = ChunkSequenceOps::tabulate<uint64_t>(m, "biA", [](size_t){ return ~(uint64_t)0; });
+    chunk_seq B2 = ChunkSequenceOps::tabulate<uint64_t>(1, "biB", [](size_t){ return (uint64_t)1; });
+    auto [C2, cout2] = cd::scan(cd::map(cd::zip(cd::delay(A2), cd::delay(B2), (uint64_t)0), carry_status),
+                                CarryMonoid{});
+    auto z2 = cd::zip(cd::zip(cd::delay(A2), cd::delay(B2), (uint64_t)0), C2);
+    chunk_seq out2 = cd::force(cd::map(z2, bi_limb), "biOut");
+    expect_scalar("bigint add all-ones+1 digit-sum", cd::reduce(cd::delay(out2), SumMonoid{}), 0);
+    expect_scalar("bigint add all-ones+1 carry-out", (uint64_t)(cout2 & 1), 1);
+    cleanup_prefix("biA"); cleanup_prefix("biB"); cleanup_prefix("biOut");
+}
+
 // ── delayed tabulate (no source I/O) ──────────────────────────────────────────
 static void run_tabulate(size_t n) {
     std::cout << "  tabulate  n=" << n << "\n";
@@ -452,6 +565,8 @@ int main(int argc, char* argv[]) {
     run_multibatch();
     run_zip_pad();
     run_zip_multibatch();
+    run_zip_compose();
+    run_bigint_add();
 
     std::cout << "\n" << g_pass << " passed, " << g_fail << " failed.  "
               << (g_fail == 0 ? "ALL PASS" : "SOME FAILED") << "\n";
