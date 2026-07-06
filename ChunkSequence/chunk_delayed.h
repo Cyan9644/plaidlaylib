@@ -53,8 +53,15 @@
 // Everything is templated (not std::function) so the fused chain inlines.
 //
 // LIFETIME: a delayed_file (and any sequence derived from it, including the
-// result of `scan`) holds a pointer to the source chunk_seq.  The source must
-// outlive every terminal call made on the delayed sequence.
+// results of `scan` and `zip`) holds a pointer to the source chunk_seq.  Every
+// source (both operands of a `zip`) must outlive every terminal call made on the
+// delayed sequence.
+//
+// zip pairs two delayed sequences element-wise into std::pair (compose `map` to
+// combine).  Unlike the unary combinators it needs both operands at once, so a
+// zip is a third source kind (delayed_zip) driven over its own max-length grid;
+// see delayed_zip / run_zip_chunks below.  `zip(a, b)` requires equal length;
+// `zip(a, b, pad)` pads the shorter side with a runtime fill value.
 //
 // flatten is intentionally omitted: chunks store plain uint64_t, so there is
 // nothing nested to flatten.
@@ -101,13 +108,43 @@ struct scan_iter {
 template<class It, class F, class V>
 scan_iter<It, F, V> make_scan_iter(It it, F f, V acc) { return {it, f, acc}; }
 
-// ── the two delayed-sequence kinds ───────────────────────────────────────────
+// Yields the first `remaining` elements of `it`, then `pad` forever.  Used by
+// zip: past a shorter operand's end (or in a chunk it does not reach at all,
+// `remaining == 0`) the missing side emits the fill value.  When remaining hits
+// 0 the inner iterator is never dereferenced or advanced again, so an absent
+// side may pass a null/dummy inner iterator.
+template<class It, class V>
+struct pad_iter {
+    It it;
+    size_t remaining;
+    V pad;
+    V operator*() const { return remaining ? (V)(*it) : pad; }
+    pad_iter& operator++() { if (remaining) { ++it; --remaining; } return *this; }
+};
+template<class It, class V>
+pad_iter<It, V> make_pad_iter(It it, size_t remaining, V pad) {
+    return {it, remaining, pad};
+}
+
+// Zips two (already pad-wrapped) iterators into a sequence of std::pair.
+template<class ItA, class ItB>
+struct zip_iter {
+    ItA a;
+    ItB b;
+    auto operator*() const { return std::pair{*a, *b}; }
+    zip_iter& operator++() { ++a; ++b; return *this; }
+};
+template<class ItA, class ItB>
+zip_iter<ItA, ItB> make_zip_iter(ItA a, ItB b) { return {a, b}; }
+
+// ── the delayed-sequence kinds ───────────────────────────────────────────────
 
 // File-backed: make_iter(const TSrc* raw, size_t n, size_t chunk_index) -> iter.
 template<class TSrc, class MakeIter>
 struct delayed_file {
     using source_type = TSrc;
     static constexpr bool is_file = true;
+    static constexpr bool is_zip  = false;
 
     const chunk_seq* source;
     MakeIter make_iter;
@@ -122,6 +159,7 @@ struct delayed_file {
 template<class MakeIter>
 struct delayed_index {
     static constexpr bool is_file = false;
+    static constexpr bool is_zip  = false;
 
     size_t n;
     MakeIter make_iter;
@@ -132,15 +170,67 @@ struct delayed_index {
     size_t num_chunks() const { return (n + ELEMS_PER_CHUNK - 1) / ELEMS_PER_CHUNK; }
 };
 
+// Zip of two operands (each itself a delayed_file/delayed_index/delayed_zip),
+// element i = {A[i], B[i]}.  When one operand is shorter, its missing tail is
+// filled with a per-side pad value up to len = max(lenA, lenB).  Because the
+// two operands need not share a chunk grid, a zip is driven over its own
+// ceil(len/ELEMS_PER_CHUNK) grid (see run_zip_chunks), reading whichever sides
+// have a real chunk for a given index and padding the rest.  make_iter takes the
+// (possibly null) raw buffers of both file sides plus the chunk's element base,
+// length, index, and each side's real-element count.
+template<class DA, class DB, class MakeIter>
+struct delayed_zip {
+    static constexpr bool is_file = false;
+    static constexpr bool is_zip  = true;
+    using side_a = DA;
+    using side_b = DB;
+
+    DA a;
+    DB b;
+    size_t lenA, lenB, len;
+    MakeIter make_iter;
+
+    using iterator   = std::invoke_result_t<MakeIter, const void*, const void*,
+                                             size_t, size_t, size_t, size_t, size_t>;
+    using value_type = std::decay_t<decltype(*std::declval<iterator&>())>;
+
+    size_t num_chunks() const { return (len + ELEMS_PER_CHUNK - 1) / ELEMS_PER_CHUNK; }
+};
+
 // Number of elements in chunk i (map/scan preserve element counts).
 template<class D>
 size_t chunk_len(const D& d, size_t i) {
-    if constexpr (D::is_file) {
+    if constexpr (D::is_zip) {
+        const size_t base = i * ELEMS_PER_CHUNK;
+        return std::min(ELEMS_PER_CHUNK, d.len - base);
+    } else if constexpr (D::is_file) {
         return d.source->chunks[i].used / sizeof(typename D::source_type);
     } else {
         const size_t base = i * ELEMS_PER_CHUNK;
         return std::min(ELEMS_PER_CHUNK, d.n - base);
     }
+}
+
+// Total element count of a delayed sequence (before zipping).  Index-ordered
+// invariant (chunks[i].index == i) makes the file case O(1).
+template<class D>
+size_t delayed_length(const D& d) {
+    if constexpr (D::is_file) {
+        const size_t nc = d.source->chunks.size();
+        if (nc == 0) return 0;
+        return (nc - 1) * ELEMS_PER_CHUNK +
+               d.source->chunks[nc - 1].used / sizeof(typename D::source_type);
+    } else {
+        return d.n;   // delayed_index; delayed_zip is never an operand of zip pre-length
+    }
+}
+
+// Public total *element* count of any delayed sequence (file, index, or zip).
+// delayed_length handles file/index in O(1); zip stores its length in .len.
+template<class D>
+size_t size(const D& d) {
+    if constexpr (D::is_zip) return d.len;
+    else                     return delayed_length(d);
 }
 
 // ── constructors / combinators (all lazy, no I/O) ────────────────────────────
@@ -164,7 +254,14 @@ auto tabulate(size_t n, F f) {
 template<class D, class G>
 auto map(D d, G g) {
     auto inner = d.make_iter;
-    if constexpr (D::is_file) {
+    if constexpr (D::is_zip) {
+        auto mk = [inner, g](const void* ra, const void* rb, size_t base, size_t n,
+                             size_t ci, size_t rA, size_t rB) {
+            return make_map_iter(inner(ra, rb, base, n, ci, rA, rB), g);
+        };
+        return delayed_zip<typename D::side_a, typename D::side_b, decltype(mk)>{
+            d.a, d.b, d.lenA, d.lenB, d.len, mk};
+    } else if constexpr (D::is_file) {
         using TSrc = typename D::source_type;
         auto mk = [inner, g](const TSrc* raw, size_t n, size_t ci) {
             return make_map_iter(inner(raw, n, ci), g);
@@ -178,13 +275,154 @@ auto map(D d, G g) {
     }
 }
 
-// ── driver: the one place the two source kinds differ ────────────────────────
+// ── zip: element-wise pairing of two delayed sequences ───────────────────────
+//
+// Shared builder for both zip overloads: constructs the delayed_zip whose
+// make_iter, for a chunk, builds each side's inner iterator (from its raw buffer
+// if a present file chunk, else generated from the element base for an index
+// side, else an unused dummy) wrapped in a pad_iter to the side's real count.
+template<class DA, class DB, class VA, class VB>
+auto make_zip_seq(DA da, DB db, size_t lenA, size_t lenB, VA padA, VB padB) {
+    auto mkA = da.make_iter;
+    auto mkB = db.make_iter;
+    const size_t len = std::max(lenA, lenB);
+    auto mk = [mkA, mkB, padA, padB](const void* ra, const void* rb, size_t base,
+                                     size_t n, size_t ci, size_t rA, size_t rB) {
+        auto innerA = [&] {
+            if constexpr (DA::is_file) {
+                return mkA(reinterpret_cast<const typename DA::source_type*>(ra), rA, ci);
+            } else { (void)ra; return mkA(base, n, ci); }
+        }();
+        auto innerB = [&] {
+            if constexpr (DB::is_file) {
+                return mkB(reinterpret_cast<const typename DB::source_type*>(rb), rB, ci);
+            } else { (void)rb; return mkB(base, n, ci); }
+        }();
+        return make_zip_iter(make_pad_iter(innerA, rA, padA),
+                             make_pad_iter(innerB, rB, padB));
+    };
+    return delayed_zip<DA, DB, decltype(mk)>{da, db, lenA, lenB, len, mk};
+}
+
+// Strict zip: element i = {a[i], b[i]}.  Both operands must have equal length.
+template<class DA, class DB>
+auto zip(DA da, DB db) {
+    const size_t lenA = delayed_length(da);
+    const size_t lenB = delayed_length(db);
+    CHECK(lenA == lenB) << "zip: length mismatch " << lenA << " vs " << lenB
+                        << " (use zip(a, b, pad) to pad the shorter side)";
+    return make_zip_seq(da, db, lenA, lenB,
+                        typename DA::value_type{}, typename DB::value_type{});
+}
+
+// Padded zip: if the operands differ in length, the shorter is padded with `pad`
+// up to max(lenA, lenB).  A single pad value requires a shared element type.
+template<class DA, class DB, class Pad>
+auto zip(DA da, DB db, Pad pad) {
+    using VA = typename DA::value_type;
+    using VB = typename DB::value_type;
+    static_assert(std::is_same_v<VA, VB>,
+        "zip(a, b, pad): a single pad value requires both operands to share a value_type");
+    return make_zip_seq(da, db, delayed_length(da), delayed_length(db),
+                        (VA)pad, (VB)pad);
+}
+
+// ── zip driver ───────────────────────────────────────────────────────────────
+
+// Async-read a file side's chunks whose index lies in [base, base+batch_n) and
+// that actually exist (index < source chunk count).  ptr[ci-base] receives the
+// buffer (nullptr where the side has no chunk).  `reader` must outlive use of the
+// buffers; free them via reader.allocator.Free after processing.
+template<class T>
+void read_side_batch(const chunk_seq* src, size_t base, size_t batch_n,
+                     ChunkSequenceReader<T>& reader, std::vector<T*>& ptr) {
+    ptr.assign(batch_n, nullptr);
+    const size_t src_nc = src->chunks.size();
+    chunk_seq sub;
+    for (size_t ci = base; ci < base + batch_n && ci < src_nc; ci++)
+        sub.chunks.push_back(src->chunks[ci]);   // relies on chunks[ci].index == ci
+    if (sub.chunks.empty()) return;
+    reader.PrepChunks(sub);
+    reader.Start(5, 32, 16);
+    for (size_t k = 0; k < sub.chunks.size(); k++) {
+        auto [raw, nel, ci] = reader.Poll();
+        (void)nel;
+        CHECK(raw != nullptr) << "read_side_batch: short read";
+        ptr[ci - base] = raw;
+    }
+}
+
+// Process one index-contiguous batch [base, base+batch_n) of a zip's output
+// grid: read the file sides, then in parallel build each chunk's zipped iterator
+// and hand it to per_chunk(local_b, chunk_index, n_elements, iterator).
+template<class Z, class PerChunk>
+void for_zip_batch(const Z& z, size_t base, size_t batch_n, PerChunk&& per_chunk) {
+    using DA = typename Z::side_a;
+    using DB = typename Z::side_b;
+
+    auto do_process = [&](auto get_ra, auto get_rb) {
+        parlay::parallel_for(0, batch_n, [&](size_t b) {
+            const size_t ci = base + b;
+            const size_t eb = ci * ELEMS_PER_CHUNK;
+            const size_t n  = std::min(ELEMS_PER_CHUNK, z.len - eb);
+            const size_t rA = z.lenA <= eb ? 0 : std::min(n, z.lenA - eb);
+            const size_t rB = z.lenB <= eb ? 0 : std::min(n, z.lenB - eb);
+            auto it = z.make_iter(get_ra(b), get_rb(b), eb, n, ci, rA, rB);
+            per_chunk(b, ci, n, it);
+        }, 1);
+    };
+    auto null_get = [](size_t) { return (const void*)nullptr; };
+
+    if constexpr (DA::is_file && DB::is_file) {
+        ChunkSequenceReader<typename DA::source_type> rA;
+        ChunkSequenceReader<typename DB::source_type> rB;
+        std::vector<typename DA::source_type*> pA;
+        std::vector<typename DB::source_type*> pB;
+        read_side_batch(z.a.source, base, batch_n, rA, pA);
+        read_side_batch(z.b.source, base, batch_n, rB, pB);
+        do_process([&](size_t b) { return (const void*)pA[b]; },
+                   [&](size_t b) { return (const void*)pB[b]; });
+        for (auto p : pA) if (p) rA.allocator.Free(p);
+        for (auto p : pB) if (p) rB.allocator.Free(p);
+    } else if constexpr (DA::is_file) {
+        ChunkSequenceReader<typename DA::source_type> rA;
+        std::vector<typename DA::source_type*> pA;
+        read_side_batch(z.a.source, base, batch_n, rA, pA);
+        do_process([&](size_t b) { return (const void*)pA[b]; }, null_get);
+        for (auto p : pA) if (p) rA.allocator.Free(p);
+    } else if constexpr (DB::is_file) {
+        ChunkSequenceReader<typename DB::source_type> rB;
+        std::vector<typename DB::source_type*> pB;
+        read_side_batch(z.b.source, base, batch_n, rB, pB);
+        do_process(null_get, [&](size_t b) { return (const void*)pB[b]; });
+        for (auto p : pB) if (p) rB.allocator.Free(p);
+    } else {
+        do_process(null_get, null_get);   // index × index: no I/O
+    }
+}
+
+// Drive a zip over its ceil(len/ELEMS_PER_CHUNK) output grid in memory-bounded
+// index-contiguous batches (mirrors ChunkFilter), invoking
+// body(chunk_index, n_elements, iterator) per chunk.
+template<class Z, class Body>
+void run_zip_chunks(const Z& z, size_t /*reader_threads*/, Body&& body) {
+    const size_t nc = z.num_chunks();
+    for (size_t base = 0; base < nc; base += FILTER_BATCH_SIZE) {
+        const size_t batch_n = std::min(FILTER_BATCH_SIZE, nc - base);
+        for_zip_batch(z, base, batch_n,
+                      [&](size_t, size_t ci, size_t n, auto it) { body(ci, n, it); });
+    }
+}
+
+// ── driver: the one place the source kinds differ ────────────────────────────
 //
 // Invokes body(chunk_index, n_elements, begin_iterator) for every chunk, in
 // parallel across chunks.  body must consume exactly [it, it+n) sequentially.
 template<class D, class Body>
 void run_chunks(const D& d, size_t reader_threads, Body&& body) {
-    if constexpr (D::is_file) {
+    if constexpr (D::is_zip) {
+        run_zip_chunks(d, reader_threads, std::forward<Body>(body));
+    } else if constexpr (D::is_file) {
         using TSrc = typename D::source_type;
         ChunkSequenceReader<TSrc> reader;
         reader.PrepChunks(*d.source);
@@ -254,7 +492,14 @@ auto scan(const D& d, Monoid m) {
     const R total = run;
 
     auto inner = d.make_iter;
-    if constexpr (D::is_file) {
+    if constexpr (D::is_zip) {
+        auto mk = [inner, m, offsets](const void* ra, const void* rb, size_t base,
+                                      size_t n, size_t ci, size_t rA, size_t rB) {
+            return make_scan_iter(inner(ra, rb, base, n, ci, rA, rB), m, (*offsets)[ci]);
+        };
+        return std::pair{delayed_zip<typename D::side_a, typename D::side_b, decltype(mk)>{
+                             d.a, d.b, d.lenA, d.lenB, d.len, mk}, total};
+    } else if constexpr (D::is_file) {
         using TSrc = typename D::source_type;
         auto mk = [inner, m, offsets](const TSrc* raw, size_t n, size_t ci) {
             return make_scan_iter(inner(raw, n, ci), m, (*offsets)[ci]);
@@ -389,7 +634,15 @@ chunk_seq filter(const D& d, const std::string& result_prefix, Pred pred) {
         std::vector<size_t> scount(batch_n, 0);
 
         // Extract + compact survivors for each chunk in the batch.
-        if constexpr (D::is_file) {
+        if constexpr (D::is_zip) {
+            for_zip_batch(d, base, batch_n, [&](size_t b, size_t, size_t n, auto it) {
+                R* sb = (R*)malloc(std::max<size_t>(1, n) * sizeof(R));
+                CHECK(sb != nullptr) << "delayed::filter: allocation failed";
+                size_t s = 0;
+                for (size_t j = 0; j < n; j++) { R v = *it; ++it; if (pred(v)) sb[s++] = v; }
+                surv[b] = sb; scount[b] = s;
+            });
+        } else if constexpr (D::is_file) {
             using TSrc = typename D::source_type;
             chunk_seq sub;
             sub.chunks.assign(d.source->chunks.begin() + base,
