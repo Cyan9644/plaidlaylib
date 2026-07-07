@@ -40,12 +40,12 @@ TEST_BINARIES := $(BINDIR)/permTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/filterTest $(BINDIR)/scanTest $(BINDIR)/combinedTest \
                  $(BINDIR)/delayedTest $(BINDIR)/flatTabulateTest $(BINDIR)/findIfTest \
                  $(BINDIR)/histogramTest $(BINDIR)/kmpTest $(BINDIR)/rabinKarpTest \
-                 $(BINDIR)/scalarTest
+                 $(BINDIR)/scalarTest $(BINDIR)/bigintAddTest
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/rabin_karpExample $(BINDIR)/kth_smallestExample \
-                    $(BINDIR)/external_samplesortExample
+                    $(BINDIR)/external_samplesortExample $(BINDIR)/bigint_addExample
 
 LINK = $(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
@@ -172,6 +172,11 @@ $(BINDIR)/rabinKarpTest: ChunkSequence/tests/rabin_karp_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
 $(BINDIR)/scalarTest: ChunkSequence/tests/scalar_test.cpp $(UTIL_OBJS)
+	$(LINK)
+
+# bigintAddTest includes an example header (examples/chunk_bigint_add.h); no
+# order-only deps/parlaylib-examples prereq is needed (no upstream baseline).
+$(BINDIR)/bigintAddTest: ChunkSequence/tests/bigint_add_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
 $(BINDIR)/tempMain: ChunkSequence/examples/temp_main.cpp $(UTIL_OBJS)

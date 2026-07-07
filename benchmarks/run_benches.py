@@ -87,6 +87,15 @@ EXAMPLES = [
      "xlabel": "n (number of keys)",
      "title": "sample sort: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*"]},
+    # bigint_addExample sweeps n (limb count); the plotted time is the add pass
+    # only (operand build excluded).  Baseline is our own parlaylib reference.
+    {"name": "bigint_add", "target": "bin/bigint_addExample",
+     "cols": ["n", "build_s", "add_s", "inmem_add_s", "result_limbs",
+              "throughput_gb_s"],
+     "time_col": "add_s", "inmem_col": "inmem_add_s",
+     "xlabel": "n (64-bit limbs)",
+     "title": "big-integer add: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
+     "data_globs": ["bi_a*", "bi_b*", "bi_sum*"]},
 ]
 
 
