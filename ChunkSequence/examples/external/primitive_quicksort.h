@@ -47,8 +47,6 @@
 #include "utils/unordered_file_writer.h"
 #include "configs.h"
 
-#define NUM_QS_THREADS 4
-
 namespace ChunkSequenceOps {
 
 template <typename T = uint64_t, typename Less = std::less<>>
@@ -87,15 +85,18 @@ chunk_seq primitive_quicksort(chunk_seq& seq, Less less = {}) {
     // recorded in its own descriptor list, so the physical interleaving in the
     // file is irrelevant).  Truncate to clear any stale data from a prior run —
     // the writer opens O_CREAT but not O_TRUNC.
+    // Sequential: primitive_quicksort is already invoked under a parallel_for over
+    // buckets in external_samplesort.h, so this method deliberately adds no parlay
+    // compute parallelism of its own (avoids nested-parallelism oversubscription
+    // and io_uring ring churn on recursive calls).  File truncation is cheap and
+    // just loops here.
     std::vector<std::string> filenames(num_drives);
-    parlay::parallel_for(0, NUM_QS_THREADS, [&](size_t d) { //using fewer than 30 threads for I/O because the quicksort is already being called in parallel 
-        //unless you have a ridiculous number of threads it's perhaps better to just do this sequentially or with a smaller
-        //number of I/O threads
+    for (size_t d = 0; d < num_drives; d++) {
         filenames[d] = GetFileName("qs_" + tag, d);
         int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         SYSCALL(fd);
         SYSCALL(close(fd));
-    }, /*granularity=*/1);
+    }
 
     ChunkSequenceReader<T> reader;
     reader.PrepChunks(seq);
@@ -136,18 +137,16 @@ chunk_seq primitive_quicksort(chunk_seq& seq, Less less = {}) {
         return p;
     };
 
-    // Each consumer keeps its own <, ==, > accumulator buffers so the routing hot
-    // path is lock-free; it emits a block whenever one fills.  Consumers never
-    // outnumber input chunks, so idle pollers (which would only add stray
-    // underfull tail chunks) are avoided.  Per-consumer descriptor lists are
-    // merged after the pass — order within a partition is irrelevant since the
-    // recursion re-sorts it.
-    const size_t num_consumers = std::max<size_t>(
-        1, std::min<size_t>((size_t)parlay::num_workers(), seq.chunks.size()));
+    // Sequential single-consumer drain: one thread keeps its own <, ==, > buffers
+    // and emits a block whenever one fills.  The reader's own I/O threads still
+    // read chunks from disk in parallel; only the in-DRAM routing here is single-
+    // threaded.  Per-consumer descriptor lists (size 1) are merged after the pass —
+    // order within a partition is irrelevant since the recursion re-sorts it.
+    const size_t num_consumers = 1;
     std::vector<std::vector<chunk>> L(num_consumers), M(num_consumers),
         R(num_consumers);
 
-    parlay::parallel_for(0, num_consumers, [&](size_t i) {
+    for (size_t i = 0; i < num_consumers; i++) {
         T* lb = alloc(); size_t lc = 0;
         T* mb = alloc(); size_t mc = 0;
         T* rb = alloc(); size_t rc = 0;
@@ -173,7 +172,7 @@ chunk_seq primitive_quicksort(chunk_seq& seq, Less less = {}) {
         if (lc > 0) emit(lb, lc, L[i]); else free(lb);
         if (mc > 0) emit(mb, mc, M[i]); else free(mb);
         if (rc > 0) emit(rb, rc, R[i]); else free(rb);
-    }, /*granularity=*/1);
+    }
 
     writer.Wait();   // all output flushed before we read it back in recursion
 
@@ -188,10 +187,10 @@ chunk_seq primitive_quicksort(chunk_seq& seq, Less less = {}) {
     chunk_seq mid   = gather(M);   // all == pivot -> already sorted
     chunk_seq right = gather(R);
 
-    chunk_seq left_sorted, right_sorted;
-    parlay::par_do(
-        [&] { left_sorted  = primitive_quicksort<T>(left,  less); },
-        [&] { right_sorted = primitive_quicksort<T>(right, less); });
+    // Sequential recursion (no par_do): the outer parallel_for over buckets in
+    // external_samplesort.h already supplies the parallelism across subproblems.
+    chunk_seq left_sorted  = primitive_quicksort<T>(left,  less);
+    chunk_seq right_sorted = primitive_quicksort<T>(right, less);
 
     return flatten(std::vector<chunk_seq>{left_sorted, mid, right_sorted});
 }
