@@ -91,6 +91,9 @@ public:
     ~ChunkSequenceReader() {
         is_open = false;
         Wait();
+        // Workers have all joined; no further reads can reference these fds.
+        for (auto& [name, fd] : shared_fds) close(fd);
+        shared_fds.clear();
     }
 
     void PrepChunks(const chunk_seq& seq) {
@@ -108,6 +111,20 @@ public:
         CHECK(num_threads > 0);
         buffer_queue.SetSizeLimit(buf_queue_sz);
         active_threads = (int)num_threads;
+
+        // Open one shared read-only fd per distinct file, once.  io_uring reads
+        // pass an explicit offset (no shared file position), so a single fd is
+        // safe to share across all worker threads — and this keeps the open-fd
+        // count at O(distinct files) instead of O(num_threads * distinct files),
+        // which is what caused EMFILE under highly-parallel recursive sorts.
+        for (const chunk& c : chunks) {
+            if (shared_fds.find(c.filename) == shared_fds.end()) {
+                int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+                SYSCALL(fd);
+                shared_fds[c.filename] = fd;
+            }
+        }
+
         for (size_t t = 0; t < num_threads; t++) {
             std::vector<chunk> work;
             for (size_t i = t; i < chunks.size(); i += num_threads)
@@ -140,6 +157,9 @@ private:
     std::vector<chunk> chunks;
     std::vector<std::unique_ptr<std::thread>> worker_threads;
     SimpleQueue<BufferData> buffer_queue;
+    // One read-only fd per distinct file, opened in Start(), shared across all
+    // workers, closed in the destructor.  Not mutated after Start().
+    std::map<std::string, int> shared_fds;
 
     struct ReadRequest {
         T* data;
@@ -152,14 +172,10 @@ private:
         struct io_uring ring;
         SYSCALL(io_uring_queue_init(queue_depth, &ring, IORING_SETUP_SINGLE_ISSUER));
 
-        // Cache open fds so each file is opened at most once per worker.
-        std::map<std::string, int> fd_cache;
+        // fds are opened once in Start() and shared read-only across workers;
+        // the map is not mutated after Start(), so lookups here need no lock.
         auto get_fd = [&](const std::string& name) -> int {
-            auto it = fd_cache.find(name);
-            if (it != fd_cache.end()) return it->second;
-            int fd = open(name.c_str(), O_DIRECT | O_RDONLY);
-            SYSCALL(fd);
-            return fd_cache[name] = fd;
+            return self->shared_fds.at(name);
         };
 
         auto* pool = (ReadRequest*)malloc(max_requests * sizeof(ReadRequest));
@@ -228,7 +244,7 @@ private:
 
         io_uring_queue_exit(&ring);
         free(pool);
-        for (auto& [name, fd] : fd_cache) close(fd);
+        // Shared fds are closed once in ~ChunkSequenceReader, not per worker.
 
         self->active_threads--;
         if (self->active_threads == 0) self->Close();
