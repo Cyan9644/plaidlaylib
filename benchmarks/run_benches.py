@@ -435,7 +435,12 @@ def main():
     ap.add_argument("--all", action="store_true", help="run both benchmarks")
     ap.add_argument("--delayed", action="store_true", help="run the delayed-scale sweep")
     ap.add_argument("--chunk-size", action="store_true", help="run the chunk-size sweep")
-    ap.add_argument("--examples", action="store_true", help="run the examples sweep")
+    ap.add_argument("--examples", action="store_true",
+                    help="run the examples sweep (all registered examples)")
+    ap.add_argument("--example", default="",
+                    help="run only these example(s) by name (comma/space-separated, "
+                         f"e.g. 'external_samplesort'); implies --examples. "
+                         f"choices: {', '.join(e['name'] for e in EXAMPLES)}")
     ap.add_argument("--outdir", default=os.environ.get("BENCH_OUTDIR", "results"),
                     help="parent dir for the timestamped run (default: results)")
     ap.add_argument("--n-values", default=os.environ.get("BENCH_N_VALUES", DEFAULT_N_VALUES),
@@ -459,11 +464,21 @@ def main():
                     help="leave bench data files on the mounts (default: clear between points)")
     args = ap.parse_args()
 
+    # --example NAME[,NAME...] selects a subset of the registry (and implies the
+    # examples sweep); with no --example the sweep runs every registered example.
+    selected = [x for x in re.split(r"[,\s]+", args.example) if x]
+    known = {e["name"] for e in EXAMPLES}
+    for name in selected:
+        if name not in known:
+            ap.error(f"unknown --example {name!r}; choices: {', '.join(sorted(known))}")
+    examples_to_run = [e for e in EXAMPLES if not selected or e["name"] in selected]
+
     do_delayed = args.all or args.delayed
     do_chunk = args.all or args.chunk_size
-    do_examples = args.examples          # opt-in only; not part of --all
+    do_examples = args.examples or bool(selected)   # opt-in only; not part of --all
     if not (do_delayed or do_chunk or do_examples):
-        ap.error("nothing to run: pass --all, --delayed, --chunk-size, and/or --examples")
+        ap.error("nothing to run: pass --all, --delayed, --chunk-size, "
+                 "--examples, and/or --example NAME")
 
     extra = args.ssd_args.split() if args.ssd_args else []
     n_values = [parse_count(x) for x in args.n_values.split()]
@@ -498,7 +513,7 @@ def main():
 
     warnings = []
     if do_examples:
-        for entry in EXAMPLES:
+        for entry in examples_to_run:
             print(f"\n######## example: {entry['name']} ########")
             rows = run_example(entry, example_n_values, extra,
                                args.fstrim_glob, clear_enabled, warnings)
