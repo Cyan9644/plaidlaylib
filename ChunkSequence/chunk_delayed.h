@@ -7,6 +7,7 @@
 #include <memory>
 #include <random>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -45,33 +46,34 @@
 //   size_t num_chunks()  const;             // ceil(length / ELEMS_PER_CHUNK)
 //   size_t chunk_len(i)  const;             // elements in logical chunk i
 //
-//   // (1) READ PLAN: append the physical reads this node needs for logical
-//   //     chunk i.  Each read is a `chunk` (filename+begin_addr+used) tagged
-//   //     with a sequential read-id (its position in `refs`).  Internal nodes
-//   //     forward to children *left-to-right*; a node past its own range (a
-//   //     padded child) appends nothing.
-//   template<class Refs> void plan(size_t i, Refs& refs) const;
+//   // (1) READ PLAN: register the physical reads this node needs for logical
+//   //     chunk i via Planner::need (keyed by source chunk_seq*, so a source
+//   //     appearing in several leaves of the chunk collapses to one read).
+//   //     Internal nodes forward to children *left-to-right*; a node past its
+//   //     own range (a padded child) registers nothing.
+//   template<class Planner> void plan(size_t i, Planner& p) const;
 //
-//   // (2) BUILD: construct the fused forward-iterator for logical chunk i.
-//   //     `bufs[cursor]` are the resolved buffers in plan() order; each leaf
-//   //     consumes exactly one and advances `cursor`.  build() MUST visit
-//   //     children in the SAME left-to-right order as plan() so the positional
-//   //     cursor lines up with the read-ids plan() assigned.  For i beyond this
+//   // (2) BUILD: construct the fused forward-iterator for logical chunk i,
+//   //     pulling each in-range leaf's buffer from Resolver::next.  build() MUST
+//   //     visit children in the SAME left-to-right order as plan() so the
+//   //     resolver lines up with the reads plan() registered.  For i beyond this
 //   //     node's range it returns a dummy iterator (consuming no buffer); such
 //   //     an iterator is always wrapped by an enclosing pad_iter with
 //   //     remaining==0, so it is never dereferenced.
-//   template<class Bufs> auto build(size_t i, const Bufs& bufs, size_t& cur) const;
+//   template<class Resolver> auto build(size_t i, Resolver& r) const;
 //
 // One logical chunk of a *leaf* is one physical read (a chunk_seq stores each
 // logical chunk as one contiguous region on one drive).  The "one logical chunk
-// -> several physical reads" case is the zip_node union.  Read-sharing for a
-// C=f(A,B) operand (deduping A/B's reads) is a *future* step; today each leaf
-// occurrence gets its own read-id (so C re-reads A,B).
+// -> several physical reads" case is the zip_node union; identical reads from a
+// shared source (e.g. A,B in both zip(A,B) and a scan of zip(A,B)) are deduped,
+// so C=f(A,B) reuses A,B's buffers instead of re-reading them.
 //
-// The driver (for_each_window / for_each_chunk) walks logical chunks in windows
-// of FILTER_BATCH_SIZE (a memory bound), plans the window's reads, issues them
-// through the async ChunkSequenceReader, and once they land builds+runs each
-// chunk.  Everything is templated (no std::function) so the fused chain inlines.
+// Two drivers execute a tree.  for_each_chunk streams: one read pass whose
+// dispatcher releases each chunk to a parlay worker the instant that chunk's own
+// reads land, so reads and compute overlap (used by reduce/scan/force).
+// for_each_window collects a FILTER_BATCH_SIZE window before computing, needed
+// by filter's sequential cross-chunk carry.  Everything is templated (no
+// std::function) so the fused chain inlines.
 //
 // LIFETIME: a leaf_source holds a pointer to its chunk_seq; every source in the
 // tree must outlive every terminal call.  force on a sequence whose value_type
@@ -148,6 +150,33 @@ struct zip_iter {
 template<class ItA, class ItB>
 zip_iter<ItA, ItB> make_zip_iter(ItA a, ItB b) { return {a, b}; }
 
+// ── read planning: dedup + resolve ───────────────────────────────────────────
+//
+// A node's plan() calls Planner::need once per in-range leaf, keyed by the
+// source chunk_seq*, so a source that appears in several leaves of one logical
+// chunk (e.g. A and B in both zip(A,B) and a scan of zip(A,B)) collapses to a
+// single physical read.  build() then calls Resolver::next once per in-range
+// leaf, in the same left-to-right order, to get that leaf's resolved buffer.
+struct Planner {
+    std::vector<chunk>            unique_reads;  // this chunk's deduped reads (slot order)
+    std::vector<uint32_t>         leaf_slots;    // one local slot per in-range leaf occurrence
+    std::vector<const chunk_seq*> src_of;        // dedup key per unique read (parallel array)
+
+    void need(const chunk_seq* src, const chunk& c) {
+        for (uint32_t s = 0; s < src_of.size(); s++)          // fanout is tiny: linear scan
+            if (src_of[s] == src) { leaf_slots.push_back(s); return; }
+        leaf_slots.push_back((uint32_t)unique_reads.size());
+        src_of.push_back(src);
+        unique_reads.push_back(c);
+    }
+};
+struct Resolver {
+    const std::vector<char*>*    bufs;           // this chunk's buffers, by local slot
+    const std::vector<uint32_t>* leaf_slots;     // the list Planner produced (same order)
+    size_t cursor = 0;
+    char* next() { return (*bufs)[(*leaf_slots)[cursor++]]; }
+};
+
 // ── nodes ────────────────────────────────────────────────────────────────────
 // Shared helper: elements in logical chunk i of a sequence of `len` elements.
 inline size_t grid_chunk_len(size_t len, size_t i) {
@@ -171,17 +200,15 @@ struct leaf_source {
     size_t num_chunks() const { return grid_num_chunks(len); }
     size_t chunk_len(size_t i) const { return grid_chunk_len(len, i); }
 
-    template<class Refs>
-    void plan(size_t i, Refs& refs) const {
-        if (i >= num_chunks()) return;            // padded/out-of-range: no read
-        chunk c = src->chunks[i];                 // index-ordered: chunks[i].index == i
-        c.index = refs.size();                    // repurpose .index as the read-id tag
-        refs.push_back(c);
-    }
-    template<class Bufs>
-    const T* build(size_t i, const Bufs& bufs, size_t& cursor) const {
+    template<class Planner>
+    void plan(size_t i, Planner& p) const {
+        if (i < num_chunks())                     // index-ordered: chunks[i].index == i
+            p.need(src, src->chunks[i]);          // one read (shared if the src repeats)
+    }                                             // else padded/out-of-range: no read
+    template<class Resolver>
+    const T* build(size_t i, Resolver& r) const {
         if (i >= num_chunks()) return nullptr;    // dummy; enclosing pad never derefs it
-        return reinterpret_cast<const T*>(bufs[cursor++]);
+        return reinterpret_cast<const T*>(r.next());
     }
 };
 
@@ -196,9 +223,9 @@ struct leaf_index {
     size_t num_chunks() const { return grid_num_chunks(n); }
     size_t chunk_len(size_t i) const { return grid_chunk_len(n, i); }
 
-    template<class Refs> void plan(size_t, Refs&) const {}   // no reads
-    template<class Bufs>
-    auto build(size_t i, const Bufs&, size_t&) const {
+    template<class Planner> void plan(size_t, Planner&) const {}   // no reads
+    template<class Resolver>
+    auto build(size_t i, Resolver&) const {
         return make_counting(i * ELEMS_PER_CHUNK, f);        // padded if out-of-range
     }
 };
@@ -214,10 +241,10 @@ struct map_node {
     size_t num_chunks() const { return d.num_chunks(); }
     size_t chunk_len(size_t i) const { return d.chunk_len(i); }
 
-    template<class Refs> void plan(size_t i, Refs& refs) const { d.plan(i, refs); }
-    template<class Bufs>
-    auto build(size_t i, const Bufs& bufs, size_t& cursor) const {
-        return make_map_iter(d.build(i, bufs, cursor), g);
+    template<class Planner> void plan(size_t i, Planner& p) const { d.plan(i, p); }
+    template<class Resolver>
+    auto build(size_t i, Resolver& r) const {
+        return make_map_iter(d.build(i, r), g);
     }
 };
 
@@ -234,11 +261,11 @@ struct scan_node {
     size_t num_chunks() const { return d.num_chunks(); }
     size_t chunk_len(size_t i) const { return d.chunk_len(i); }
 
-    template<class Refs> void plan(size_t i, Refs& refs) const { d.plan(i, refs); }
-    template<class Bufs>
-    auto build(size_t i, const Bufs& bufs, size_t& cursor) const {
+    template<class Planner> void plan(size_t i, Planner& p) const { d.plan(i, p); }
+    template<class Resolver>
+    auto build(size_t i, Resolver& r) const {
         value_type seed = (i < offsets->size()) ? (*offsets)[i] : m.identity;
-        return make_scan_iter(d.build(i, bufs, cursor), m, seed);
+        return make_scan_iter(d.build(i, r), m, seed);
     }
 };
 
@@ -259,21 +286,21 @@ struct zip_node {
     size_t num_chunks() const { return grid_num_chunks(len); }
     size_t chunk_len(size_t i) const { return grid_chunk_len(len, i); }
 
-    template<class Refs>
-    void plan(size_t i, Refs& refs) const {
-        a.plan(i, refs);                           // union of children's reads,
-        b.plan(i, refs);                           // left-to-right (matches build)
+    template<class Planner>
+    void plan(size_t i, Planner& p) const {
+        a.plan(i, p);                              // union of children's reads,
+        b.plan(i, p);                              // left-to-right (matches build)
     }
-    template<class Bufs>
-    auto build(size_t i, const Bufs& bufs, size_t& cursor) const {
+    template<class Resolver>
+    auto build(size_t i, Resolver& r) const {
         const size_t eb = i * ELEMS_PER_CHUNK;
         const size_t n  = grid_chunk_len(len, i);
         const size_t rA = eb >= lenA ? 0 : std::min(n, lenA - eb);   // A's real count
         const size_t rB = eb >= lenB ? 0 : std::min(n, lenB - eb);   // B's real count
-        // Sequence the two child builds explicitly: they both advance `cursor`,
+        // Sequence the two child builds explicitly: both advance the resolver,
         // and C++ leaves function-argument evaluation order unspecified.
-        auto ia = a.build(i, bufs, cursor);
-        auto ib = b.build(i, bufs, cursor);
+        auto ia = a.build(i, r);
+        auto ib = b.build(i, r);
         return make_zip_iter(make_pad_iter(ia, rA, padA),
                              make_pad_iter(ib, rB, padB));
     }
@@ -323,73 +350,156 @@ auto zip(DA a, DB b, Pad pad) {
     return zip_node<DA, DB>{a, b, (VA)pad, (VB)pad, lenA, lenB, std::max(lenA, lenB)};
 }
 
-// ── driver ───────────────────────────────────────────────────────────────────
+// ── drivers ──────────────────────────────────────────────────────────────────
 //
-// Walk logical chunks in windows of FILTER_BATCH_SIZE.  Per window: plan every
-// chunk's physical reads (recording each chunk's read-id slice), issue them all
-// through the async ChunkSequenceReader (byte reads; each ref's .index tags its
-// buffer), wait for the whole window, then hand the window to `wbody` which may
-// build any chunk's fused iterator via `build_chunk(local_b)`.  Buffers are
-// freed after wbody returns, so a consumer must copy anything it keeps.
+// Both drivers plan each logical chunk with a Planner (deduping shared reads),
+// issue the reads through the async ChunkSequenceReader, and — once a chunk's
+// buffers are resident — build its fused iterator with a Resolver.  They differ
+// only in *scheduling*: for_each_window collects a whole window before computing
+// (needed by filter's sequential carry); for_each_chunk streams — it releases a
+// chunk to a worker the instant that chunk's own reads land, so reads and
+// compute overlap continuously with no window barrier.
+
+// Windowed: collect a FILTER_BATCH_SIZE window, then hand it to `wbody`, which
+// may build any chunk via build_chunk(local_b).  Buffers are freed after wbody
+// returns, so a consumer must copy anything it keeps.  Used by filter (whose
+// dense-packing carry threads sequentially across chunks in index order).
 template<class D, class WindowBody>
 void for_each_window(const D& d, WindowBody&& wbody, size_t reader_threads = 8) {
     const size_t nc = d.num_chunks();
     for (size_t base = 0; base < nc; base += FILTER_BATCH_SIZE) {
         const size_t w = std::min(FILTER_BATCH_SIZE, nc - base);
 
-        // 1. Plan the window's reads; slice[b] = read-id of chunk b's first read.
-        std::vector<chunk> refs;
-        std::vector<size_t> slice(w);
+        // Plan each chunk (deduped) into the window's flat read list.
+        std::vector<chunk>    refs;                       // .index = window read-id
+        std::vector<uint32_t> owner;                      // read-id -> local chunk b
+        std::vector<std::vector<char*>>    cbufs(w);      // per-chunk buffers (slot order)
+        std::vector<std::vector<uint32_t>> cslots(w);     // per-chunk leaf_slots
+        std::vector<size_t> first(w);                     // chunk b -> first window read-id
         for (size_t b = 0; b < w; b++) {
-            slice[b] = refs.size();
-            d.plan(base + b, refs);
+            Planner pl;
+            d.plan(base + b, pl);
+            first[b] = refs.size();
+            cbufs[b].assign(pl.unique_reads.size(), nullptr);
+            cslots[b] = std::move(pl.leaf_slots);
+            for (chunk& c : pl.unique_reads) {
+                c.index = refs.size();
+                refs.push_back(c);
+                owner.push_back((uint32_t)b);
+            }
         }
         const size_t total = refs.size();
-        std::vector<char*> bufs(total, nullptr);
 
-        // build_chunk reconstructs chunk (base+b)'s fused iterator; both plan and
-        // build traverse the tree left-to-right, so the positional cursor at
-        // slice[b] lines up with the read-ids planned for that chunk.
         auto build_chunk = [&](size_t b) {
-            size_t cursor = slice[b];
-            return d.build(base + b, bufs, cursor);
+            Resolver r{&cbufs[b], &cslots[b], 0};
+            return d.build(base + b, r);
         };
 
-        if (total == 0) {                          // pure index/tabulate: no I/O
-            wbody(base, w, build_chunk);
-            continue;
-        }
+        if (total == 0) { wbody(base, w, build_chunk); continue; }   // pure index: no I/O
 
-        // 2. Issue all the window's reads; place each buffer by its read-id tag.
         chunk_seq rs;
         rs.chunks = std::move(refs);
         ChunkSequenceReader<char> reader;
         reader.PrepChunks(rs);
         reader.Start(reader_threads, 32, 16);
-        for (size_t k = 0; k < total; k++) {
-            auto [buf, n, rid] = reader.Poll();
-            (void)n;
+        for (size_t k = 0; k < total; k++) {              // completions arrive out of order
+            auto [buf, n, rid] = reader.Poll(); (void)n;
             CHECK(buf != nullptr) << "delayed: short read";
-            bufs[rid] = buf;
+            const size_t b = owner[rid];
+            cbufs[b][rid - first[b]] = buf;               // slot = offset from chunk's first read
         }
 
-        // 3. The window is fully resident: build + compute all its chunks.
         wbody(base, w, build_chunk);
 
-        for (char* p : bufs) if (p) reader.allocator.Free(p);
+        for (size_t b = 0; b < w; b++)
+            for (char* p : cbufs[b]) if (p) reader.allocator.Free(p);
     }
 }
 
-// Convenience wrapper: invoke body(chunk_index, n_elements, iterator) for every
-// chunk, parallel across a window.  body must consume exactly [it, it+n).
+// Streaming: one read pass over the whole sequence with per-chunk async release.
+// A dispatcher thread assembles chunks from the reader's out-of-order
+// completions and hands each finished chunk to a parlay worker, so body runs
+// while later chunks are still being read (no window barrier).  body must be
+// chunk-disjoint and order-independent — true for reduce (writes sums[ci]) and
+// force (writes chunk ci's precomputed drive/slot).  reader_threads defaults to
+// 10 to match the eager ChunkReduce reader (the config that reaches device-read
+// speed); one reader serves the whole pass, so there is no per-window setup cost.
 template<class D, class Body>
-void for_each_chunk(const D& d, Body&& body, size_t reader_threads = 8) {
-    for_each_window(d, [&](size_t base, size_t w, auto build_chunk) {
-        parlay::parallel_for(0, w, [&](size_t b) {
-            auto it = build_chunk(b);
-            body(base + b, d.chunk_len(base + b), it);
-        }, 1);
-    }, reader_threads);
+void for_each_chunk(const D& d, Body&& body, size_t reader_threads = 10) {
+    const size_t nc = d.num_chunks();
+    if (nc == 0) return;
+
+    // Plan every chunk up front (metadata only): deduped reads + per-chunk state.
+    std::vector<chunk>    refs;                            // .index = global read-id
+    std::vector<uint32_t> owner;                           // read-id -> chunk
+    std::vector<size_t>   first(nc);                       // chunk -> first read-id
+    std::vector<size_t>   remaining(nc);                   // reads not yet landed
+    std::vector<std::vector<char*>>    cbufs(nc);          // per-chunk buffers (slot order)
+    std::vector<std::vector<uint32_t>> cslots(nc);         // per-chunk leaf_slots
+    for (size_t ci = 0; ci < nc; ci++) {
+        Planner pl;
+        d.plan(ci, pl);
+        first[ci]     = refs.size();
+        remaining[ci] = pl.unique_reads.size();
+        cbufs[ci].assign(pl.unique_reads.size(), nullptr);
+        cslots[ci] = std::move(pl.leaf_slots);
+        for (chunk& c : pl.unique_reads) {
+            c.index = refs.size();
+            refs.push_back(c);
+            owner.push_back((uint32_t)ci);
+        }
+    }
+    const size_t total = refs.size();
+
+    auto run_chunk = [&](size_t ci) {
+        Resolver r{&cbufs[ci], &cslots[ci], 0};
+        auto it = d.build(ci, r);
+        body(ci, d.chunk_len(ci), it);
+    };
+
+    if (total == 0) {                                     // pure index: no I/O, no reader
+        parlay::parallel_for(0, nc, [&](size_t ci) { run_chunk(ci); }, 1);
+        return;
+    }
+
+    chunk_seq rs;
+    rs.chunks = std::move(refs);
+    ChunkSequenceReader<char> reader;
+    reader.PrepChunks(rs);
+    reader.Start(reader_threads, 32, 16, /*buf_queue_sz=*/128);
+
+    SimpleQueue<size_t> ready;                            // ready chunk ids (bounded backlog)
+    ready.SetSizeLimit(FILTER_BATCH_SIZE);
+
+    // Dispatcher: assemble chunks from out-of-order completions; release each the
+    // moment its last read lands.  Single-threaded assembly ⇒ no atomics; the
+    // ready queue's push/poll gives workers the happens-before on cbufs[ci].
+    // When `ready` is full it blocks here, which back-pressures the reader, so
+    // live buffers stay bounded (no window, but a budget).
+    std::thread dispatcher([&] {
+        for (size_t ci = 0; ci < nc; ci++)             // chunks needing no reads (e.g. a
+            if (remaining[ci] == 0) ready.Push(ci);    // padded tail) are ready immediately
+        for (size_t done = 0; done < total; done++) {
+            auto [buf, n, rid] = reader.Poll(); (void)n;
+            CHECK(buf != nullptr) << "delayed: short read";
+            const size_t ci = owner[rid];
+            cbufs[ci][rid - first[ci]] = buf;
+            if (--remaining[ci] == 0) ready.Push(ci);
+        }
+        ready.Close();
+    });
+
+    // Workers: build + compute each ready chunk, then free its buffers.
+    parlay::parallel_for(0, parlay::num_workers(), [&](size_t) {
+        while (true) {
+            auto [ci, code] = ready.Poll((size_t)0);
+            if (code == QueueCode::FINISH) break;
+            run_chunk(ci);
+            for (char* p : cbufs[ci]) if (p) reader.allocator.Free(p);
+        }
+    }, 1);
+
+    dispatcher.join();
 }
 
 // ── terminals ────────────────────────────────────────────────────────────────
