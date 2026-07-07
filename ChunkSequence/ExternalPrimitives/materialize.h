@@ -1,6 +1,7 @@
 #ifndef EXTERNAL_MATERIALIZE_H
 #define EXTERNAL_MATERIALIZE_H
 
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -16,7 +17,7 @@ namespace ChunkSequenceOps {
 // whole sequence fits in DRAM -- materialize is the base case of algorithms
 // like kth_smallest, which only call it once the residual set is small.
 template<typename T>
-parlay::sequence<T> materialize(const chunk_seq& seq) {
+parlay::sequence<T> materialize(const chunk_seq& seq, size_t reader_threads = 10) {
     const size_t n_chunks = seq.chunks.size();
 
     // Per-chunk element offsets in index order (chunk.used is a byte count).
@@ -33,7 +34,7 @@ parlay::sequence<T> materialize(const chunk_seq& seq) {
     // ordered regardless of I/O completion order (the same scatter-by-index
     // pattern ChunkScan's pass 1 uses).  There is no accumulator to combine, so
     // the per-worker return value is an unused placeholder.
-    RemoveWorker<T>(seq, /*reader_threads=*/10,
+    RemoveWorker<T>(seq, /*reader_threads=*/std::max<size_t>(1, reader_threads),
         [&](ChunkSequenceReader<T>& reader) {
             while (true) {
                 auto [ptr, cnt, chunk_idx] = reader.Poll();

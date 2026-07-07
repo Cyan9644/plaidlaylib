@@ -47,6 +47,8 @@
 #include "utils/unordered_file_writer.h"
 #include "configs.h"
 
+#define NUM_QS_THREADS 4
+
 namespace ChunkSequenceOps {
 
 template <typename T = uint64_t, typename Less = std::less<>>
@@ -86,7 +88,9 @@ chunk_seq primitive_quicksort(chunk_seq& seq, Less less = {}) {
     // file is irrelevant).  Truncate to clear any stale data from a prior run —
     // the writer opens O_CREAT but not O_TRUNC.
     std::vector<std::string> filenames(num_drives);
-    parlay::parallel_for(0, num_drives, [&](size_t d) {
+    parlay::parallel_for(0, NUM_QS_THREADS, [&](size_t d) { //using fewer than 30 threads for I/O because the quicksort is already being called in parallel 
+        //unless you have a ridiculous number of threads it's perhaps better to just do this sequentially or with a smaller
+        //number of I/O threads
         filenames[d] = GetFileName("qs_" + tag, d);
         int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         SYSCALL(fd);

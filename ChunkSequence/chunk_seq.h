@@ -132,12 +132,20 @@ namespace ChunkSequenceOps {
  * A queue of 64 in-flight buffers (256 MB) caps DRAM usage.
  */
 template<typename T = uint64_t, typename F>
-chunk_seq tabulate(size_t n, const std::string& result_prefix, F f) {
+chunk_seq tabulate(size_t n, const std::string& result_prefix, F f,
+                   size_t io_threads = 0) {
     static_assert(CHUNK_SIZE % sizeof(T) == 0,
         "sizeof(T) must divide CHUNK_SIZE for O_DIRECT alignment");
     const size_t ept = CHUNK_SIZE / sizeof(T);
     const size_t num_chunks = (n + ept - 1) / ept;
     const size_t num_drives = GetSSDList().size();
+    // Number of io_uring writer threads (one ring each).  Defaults to one per
+    // drive; a smaller count is used by callers running many tabulates
+    // concurrently (e.g. sample_sort's per-bucket base cases) so the aggregate
+    // ring count stays bounded rather than num_callers * num_drives.
+    const size_t wthreads =
+        (io_threads == 0) ? num_drives
+                          : std::max<size_t>(1, std::min(io_threads, num_drives));
 
     // Randomly assign each chunk to a drive for balanced SSD utilization.
     std::vector<size_t> drive_of(num_chunks);
@@ -190,7 +198,7 @@ chunk_seq tabulate(size_t n, const std::string& result_prefix, F f) {
     // One io_uring writer thread per drive; queue_size limits in-flight
     // buffers to 64 * 4 MB = 256 MB of DRAM at any moment.
     UnorderedWriterConfig wcfg;
-    wcfg.num_threads  = num_drives;
+    wcfg.num_threads  = wthreads;
     wcfg.io_uring_size = 32;
     wcfg.queue_size   = 64;
     wcfg.num_files    = num_drives;
@@ -248,10 +256,11 @@ chunk_seq perm(size_t n) {
  */
 template<typename Range>
 chunk_seq to_chunk_seq(const Range& seq,
-                       const std::string& result_prefix = "chunkseq") {
+                       const std::string& result_prefix = "chunkseq",
+                       size_t io_threads = 0) {
     using T = typename Range::value_type;
     return tabulate<T>(seq.size(), result_prefix,
-                       [&seq](size_t i) { return seq[i]; });
+                       [&seq](size_t i) { return seq[i]; }, io_threads);
 }
 
 // ── scalar element access ────────────────────────────────────────────────────
