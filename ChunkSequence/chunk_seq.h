@@ -252,6 +252,8 @@ chunk_seq to_chunk_seq(const Range& seq,
     using T = typename Range::value_type;
     return tabulate<T>(seq.size(), result_prefix,
                        [&seq](size_t i) { return seq[i]; });
+}
+
 // ── scalar element access ────────────────────────────────────────────────────
 // peek / push / size operate on a chunk_seq already materialized on disk, one
 // element at a time.  They rely on the index-ordered invariant

@@ -14,6 +14,7 @@
 #include "ChunkSequence/ExternalPrimitives/scan_find.h"
 #include "ChunkSequence/ExternalPrimitives/chunk_count_sort2.h"
 #include "ChunkSequence/ExternalPrimitives/flatten.h"
+#include "ChunkSequence/examples/external/primitive_quicksort.h"
 
 
 namespace ChunkSequenceOps{
@@ -27,7 +28,7 @@ n+= seq.chunks[r].used;
   }
   n/=sizeof(T);
   
-  if (n < 5096){
+  if (n < (2 << 12)){
     //we're likely going to want a fast quicksort method that takes better advantage of our 
     //memory representation than just external->materialize->sort->external
     //but this clearly should work so we'll go with it for now, also any external quicksort would need to materialize everything anyway
@@ -35,7 +36,9 @@ n+= seq.chunks[r].used;
 
     auto i = ChunkSequenceOps::materialize<T>(seq); //it would be good to make this materialize into a parlay sequence (now done)
 
-    std::sort(i.begin(), i.end(), less1);
+    // std::sort(i.begin(), i.end(), less1);
+    // i = parlay::sort(i);
+    parlay::sort_inplace(i);
     //this is going to be really slow if we just materialize and write back, probably the best thing to do is to pass a parlay sequence
     //at the recurring call based on the size, but this is kind of messy
     //the easiest way to fix the problem is to just make materialize faster by parallelizing it
@@ -110,7 +113,11 @@ parlay::parallel_for(0, num_buckets, [&](long i){
     //we might consider just an external quicksort for this level, as it would use much less memory.
     //probably multiple levels of parallelism won't help much regardless since we need to do reads
     //for the pivots = large overhead on recurring calls
-    externalSequenceVector[i] = sample_sort<T>(externalSequenceVector[i], less1);
+
+    //so instead we're going to call the external quicksort method, which we actually have a method for now but it's 
+    //implemented using primitives.
+    //to get the best performance out of this example, we're going to want to implement it manually with a reader/writer
+    externalSequenceVector[i] = primitive_quicksort<T>(externalSequenceVector[i], less1);
 
 
 });
@@ -149,6 +156,10 @@ return ChunkSequenceOps::flatten(externalSequenceVector);
 
 
 }
+
+
+
+
 
 }
 

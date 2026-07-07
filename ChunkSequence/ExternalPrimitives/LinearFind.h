@@ -27,7 +27,7 @@
 //     }}}
 
 template<typename T>
-T LinearFind(const chunk_seq& seq,size_t g) {
+T find(const chunk_seq& seq,size_t g) {
     for(const auto& c: seq.chunks){
         const size_t cnt = c.used / sizeof(T);   
         if (g < cnt) {
