@@ -73,6 +73,47 @@ struct chunk_seq {
         for (auto& [name, fd] : fd_cache) close(fd);
         close(out_fd);
     }
+
+    // Read the whole sequence into an in-DRAM std::vector<T> in index order.
+    // Convenience for tests / small out-of-core results; assumes the sequence
+    // fits in memory.  Chunks are read in parallel: element counts are prefix-
+    // summed to give each chunk a fixed output slice, so workers scatter into
+    // disjoint ranges of the result with no synchronization.
+    template<typename T = uint64_t>
+    std::vector<T> to_vector() const {
+        // Process chunks in logical index order regardless of vector ordering.
+        std::vector<const chunk*> ordered;
+        ordered.reserve(chunks.size());
+        for (const auto& c : chunks) ordered.push_back(&c);
+        std::sort(ordered.begin(), ordered.end(),
+                  [](const chunk* a, const chunk* b) { return a->index < b->index; });
+
+        // Prefix-sum element counts to place each chunk at a fixed output offset.
+        std::vector<size_t> offset(ordered.size() + 1, 0);
+        for (size_t i = 0; i < ordered.size(); i++) {
+            CHECK(ordered[i]->used % sizeof(T) == 0)
+                << "to_vector: chunk byte size not a multiple of sizeof(T)";
+            offset[i + 1] = offset[i] + ordered[i]->used / sizeof(T);
+        }
+
+        std::vector<T> out(offset.back());
+        parlay::parallel_for(0, ordered.size(), [&](size_t i) {
+            const chunk* c = ordered[i];
+            if (c->used == 0) return;
+            int fd = open(c->filename.c_str(), O_DIRECT | O_RDONLY);
+            SYSCALL(fd);
+            // O_DIRECT needs an aligned buffer and an aligned read length; the
+            // trailing padding beyond c->used is read but not copied out.
+            void* buf = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
+            CHECK(buf != nullptr) << "to_vector: buffer allocation failed";
+            SYSCALL(pread(fd, buf, AlignUp(c->used), (off_t)c->begin_addr));
+            memcpy(out.data() + offset[i], buf, c->used);
+            free(buf);
+            close(fd);
+        }, /*granularity=*/1);
+
+        return out;
+    }
 };
 
 namespace ChunkSequenceOps {
@@ -191,6 +232,24 @@ chunk_seq tabulate(size_t n, const std::string& result_prefix, F f) {
 
 chunk_seq perm(size_t n) {
     return tabulate<uint64_t>(n, "perm", [](size_t i) { return (uint64_t)i; });
+}
+
+/**
+ * Convert an in-DRAM parlay::sequence (or any random-access range exposing
+ * value_type, size() and operator[]) into an out-of-core chunk_seq, preserving
+ * index order.  This is the inverse of materialize() / to_vector().
+ *
+ * Implemented on top of tabulate, so it reuses the same parallel io_uring
+ * writer pipeline (one thread per drive, bounded in-flight DRAM).  The whole
+ * input already lives in DRAM, so the per-element generator is a cheap indexed
+ * read and the cost is dominated by the parallel SSD writes.
+ */
+template<typename Range>
+chunk_seq to_chunk_seq(const Range& seq,
+                       const std::string& result_prefix = "chunkseq") {
+    using T = typename Range::value_type;
+    return tabulate<T>(seq.size(), result_prefix,
+                       [&seq](size_t i) { return seq[i]; });
 }
 
 } // namespace ChunkSequenceOps

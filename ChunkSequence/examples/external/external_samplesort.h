@@ -1,0 +1,155 @@
+#ifndef EXTERNAL_SAMPLE_SORT_H
+#define EXTERNAL_SAMPLE_SORT_H
+#include <algorithm>
+#include <atomic>
+#include <functional>
+#include <random>
+
+#include <parlay/primitives.h>
+#include <parlay/random.h>
+#include "ChunkSequence/chunk_map.h"
+#include "ChunkSequence/chunk_histogram_by_index.h"
+#include "ChunkSequence/ExternalPrimitives/materialize.h"
+#include "ChunkSequence/chunk_pack.h"
+#include "ChunkSequence/ExternalPrimitives/scan_find.h"
+#include "ChunkSequence/ExternalPrimitives/chunk_count_sort2.h"
+#include "ChunkSequence/ExternalPrimitives/flatten.h"
+
+
+namespace ChunkSequenceOps{
+template <typename T, typename Less = std::less<>>
+chunk_seq sample_sort(chunk_seq& seq, Less less1 = {}) {
+static std::atomic<size_t> ss_counter{0};
+const std::string tag = std::to_string(ss_counter++);
+size_t n = 0;
+  for(size_t r = 0; r < seq.chunks.size(); r++){
+n+= seq.chunks[r].used;
+  }
+  n/=sizeof(T);
+  
+  if (n < 5096){
+    //we're likely going to want a fast quicksort method that takes better advantage of our 
+    //memory representation than just external->materialize->sort->external
+    //but this clearly should work so we'll go with it for now, also any external quicksort would need to materialize everything anyway
+    //but could overlap the I/O with computation.
+
+    auto i = ChunkSequenceOps::materialize<T>(seq); //it would be good to make this materialize into a parlay sequence (now done)
+
+    std::sort(i.begin(), i.end(), less1);
+    //this is going to be really slow if we just materialize and write back, probably the best thing to do is to pass a parlay sequence
+    //at the recurring call based on the size, but this is kind of messy
+    //the easiest way to fix the problem is to just make materialize faster by parallelizing it
+    return ChunkSequenceOps::to_chunk_seq(i, "ss_base_" + tag);
+
+  } 
+
+  int sample_size = 31;
+  int over = 8;
+  parlay::random_generator gen;
+  std::uniform_int_distribution<long> dis(0, n-1);
+  
+    auto less2 = [&](std::pair<size_t, T> i, std::pair<size_t, T> j){
+        return less1(i.second, j.second);
+    };
+    parlay::sequence<std::pair<size_t, T>> pivots(sample_size * over);
+    parlay::parallel_for(0, sample_size * over, [&](long o){
+        auto temp = gen[o];
+        pivots[o].first = dis(temp);
+
+    });
+
+        
+    parlay::sequence<size_t> scan_seq(seq.chunks.size());
+    scan_size<T>(seq, scan_seq);
+
+    parlay::parallel_for(0, sample_size * over, [&](size_t count){
+  
+        pivots[count].second = scan_find<T>(seq, scan_seq, pivots[count].first);
+    });
+
+
+    pivots = parlay::sort(pivots, less2);
+    pivots = parlay::tabulate(sample_size,[&] (long i) 
+    {
+        return pivots[i*over];
+    });
+    auto num_buckets = sample_size + 1;
+
+
+auto seconds = parlay::map(pivots, [](const auto& p){ return p.second; });
+  parlay::internal::heap_tree ss(seconds);
+  
+auto ids = ChunkMap<T, size_t>(seq, "ss_id_" + tag,[&](T e){//problem: the dual reader can only deal with
+    //a single type, so we're going to have to waste by using size_t instead of 
+    return ss.rank(e, less1);
+});
+
+std::vector<chunk_seq> externalSequenceVector(num_buckets);
+ChunkSequenceOps::chunk_count_sort2<T>(seq, ids, externalSequenceVector, "ss_bucket_" + tag);
+
+//it should now be the case that externalSequenceVector is a full vector of the individual external sequences
+//in this case we just need a simple flatten to put all the chunk headers into a single list
+//because each individual sequence should be sorted and they're in order,
+//we'll get a total sorted ordering
+parlay::parallel_for(0, num_buckets, [&](long i){
+
+    size_t z = 0;
+    for (const auto& c :externalSequenceVector[i].chunks){
+        z += c.used / sizeof(T);
+    }
+    if (z ==n) {
+        //if we're not going to get anything from the partition, i.e. we have an empty partition
+        auto v = ChunkSequenceOps::materialize<T>(externalSequenceVector[i]);
+        std::sort(v.begin(), v.end(), less1);
+        externalSequenceVector[i] = ChunkSequenceOps::to_chunk_seq(
+            v, "ss_deg_" + tag + "_" + std::to_string(i));
+        return;
+    }
+
+    //recurring on this samplesort chain is pretty expensive due to the buffer allocation
+    //we might consider just an external quicksort for this level, as it would use much less memory.
+    //probably multiple levels of parallelism won't help much regardless since we need to do reads
+    //for the pivots = large overhead on recurring calls
+    externalSequenceVector[i] = sample_sort<T>(externalSequenceVector[i], less1);
+
+
+});
+
+
+// auto sums = ChunkSequenceOps::ChunkHistogramByIndex<unsigned char>(ids, sample_size+1);
+
+//   auto [offsets, total] = parlay::scan(sums);
+//   auto id = std::upper_bound(offsets.begin(), offsets.end(), k) - offsets.begin() - 1;
+
+// auto next = ChunkSequenceOps::pack_if<T, unsigned char>(
+//     seq, "next_" + std::to_string(n), ids,
+//     [id](unsigned char b){ return b == id; });
+
+
+//the basic paradigm here in standard samplesort is that you should have the offset count from the counting sort
+//this gives you the logical indices for the first and last portions of the array you need to sort in parallel
+//obviously this relies on you being able to index into the array efficiently, which implies we're working in DRAM
+
+//Ok so it seems like this is going to take a very long time -- we need both the chunkmap of heap positions 
+//and the the original sequence
+
+//sadly the parlay::internal::count_sort is difficult here -- in the parlay example, they rely on it to reorder the sequence
+//such that all the 0-bucketed elements stably are arranged 
+//One thing that we should note here is that physically moving data is really going to be terrible
+//whatever we do, it needs to move data virtually
+
+
+//we have now packed the values by bucket into 32 smaller external seqeunces
+//okay, so now we can actually just sort everything in parallel
+//the issue is that this method returns a parlay::sequence
+// return sample_sort<T>(next, k - offsets[id], less1, original_size);
+
+
+return ChunkSequenceOps::flatten(externalSequenceVector);
+
+
+}
+
+}
+
+#endif

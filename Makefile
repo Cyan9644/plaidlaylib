@@ -43,7 +43,8 @@ TEST_BINARIES := $(BINDIR)/permTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
-                    $(BINDIR)/rabin_karpExample $(BINDIR)/kth_smallestExample
+                    $(BINDIR)/rabin_karpExample $(BINDIR)/kth_smallestExample \
+                    $(BINDIR)/external_samplesortExample
 
 LINK = $(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
@@ -181,10 +182,13 @@ examples: $(EXAMPLE_BINARIES)
 $(BINDIR)/%Example: ChunkSequence/examples/%.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
-# kth_smallest (the External-primitives example) lives one level deeper, in
-# examples/external/, than the %Example pattern rule reaches, so it needs an
-# explicit rule.  Same recipe.
+# kth_smallest and external_samplesort (the External-primitives examples) live
+# one level deeper, in examples/external/, than the %Example pattern rule
+# reaches, so they need explicit rules.  Same recipe.
 $(BINDIR)/kth_smallestExample: ChunkSequence/examples/external/kth_smallest.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(LINK)
+
+$(BINDIR)/external_samplesortExample: ChunkSequence/examples/external/external_samplesort.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # ── benchmarks ─────────────────────────────────────────────────────────────────

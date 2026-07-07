@@ -77,6 +77,16 @@ EXAMPLES = [
      "xlabel": "n (number of keys)",
      "title": "kth-smallest: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["kth_in*", "id_*", "flags_*", "next_*"]},
+    # external_samplesortExample sweeps n; the plotted time is the sort pass only
+    # (input build excluded).  Its recursion leaves ss_id_/ss_bucket_/ss_base_/
+    # ss_deg_ intermediates (the sorted output references the bucket files) in
+    # addition to the ss_in input.
+    {"name": "external_samplesort", "target": "bin/external_samplesortExample",
+     "cols": ["n", "build_s", "sort_s", "inmem_sort_s", "throughput_gb_s"],
+     "time_col": "sort_s", "inmem_col": "inmem_sort_s",
+     "xlabel": "n (number of keys)",
+     "title": "sample sort: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
+     "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*"]},
 ]
 
 
