@@ -122,7 +122,7 @@ parlay::parallel_for(0, num_buckets, [&](long i){
 
 });
 
-
+return ChunkSequenceOps::flatten(externalSequenceVector);
 // auto sums = ChunkSequenceOps::ChunkHistogramByIndex<unsigned char>(ids, sample_size+1);
 
 //   auto [offsets, total] = parlay::scan(sums);
@@ -152,7 +152,7 @@ parlay::parallel_for(0, num_buckets, [&](long i){
 // return sample_sort<T>(next, k - offsets[id], less1, original_size);
 
 
-return ChunkSequenceOps::flatten(externalSequenceVector);
+
 
 
 }

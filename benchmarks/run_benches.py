@@ -87,6 +87,16 @@ EXAMPLES = [
      "xlabel": "n (number of keys)",
      "title": "sample sort: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*"]},
+    # external_linefitExample sweeps n; the plotted time is the fit itself
+    # (input build excluded).  Both passes are fully delayed, so the fit leaves
+    # no intermediates beyond the lf_x/lf_y inputs.
+    {"name": "external_linefit", "target": "bin/external_linefitExample",
+     "cols": ["n", "build_s", "fit_s", "inmem_fit_s", "offset", "slope",
+              "throughput_gb_s"],
+     "time_col": "fit_s", "inmem_col": "inmem_fit_s",
+     "xlabel": "n (number of points)",
+     "title": "line fit: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
+     "data_globs": ["lf_x*", "lf_y*"]},
 ]
 
 
