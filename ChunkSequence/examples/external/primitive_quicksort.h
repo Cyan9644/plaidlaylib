@@ -189,7 +189,7 @@ chunk_seq primitive_quicksort(chunk_seq& seq, Less less = {}) {
         [&] { left_sorted  = primitive_quicksort<T>(left,  less); },
         [&] { right_sorted = primitive_quicksort<T>(right, less); });
 
-    return flatten({left_sorted, mid, right_sorted});
+    return flatten(std::vector<chunk_seq>{left_sorted, mid, right_sorted});
 }
 
 } // namespace ChunkSequenceOps

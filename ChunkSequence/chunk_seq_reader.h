@@ -170,7 +170,7 @@ private:
     static void Worker(ChunkSequenceReader* self, std::vector<chunk> work,
                        size_t queue_depth, size_t max_requests) {
         struct io_uring ring;
-        SYSCALL(io_uring_queue_init(queue_depth, &ring, IORING_SETUP_SINGLE_ISSUER));
+        SYSCALL(InitIoUringWithRetry(queue_depth, &ring, IORING_SETUP_SINGLE_ISSUER));
 
         // fds are opened once in Start() and shared read-only across workers;
         // the map is not mutated after Start(), so lookups here need no lock.

@@ -208,7 +208,7 @@ private:
                                     const size_t io_uring_size) {
         CHECK(!files.empty());
         struct io_uring ring;
-        SYSCALL(io_uring_queue_init(io_uring_size, &ring, IORING_SETUP_SINGLE_ISSUER));
+        SYSCALL(InitIoUringWithRetry(io_uring_size, &ring, IORING_SETUP_SINGLE_ISSUER));
 
         size_t current_file = 0;
         size_t outstanding_request = 0;

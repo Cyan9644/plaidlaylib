@@ -7,7 +7,11 @@
 
 #include <vector>
 #include <string>
+#include <cerrno>
+#include <chrono>
+#include <thread>
 #include <sys/resource.h>
+#include <liburing.h>
 #include "utils/file_info.h"
 #include "configs.h"
 
@@ -27,6 +31,34 @@ inline size_t RaiseFdLimit() {
     rl.rlim_cur = rl.rlim_max;
     if (setrlimit(RLIMIT_NOFILE, &rl) != 0) return 0;
     return (size_t)rl.rlim_cur;
+}
+
+// Create an io_uring instance, retrying while the kernel transiently reports
+// -ENOMEM.
+//
+// io_uring charges its ring pages against the process's RLIMIT_MEMLOCK (the
+// locked-memory limit, distinct from the fd limit RaiseFdLimit() lifts, and on
+// many boxes only ~64 MiB and not raisable without privilege).  The catch is
+// that on some kernels -- notably the WSL2 "microsoft" kernel used on dev
+// boxes -- the memory freed by io_uring_queue_exit() is reclaimed
+// *asynchronously*: the exit call returns before a kernel workqueue actually
+// hands the memlock accounting back.  A primitive that churns many short-lived
+// rings -- the parallel recursive sorts spin up one ring per reader/writer
+// worker for every subproblem across the bucket fanout -- can therefore momentarily
+// exceed the limit even though its true steady-state footprint is tiny, and
+// io_uring_queue_init() then fails with -ENOMEM.  The pending reclaim catches
+// up within about a second, so a short bounded retry rides out the spike; a
+// genuinely exhausted limit still falls through to the caller (which SYSCALL-
+// checks the return).  Signature mirrors io_uring_queue_init.
+inline int InitIoUringWithRetry(unsigned entries, struct io_uring *ring, unsigned flags) {
+    // ~4 s of headroom at 20 ms spacing -- far more than the observed ~1 s
+    // reclaim latency, while still bounded so a real exhaustion surfaces.
+    constexpr int kMaxAttempts = 200;
+    for (int attempt = 0;; attempt++) {
+        int r = io_uring_queue_init(entries, ring, flags);
+        if (r != -ENOMEM || attempt >= kMaxAttempts) return r;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
 }
 
 std::vector<FileInfo> FindFiles(const std::string &prefix, bool parallel = false);
