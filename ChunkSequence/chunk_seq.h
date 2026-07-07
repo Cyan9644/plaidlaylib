@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
+#include <cstdint>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -234,6 +235,7 @@ chunk_seq perm(size_t n) {
     return tabulate<uint64_t>(n, "perm", [](size_t i) { return (uint64_t)i; });
 }
 
+
 /**
  * Convert an in-DRAM parlay::sequence (or any random-access range exposing
  * value_type, size() and operator[]) into an out-of-core chunk_seq, preserving
@@ -250,6 +252,109 @@ chunk_seq to_chunk_seq(const Range& seq,
     using T = typename Range::value_type;
     return tabulate<T>(seq.size(), result_prefix,
                        [&seq](size_t i) { return seq[i]; });
+// ── scalar element access ────────────────────────────────────────────────────
+// peek / push / size operate on a chunk_seq already materialized on disk, one
+// element at a time.  They rely on the index-ordered invariant
+// (chunks[k].index == k) so element i lives in chunks[i / ept] at byte offset
+// begin_addr + (i % ept) * sizeof(T), where ept = CHUNK_SIZE / sizeof(T).
+
+// Total number of *elements* (not chunks) in the sequence.  O(1): every chunk
+// but the last is full.
+template<typename T = uint64_t>
+size_t size(const chunk_seq& seq) {
+    static_assert(CHUNK_SIZE % sizeof(T) == 0, "sizeof(T) must divide CHUNK_SIZE");
+    if (seq.chunks.empty()) return 0;
+    const size_t ept = CHUNK_SIZE / sizeof(T);
+    return (seq.chunks.size() - 1) * ept + seq.chunks.back().used / sizeof(T);
+}
+
+// Read the single element at logical index i.  Reads one O_DIRECT-aligned block
+// (an 8-byte element never straddles a 4096 boundary since O_DIRECT_MULTIPLE is
+// a multiple of sizeof(T)).
+template<typename T = uint64_t>
+T peek(const chunk_seq& seq, size_t i) {
+    static_assert(CHUNK_SIZE % sizeof(T) == 0, "sizeof(T) must divide CHUNK_SIZE");
+    const size_t ept = CHUNK_SIZE / sizeof(T);
+    const size_t ci  = i / ept;
+    const size_t off = (i % ept) * sizeof(T);   // byte offset within the chunk
+    CHECK(ci < seq.chunks.size()) << "peek: index " << i << " out of range";
+    const chunk& c = seq.chunks[ci];
+    CHECK(off < c.used) << "peek: index " << i << " past end of chunk " << ci;
+
+    const size_t byte  = c.begin_addr + off;
+    const size_t block = AlignDown(byte);       // O_DIRECT-aligned start
+
+    void* buf = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, O_DIRECT_MULTIPLE);
+    CHECK(buf != nullptr) << "peek: buffer allocation failed";
+    int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+    SYSCALL(fd);
+    SYSCALL(pread(fd, buf, O_DIRECT_MULTIPLE, (off_t)block));
+    T value;
+    memcpy(&value, (char*)buf + (byte - block), sizeof(T));
+    close(fd);
+    free(buf);
+    return value;
+}
+
+// Append one element to the end of the sequence, updating both the on-disk data
+// and the in-memory chunk_seq.  Requires a non-empty seq (there is no filename
+// to derive a first chunk from otherwise).
+template<typename T = uint64_t>
+void push(chunk_seq& seq, T value) {
+    static_assert(CHUNK_SIZE % sizeof(T) == 0, "sizeof(T) must divide CHUNK_SIZE");
+    CHECK(!seq.chunks.empty()) << "push: cannot push onto an empty chunk_seq";
+
+    chunk& last = seq.chunks.back();
+    if (last.used < CHUNK_SIZE) {
+        // Fast path: the last chunk has room.  Read-modify-write the single
+        // aligned block holding the append position (the file was already
+        // allocated to the slot's full CHUNK_SIZE).
+        const size_t byte  = last.begin_addr + last.used;
+        const size_t block = AlignDown(byte);
+
+        void* buf = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, O_DIRECT_MULTIPLE);
+        CHECK(buf != nullptr) << "push: buffer allocation failed";
+        int fd = open(last.filename.c_str(), O_DIRECT | O_RDWR);
+        SYSCALL(fd);
+        SYSCALL(pread(fd, buf, O_DIRECT_MULTIPLE, (off_t)block));
+        memcpy((char*)buf + (byte - block), &value, sizeof(T));
+        SYSCALL(pwrite(fd, buf, O_DIRECT_MULTIPLE, (off_t)block));
+        close(fd);
+        free(buf);
+        last.used += sizeof(T);
+        return;
+    }
+
+    // Last chunk is full: allocate a new chunk.  Reuse the drive file already
+    // present in the seq that holds the fewest chunks (balls-in-bins balance
+    // without needing a prefix or all SSDs), and place it at the next slot.
+    std::map<std::string, size_t> counts;
+    for (const chunk& c : seq.chunks) counts[c.filename]++;
+    const std::string* target = nullptr;
+    size_t best = SIZE_MAX;
+    for (const auto& [name, cnt] : counts)
+        if (cnt < best) { best = cnt; target = &name; }
+    const std::string filename = *target;
+    const size_t slot       = best;                 // dense per-file slot index
+    const size_t begin_addr = slot * CHUNK_SIZE;
+
+    // Grow the file to cover the new slot (matches tabulate's allocation).
+    int fd = open(filename.c_str(), O_DIRECT | O_RDWR);
+    SYSCALL(fd);
+    const size_t file_size = (slot + 1) * CHUNK_SIZE;
+    if (fallocate(fd, 0, 0, (off_t)file_size) != 0)
+        SYSCALL(ftruncate(fd, (off_t)file_size));
+
+    void* buf = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, O_DIRECT_MULTIPLE);
+    CHECK(buf != nullptr) << "push: buffer allocation failed";
+    memset(buf, 0, O_DIRECT_MULTIPLE);
+    memcpy(buf, &value, sizeof(T));
+    SYSCALL(pwrite(fd, buf, O_DIRECT_MULTIPLE, (off_t)begin_addr));
+    close(fd);
+    free(buf);
+
+    seq.chunks.push_back({filename, begin_addr, sizeof(T), seq.chunks.size()});
+
 }
 
 } // namespace ChunkSequenceOps

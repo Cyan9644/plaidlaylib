@@ -7,6 +7,7 @@
 #include <memory>
 #include <random>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -25,39 +26,60 @@
 #include "configs.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Block-delayed sequences over chunk_seq.
+// Block-delayed sequences over chunk_seq  (recursive read-plan model).
 //
-// A port of parlaylib's "block iterable delayed" (BID) design
-// (deps/parlaylib/parlay/internal/{block_delayed,stream_delayed}.h) to the
-// out-of-core (SSD) setting.  Where the eager primitives (ChunkMap/ChunkReduce/
-// ChunkScan/ChunkFilter) round-trip every intermediate through the SSDs, a
-// delayed sequence fuses an operation chain so that intermediates never touch
-// disk:  `map` is lazy, `reduce`/`force` consume in a single read pass, and
-// `scan` is partially delayed (one read pass for the block offsets, then a new
-// lazy sequence).  For `reduce(map(map(delay(seq),f),g),m)` the eager path moves
-// 3n reads + 2n writes; the delayed path moves 1n reads and 0 writes.
+// A port of parlaylib's "block iterable delayed" design to the out-of-core (SSD)
+// setting.  Where the eager primitives round-trip every intermediate through the
+// SSDs, a delayed sequence fuses an operation chain so intermediates never touch
+// disk: `map` is lazy, `reduce`/`force` consume in one read pass, and `scan` is
+// partially delayed (one read pass for block offsets, then a new lazy sequence).
 //
-// A "block" is one 4 MiB chunk: parlay workers process chunks in parallel and
-// iteration is sequential within a chunk — the same shape as the eager
-// chunk_reduce.h / chunk_scan.h consumer loops.
+// A "block" is one CHUNK_SIZE chunk: parlay workers process chunks in parallel;
+// iteration is sequential within a chunk.
 //
-// Representation: a delayed sequence is a (source descriptor) + a per-chunk
-// iterator factory `make_iter`.  Given a chunk's input it returns a lightweight
-// forward iterator that lazily yields the transformed element type R.  Two
-// source kinds share all iterator wrappers and terminals:
-//   * delayed_file  — backed by a chunk_seq on SSD; the reader streams raw
-//                     buffers and the factory transforms them.
-//   * delayed_index — backed by an index range (from `tabulate`); chunks are
-//                     generated on the fly, so reduce/scan do zero source I/O.
+// ── Representation: a delayed sequence is a *tree of nodes* ──────────────────
+// Every node (leaf_source, leaf_index, map_node, scan_node, zip_node) exposes a
+// small uniform interface so one generic driver can execute *any* composition —
+// including nested/N-ary zips and zips of maps/scans:
 //
-// Everything is templated (not std::function) so the fused chain inlines.
+//   size_t length()      const;             // logical element count
+//   size_t num_chunks()  const;             // ceil(length / ELEMS_PER_CHUNK)
+//   size_t chunk_len(i)  const;             // elements in logical chunk i
 //
-// LIFETIME: a delayed_file (and any sequence derived from it, including the
-// result of `scan`) holds a pointer to the source chunk_seq.  The source must
-// outlive every terminal call made on the delayed sequence.
+//   // (1) READ PLAN: register the physical reads this node needs for logical
+//   //     chunk i via Planner::need (keyed by source chunk_seq*, so a source
+//   //     appearing in several leaves of the chunk collapses to one read).
+//   //     Internal nodes forward to children *left-to-right*; a node past its
+//   //     own range (a padded child) registers nothing.
+//   template<class Planner> void plan(size_t i, Planner& p) const;
 //
-// flatten is intentionally omitted: chunks store plain uint64_t, so there is
-// nothing nested to flatten.
+//   // (2) BUILD: construct the fused forward-iterator for logical chunk i,
+//   //     pulling each in-range leaf's buffer from Resolver::next.  build() MUST
+//   //     visit children in the SAME left-to-right order as plan() so the
+//   //     resolver lines up with the reads plan() registered.  For i beyond this
+//   //     node's range it returns a dummy iterator (consuming no buffer); such
+//   //     an iterator is always wrapped by an enclosing pad_iter with
+//   //     remaining==0, so it is never dereferenced.
+//   template<class Resolver> auto build(size_t i, Resolver& r) const;
+//
+// One logical chunk of a *leaf* is one physical read (a chunk_seq stores each
+// logical chunk as one contiguous region on one drive).  The "one logical chunk
+// -> several physical reads" case is the zip_node union; identical reads from a
+// shared source (e.g. A,B in both zip(A,B) and a scan of zip(A,B)) are deduped,
+// so C=f(A,B) reuses A,B's buffers instead of re-reading them.
+//
+// Two drivers execute a tree.  for_each_chunk streams: one read pass whose
+// dispatcher releases each chunk to a parlay worker the instant that chunk's own
+// reads land, so reads and compute overlap (used by reduce/scan/force).
+// for_each_window collects a FILTER_BATCH_SIZE window before computing, needed
+// by filter's sequential cross-chunk carry.  Everything is templated (no
+// std::function) so the fused chain inlines.
+//
+// LIFETIME: a leaf_source holds a pointer to its chunk_seq; every source in the
+// tree must outlive every terminal call.  force on a sequence whose value_type
+// exceeds 8 B is unsupported (the on-disk grid assumes ≤8 B elements) — zip's
+// std::pair elements stay transient and are meant to be map-ed to a scalar
+// before force.
 // ─────────────────────────────────────────────────────────────────────────────
 
 namespace ChunkSequenceOps {
@@ -65,8 +87,7 @@ namespace delayed {
 
 // ── lazy forward iterators (sequential within a chunk) ───────────────────────
 
-// Generates f(cur), f(cur+1), …  Used as the base iterator for `tabulate`
-// (an index-backed source with no underlying buffer).
+// Generates f(cur), f(cur+1), …  Base iterator for `tabulate` (no buffer).
 template<class F>
 struct counting_value_iter {
     size_t cur;
@@ -101,123 +122,396 @@ struct scan_iter {
 template<class It, class F, class V>
 scan_iter<It, F, V> make_scan_iter(It it, F f, V acc) { return {it, f, acc}; }
 
-// ── the two delayed-sequence kinds ───────────────────────────────────────────
-
-// File-backed: make_iter(const TSrc* raw, size_t n, size_t chunk_index) -> iter.
-template<class TSrc, class MakeIter>
-struct delayed_file {
-    using source_type = TSrc;
-    static constexpr bool is_file = true;
-
-    const chunk_seq* source;
-    MakeIter make_iter;
-
-    using iterator   = std::invoke_result_t<MakeIter, const TSrc*, size_t, size_t>;
-    using value_type = std::decay_t<decltype(*std::declval<iterator&>())>;
-
-    size_t num_chunks() const { return source->chunks.size(); }
+// Yields the first `remaining` elements of `it`, then `pad` forever.  Used by
+// zip to fill a shorter operand's tail (remaining==0 for a chunk it never
+// reaches — its inner iterator is then never dereferenced, so a null/dummy inner
+// is safe).
+template<class It, class V>
+struct pad_iter {
+    It it;
+    size_t remaining;
+    V pad;
+    V operator*() const { return remaining ? (V)(*it) : pad; }
+    pad_iter& operator++() { if (remaining) { ++it; --remaining; } return *this; }
 };
-
-// Index-backed: make_iter(size_t base_index, size_t n, size_t chunk_index) -> iter.
-template<class MakeIter>
-struct delayed_index {
-    static constexpr bool is_file = false;
-
-    size_t n;
-    MakeIter make_iter;
-
-    using iterator   = std::invoke_result_t<MakeIter, size_t, size_t, size_t>;
-    using value_type = std::decay_t<decltype(*std::declval<iterator&>())>;
-
-    size_t num_chunks() const { return (n + ELEMS_PER_CHUNK - 1) / ELEMS_PER_CHUNK; }
-};
-
-// Number of elements in chunk i (map/scan preserve element counts).
-template<class D>
-size_t chunk_len(const D& d, size_t i) {
-    if constexpr (D::is_file) {
-        return d.source->chunks[i].used / sizeof(typename D::source_type);
-    } else {
-        const size_t base = i * ELEMS_PER_CHUNK;
-        return std::min(ELEMS_PER_CHUNK, d.n - base);
-    }
+template<class It, class V>
+pad_iter<It, V> make_pad_iter(It it, size_t remaining, V pad) {
+    return {it, remaining, pad};
 }
+
+// Zips two (already pad-wrapped) iterators into a sequence of std::pair.
+template<class ItA, class ItB>
+struct zip_iter {
+    ItA a;
+    ItB b;
+    auto operator*() const { return std::pair{*a, *b}; }
+    zip_iter& operator++() { ++a; ++b; return *this; }
+};
+template<class ItA, class ItB>
+zip_iter<ItA, ItB> make_zip_iter(ItA a, ItB b) { return {a, b}; }
+
+// ── read planning: dedup + resolve ───────────────────────────────────────────
+//
+// A node's plan() calls Planner::need once per in-range leaf, keyed by the
+// source chunk_seq*, so a source that appears in several leaves of one logical
+// chunk (e.g. A and B in both zip(A,B) and a scan of zip(A,B)) collapses to a
+// single physical read.  build() then calls Resolver::next once per in-range
+// leaf, in the same left-to-right order, to get that leaf's resolved buffer.
+struct Planner {
+    std::vector<chunk>            unique_reads;  // this chunk's deduped reads (slot order)
+    std::vector<uint32_t>         leaf_slots;    // one local slot per in-range leaf occurrence
+    std::vector<const chunk_seq*> src_of;        // dedup key per unique read (parallel array)
+
+    void need(const chunk_seq* src, const chunk& c) {
+        for (uint32_t s = 0; s < src_of.size(); s++)          // fanout is tiny: linear scan
+            if (src_of[s] == src) { leaf_slots.push_back(s); return; }
+        leaf_slots.push_back((uint32_t)unique_reads.size());
+        src_of.push_back(src);
+        unique_reads.push_back(c);
+    }
+};
+struct Resolver {
+    const std::vector<char*>*    bufs;           // this chunk's buffers, by local slot
+    const std::vector<uint32_t>* leaf_slots;     // the list Planner produced (same order)
+    size_t cursor = 0;
+    char* next() { return (*bufs)[(*leaf_slots)[cursor++]]; }
+};
+
+// ── nodes ────────────────────────────────────────────────────────────────────
+// Shared helper: elements in logical chunk i of a sequence of `len` elements.
+inline size_t grid_chunk_len(size_t len, size_t i) {
+    const size_t base = i * ELEMS_PER_CHUNK;
+    return base >= len ? 0 : std::min(ELEMS_PER_CHUNK, len - base);
+}
+inline size_t grid_num_chunks(size_t len) {
+    return (len + ELEMS_PER_CHUNK - 1) / ELEMS_PER_CHUNK;
+}
+
+// Leaf backed by a materialized chunk_seq on SSD (from `delay`).  One logical
+// chunk == one physical read (chunks[i]); a chunk_seq stores each logical chunk
+// contiguously on one drive.  T is the stored element type.
+template<class T>
+struct leaf_source {
+    using value_type = T;
+    const chunk_seq* src;
+    size_t len;                                   // total element count
+
+    size_t length()     const { return len; }
+    size_t num_chunks() const { return grid_num_chunks(len); }
+    size_t chunk_len(size_t i) const { return grid_chunk_len(len, i); }
+
+    template<class Planner>
+    void plan(size_t i, Planner& p) const {
+        if (i < num_chunks())                     // index-ordered: chunks[i].index == i
+            p.need(src, src->chunks[i]);          // one read (shared if the src repeats)
+    }                                             // else padded/out-of-range: no read
+    template<class Resolver>
+    const T* build(size_t i, Resolver& r) const {
+        if (i >= num_chunks()) return nullptr;    // dummy; enclosing pad never derefs it
+        return reinterpret_cast<const T*>(r.next());
+    }
+};
+
+// Leaf that generates element i as f(i), with no source files (from `tabulate`).
+template<class F>
+struct leaf_index {
+    using value_type = std::decay_t<std::invoke_result_t<F, size_t>>;
+    size_t n;
+    F f;
+
+    size_t length()     const { return n; }
+    size_t num_chunks() const { return grid_num_chunks(n); }
+    size_t chunk_len(size_t i) const { return grid_chunk_len(n, i); }
+
+    template<class Planner> void plan(size_t, Planner&) const {}   // no reads
+    template<class Resolver>
+    auto build(size_t i, Resolver&) const {
+        return make_counting(i * ELEMS_PER_CHUNK, f);        // padded if out-of-range
+    }
+};
+
+// Lazily map g over every element of child D.
+template<class D, class G>
+struct map_node {
+    using value_type = std::decay_t<std::invoke_result_t<G, typename D::value_type>>;
+    D d;
+    G g;
+
+    size_t length()     const { return d.length(); }
+    size_t num_chunks() const { return d.num_chunks(); }
+    size_t chunk_len(size_t i) const { return d.chunk_len(i); }
+
+    template<class Planner> void plan(size_t i, Planner& p) const { d.plan(i, p); }
+    template<class Resolver>
+    auto build(size_t i, Resolver& r) const {
+        return make_map_iter(d.build(i, r), g);
+    }
+};
+
+// Exclusive prefix scan of child D under monoid M.  Per-chunk offsets are
+// precomputed at construction (see `scan`); build seeds scan_iter per chunk.
+template<class D, class M>
+struct scan_node {
+    using value_type = typename D::value_type;
+    D d;
+    M m;
+    std::shared_ptr<std::vector<value_type>> offsets;
+
+    size_t length()     const { return d.length(); }
+    size_t num_chunks() const { return d.num_chunks(); }
+    size_t chunk_len(size_t i) const { return d.chunk_len(i); }
+
+    template<class Planner> void plan(size_t i, Planner& p) const { d.plan(i, p); }
+    template<class Resolver>
+    auto build(size_t i, Resolver& r) const {
+        value_type seed = (i < offsets->size()) ? (*offsets)[i] : m.identity;
+        return make_scan_iter(d.build(i, r), m, seed);
+    }
+};
+
+// Element-wise pairing of two child nodes; element i = {A[i], B[i]}.  The
+// shorter child is padded with its pad value up to len = max(lenA, lenB).
+// Nesting (zip(zip(A,B), C)) and delayed operands (zip(map(A), scan(...))) work
+// because plan/build simply recurse into the children.
+template<class DA, class DB>
+struct zip_node {
+    using value_type = std::pair<typename DA::value_type, typename DB::value_type>;
+    DA a;
+    DB b;
+    typename DA::value_type padA;
+    typename DB::value_type padB;
+    size_t lenA, lenB, len;
+
+    size_t length()     const { return len; }
+    size_t num_chunks() const { return grid_num_chunks(len); }
+    size_t chunk_len(size_t i) const { return grid_chunk_len(len, i); }
+
+    template<class Planner>
+    void plan(size_t i, Planner& p) const {
+        a.plan(i, p);                              // union of children's reads,
+        b.plan(i, p);                              // left-to-right (matches build)
+    }
+    template<class Resolver>
+    auto build(size_t i, Resolver& r) const {
+        const size_t eb = i * ELEMS_PER_CHUNK;
+        const size_t n  = grid_chunk_len(len, i);
+        const size_t rA = eb >= lenA ? 0 : std::min(n, lenA - eb);   // A's real count
+        const size_t rB = eb >= lenB ? 0 : std::min(n, lenB - eb);   // B's real count
+        // Sequence the two child builds explicitly: both advance the resolver,
+        // and C++ leaves function-argument evaluation order unspecified.
+        auto ia = a.build(i, r);
+        auto ib = b.build(i, r);
+        return make_zip_iter(make_pad_iter(ia, rA, padA),
+                             make_pad_iter(ib, rB, padB));
+    }
+};
+
+// Public total element count of any delayed sequence.
+template<class D> size_t size(const D& d) { return d.length(); }
 
 // ── constructors / combinators (all lazy, no I/O) ────────────────────────────
 
 // Wrap an on-SSD chunk_seq as a delayed sequence (identity transform).
-template<class TSrc = uint64_t>
+template<class T = uint64_t>
 auto delay(const chunk_seq& seq) {
-    auto mk = [](const TSrc* raw, size_t, size_t) { return raw; };
-    return delayed_file<TSrc, decltype(mk)>{&seq, mk};
+    const size_t nc = seq.chunks.size();
+    const size_t len = nc == 0 ? 0
+        : (nc - 1) * ELEMS_PER_CHUNK + seq.chunks[nc - 1].used / sizeof(T);
+    return leaf_source<T>{&seq, len};
 }
 
 // A delayed sequence whose element i is f(i), with no source files.
 template<class F>
-auto tabulate(size_t n, F f) {
-    auto mk = [f](size_t base, size_t, size_t) { return make_counting(base, f); };
-    return delayed_index<decltype(mk)>{n, mk};
-}
+auto tabulate(size_t n, F f) { return leaf_index<F>{n, f}; }
 
-// Lazily map g over every element.  Returns a delayed sequence of the same kind;
-// composes with no temp buffer and no I/O.
+// Lazily map g over every element (no temp buffer, no I/O).
 template<class D, class G>
-auto map(D d, G g) {
-    auto inner = d.make_iter;
-    if constexpr (D::is_file) {
-        using TSrc = typename D::source_type;
-        auto mk = [inner, g](const TSrc* raw, size_t n, size_t ci) {
-            return make_map_iter(inner(raw, n, ci), g);
+auto map(D d, G g) { return map_node<D, G>{d, g}; }
+
+// Strict zip: element i = {a[i], b[i]}.  Both operands must have equal length.
+template<class DA, class DB>
+auto zip(DA a, DB b) {
+    const size_t lenA = a.length(), lenB = b.length();
+    CHECK(lenA == lenB) << "zip: length mismatch " << lenA << " vs " << lenB
+                        << " (use zip(a, b, pad) to pad the shorter side)";
+    return zip_node<DA, DB>{a, b, typename DA::value_type{},
+                            typename DB::value_type{}, lenA, lenB, std::max(lenA, lenB)};
+}
+
+// Padded zip: if operands differ in length the shorter is padded with `pad` up
+// to max(lenA, lenB).  A single pad value requires a shared element type.
+template<class DA, class DB, class Pad>
+auto zip(DA a, DB b, Pad pad) {
+    using VA = typename DA::value_type;
+    using VB = typename DB::value_type;
+    static_assert(std::is_same_v<VA, VB>,
+        "zip(a, b, pad): a single pad value requires both operands to share a value_type");
+    const size_t lenA = a.length(), lenB = b.length();
+    return zip_node<DA, DB>{a, b, (VA)pad, (VB)pad, lenA, lenB, std::max(lenA, lenB)};
+}
+
+// ── drivers ──────────────────────────────────────────────────────────────────
+//
+// Both drivers plan each logical chunk with a Planner (deduping shared reads),
+// issue the reads through the async ChunkSequenceReader, and — once a chunk's
+// buffers are resident — build its fused iterator with a Resolver.  They differ
+// only in *scheduling*: for_each_window collects a whole window before computing
+// (needed by filter's sequential carry); for_each_chunk streams — it releases a
+// chunk to a worker the instant that chunk's own reads land, so reads and
+// compute overlap continuously with no window barrier.
+
+// Windowed: collect a FILTER_BATCH_SIZE window, then hand it to `wbody`, which
+// may build any chunk via build_chunk(local_b).  Buffers are freed after wbody
+// returns, so a consumer must copy anything it keeps.  Used by filter (whose
+// dense-packing carry threads sequentially across chunks in index order).
+template<class D, class WindowBody>
+void for_each_window(const D& d, WindowBody&& wbody, size_t reader_threads = 8) {
+    const size_t nc = d.num_chunks();
+    for (size_t base = 0; base < nc; base += FILTER_BATCH_SIZE) {
+        const size_t w = std::min(FILTER_BATCH_SIZE, nc - base);
+
+        // Plan each chunk (deduped) into the window's flat read list.
+        std::vector<chunk>    refs;                       // .index = window read-id
+        std::vector<uint32_t> owner;                      // read-id -> local chunk b
+        std::vector<std::vector<char*>>    cbufs(w);      // per-chunk buffers (slot order)
+        std::vector<std::vector<uint32_t>> cslots(w);     // per-chunk leaf_slots
+        std::vector<size_t> first(w);                     // chunk b -> first window read-id
+        for (size_t b = 0; b < w; b++) {
+            Planner pl;
+            d.plan(base + b, pl);
+            first[b] = refs.size();
+            cbufs[b].assign(pl.unique_reads.size(), nullptr);
+            cslots[b] = std::move(pl.leaf_slots);
+            for (chunk& c : pl.unique_reads) {
+                c.index = refs.size();
+                refs.push_back(c);
+                owner.push_back((uint32_t)b);
+            }
+        }
+        const size_t total = refs.size();
+
+        auto build_chunk = [&](size_t b) {
+            Resolver r{&cbufs[b], &cslots[b], 0};
+            return d.build(base + b, r);
         };
-        return delayed_file<TSrc, decltype(mk)>{d.source, mk};
-    } else {
-        auto mk = [inner, g](size_t base, size_t n, size_t ci) {
-            return make_map_iter(inner(base, n, ci), g);
-        };
-        return delayed_index<decltype(mk)>{d.n, mk};
+
+        if (total == 0) { wbody(base, w, build_chunk); continue; }   // pure index: no I/O
+
+        chunk_seq rs;
+        rs.chunks = std::move(refs);
+        ChunkSequenceReader<char> reader;
+        reader.PrepChunks(rs);
+        reader.Start(reader_threads, 32, 16);
+        for (size_t k = 0; k < total; k++) {              // completions arrive out of order
+            auto [buf, n, rid] = reader.Poll(); (void)n;
+            CHECK(buf != nullptr) << "delayed: short read";
+            const size_t b = owner[rid];
+            cbufs[b][rid - first[b]] = buf;               // slot = offset from chunk's first read
+        }
+
+        wbody(base, w, build_chunk);
+
+        for (size_t b = 0; b < w; b++)
+            for (char* p : cbufs[b]) if (p) reader.allocator.Free(p);
     }
 }
 
-// ── driver: the one place the two source kinds differ ────────────────────────
-//
-// Invokes body(chunk_index, n_elements, begin_iterator) for every chunk, in
-// parallel across chunks.  body must consume exactly [it, it+n) sequentially.
+// Streaming: one read pass over the whole sequence with per-chunk async release.
+// A dispatcher thread assembles chunks from the reader's out-of-order
+// completions and hands each finished chunk to a parlay worker, so body runs
+// while later chunks are still being read (no window barrier).  body must be
+// chunk-disjoint and order-independent — true for reduce (writes sums[ci]) and
+// force (writes chunk ci's precomputed drive/slot).  reader_threads defaults to
+// 10 to match the eager ChunkReduce reader (the config that reaches device-read
+// speed); one reader serves the whole pass, so there is no per-window setup cost.
 template<class D, class Body>
-void run_chunks(const D& d, size_t reader_threads, Body&& body) {
-    if constexpr (D::is_file) {
-        using TSrc = typename D::source_type;
-        ChunkSequenceReader<TSrc> reader;
-        reader.PrepChunks(*d.source);
-        reader.Start(reader_threads, 32, 16);
-        parlay::parallel_for(0, parlay::num_workers(), [&](size_t) {
-            while (true) {
-                auto [raw, n, ci] = reader.Poll();
-                if (raw == nullptr) break;
-                body(ci, n, d.make_iter(raw, n, ci));
-                reader.allocator.Free(raw);
-            }
-        }, 1);
-    } else {
-        const size_t nc = d.num_chunks();
-        parlay::parallel_for(0, nc, [&](size_t ci) {
-            const size_t base = ci * ELEMS_PER_CHUNK;
-            const size_t n    = std::min(ELEMS_PER_CHUNK, d.n - base);
-            body(ci, n, d.make_iter(base, n, ci));
-        }, 1);
+void for_each_chunk(const D& d, Body&& body, size_t reader_threads = 10) {
+    const size_t nc = d.num_chunks();
+    if (nc == 0) return;
+
+    // Plan every chunk up front (metadata only): deduped reads + per-chunk state.
+    std::vector<chunk>    refs;                            // .index = global read-id
+    std::vector<uint32_t> owner;                           // read-id -> chunk
+    std::vector<size_t>   first(nc);                       // chunk -> first read-id
+    std::vector<size_t>   remaining(nc);                   // reads not yet landed
+    std::vector<std::vector<char*>>    cbufs(nc);          // per-chunk buffers (slot order)
+    std::vector<std::vector<uint32_t>> cslots(nc);         // per-chunk leaf_slots
+    for (size_t ci = 0; ci < nc; ci++) {
+        Planner pl;
+        d.plan(ci, pl);
+        first[ci]     = refs.size();
+        remaining[ci] = pl.unique_reads.size();
+        cbufs[ci].assign(pl.unique_reads.size(), nullptr);
+        cslots[ci] = std::move(pl.leaf_slots);
+        for (chunk& c : pl.unique_reads) {
+            c.index = refs.size();
+            refs.push_back(c);
+            owner.push_back((uint32_t)ci);
+        }
     }
+    const size_t total = refs.size();
+
+    auto run_chunk = [&](size_t ci) {
+        Resolver r{&cbufs[ci], &cslots[ci], 0};
+        auto it = d.build(ci, r);
+        body(ci, d.chunk_len(ci), it);
+    };
+
+    if (total == 0) {                                     // pure index: no I/O, no reader
+        parlay::parallel_for(0, nc, [&](size_t ci) { run_chunk(ci); }, 1);
+        return;
+    }
+
+    chunk_seq rs;
+    rs.chunks = std::move(refs);
+    ChunkSequenceReader<char> reader;
+    reader.PrepChunks(rs);
+    reader.Start(reader_threads, 32, 16, /*buf_queue_sz=*/128);
+
+    SimpleQueue<size_t> ready;                            // ready chunk ids (bounded backlog)
+    ready.SetSizeLimit(FILTER_BATCH_SIZE);
+
+    // Dispatcher: assemble chunks from out-of-order completions; release each the
+    // moment its last read lands.  Single-threaded assembly ⇒ no atomics; the
+    // ready queue's push/poll gives workers the happens-before on cbufs[ci].
+    // When `ready` is full it blocks here, which back-pressures the reader, so
+    // live buffers stay bounded (no window, but a budget).
+    std::thread dispatcher([&] {
+        for (size_t ci = 0; ci < nc; ci++)             // chunks needing no reads (e.g. a
+            if (remaining[ci] == 0) ready.Push(ci);    // padded tail) are ready immediately
+        for (size_t done = 0; done < total; done++) {
+            auto [buf, n, rid] = reader.Poll(); (void)n;
+            CHECK(buf != nullptr) << "delayed: short read";
+            const size_t ci = owner[rid];
+            cbufs[ci][rid - first[ci]] = buf;
+            if (--remaining[ci] == 0) ready.Push(ci);
+        }
+        ready.Close();
+    });
+
+    // Workers: build + compute each ready chunk, then free its buffers.
+    parlay::parallel_for(0, parlay::num_workers(), [&](size_t) {
+        while (true) {
+            auto [ci, code] = ready.Poll((size_t)0);
+            if (code == QueueCode::FINISH) break;
+            run_chunk(ci);
+            for (char* p : cbufs[ci]) if (p) reader.allocator.Free(p);
+        }
+    }, 1);
+
+    dispatcher.join();
 }
 
 // ── terminals ────────────────────────────────────────────────────────────────
 
 // Per-chunk monoid reduction: sums[i] = reduction of chunk i.  Shared by reduce
-// and scan's first pass.  c == num_chunks accumulators fit in RAM (the same
-// assumption chunk_scan.h relies on).
+// and scan's first pass (c == num_chunks accumulators fit in RAM).
 template<class D, class Monoid>
 std::vector<typename D::value_type>
-per_chunk_reduce(const D& d, Monoid m, size_t reader_threads) {
+per_chunk_reduce(const D& d, Monoid m) {
     using R = typename D::value_type;
     std::vector<R> sums(d.num_chunks());
-    run_chunks(d, reader_threads, [&](size_t ci, size_t n, auto it) {
+    for_each_chunk(d, [&](size_t ci, size_t n, auto it) {
         R s = m.identity;
         for (size_t i = 0; i < n; i++) { s = m(s, *it); ++it; }
         sums[ci] = s;
@@ -225,12 +519,11 @@ per_chunk_reduce(const D& d, Monoid m, size_t reader_threads) {
     return sums;
 }
 
-// reduce: fold the whole sequence under the monoid.  One read pass (file-backed)
-// or zero source I/O (index-backed).
+// reduce: fold the whole sequence under the monoid (one read pass).
 template<class D, class Monoid>
 typename D::value_type reduce(const D& d, Monoid m) {
     using R = typename D::value_type;
-    std::vector<R> sums = per_chunk_reduce(d, m, /*reader_threads=*/10);
+    std::vector<R> sums = per_chunk_reduce(d, m);
     R acc = m.identity;                              // c is small: sequential combine
     for (const R& s : sums) acc = m(acc, s);
     return acc;
@@ -238,14 +531,12 @@ typename D::value_type reduce(const D& d, Monoid m) {
 
 // scan: exclusive prefix scan (parlay convention), partially delayed.
 //   Pass 1 (one read pass): per-chunk reductions -> block offsets + total.
-//   Pass 2 (lazy): return a new delayed sequence that, when consumed, re-reads
-//   the source and runs the seeded within-chunk scan.  No second read or any
-//   write happens until the result is forced/reduced; further maps fuse on top.
-// Returns {delayed_sequence, total}.
+//   Pass 2 (lazy): a scan_node that, when consumed, re-reads the source and runs
+//   the seeded within-chunk scan.  Returns {scan_node, total}.
 template<class D, class Monoid>
 auto scan(const D& d, Monoid m) {
     using R = typename D::value_type;
-    std::vector<R> sums = per_chunk_reduce(d, m, /*reader_threads=*/10);
+    std::vector<R> sums = per_chunk_reduce(d, m);
     const size_t nc = sums.size();
 
     auto offsets = std::make_shared<std::vector<R>>(nc);
@@ -253,31 +544,21 @@ auto scan(const D& d, Monoid m) {
     for (size_t i = 0; i < nc; i++) { (*offsets)[i] = run; run = m(run, sums[i]); }
     const R total = run;
 
-    auto inner = d.make_iter;
-    if constexpr (D::is_file) {
-        using TSrc = typename D::source_type;
-        auto mk = [inner, m, offsets](const TSrc* raw, size_t n, size_t ci) {
-            return make_scan_iter(inner(raw, n, ci), m, (*offsets)[ci]);
-        };
-        return std::pair{delayed_file<TSrc, decltype(mk)>{d.source, mk}, total};
-    } else {
-        auto mk = [inner, m, offsets](size_t base, size_t n, size_t ci) {
-            return make_scan_iter(inner(base, n, ci), m, (*offsets)[ci]);
-        };
-        return std::pair{delayed_index<decltype(mk)>{d.n, mk}, total};
-    }
+    return std::pair{scan_node<D, Monoid>{d, m, offsets}, total};
 }
 
-// force: materialize a delayed sequence to a real chunk_seq on SSD, using the
-// same one-file-per-drive balls-in-bins layout as ChunkMap / tabulate.  Returns
-// an index-ordered chunk_seq.  Allocates a fresh output buffer per chunk (no
-// in-place reuse): a scan chain reads the source element on ++ *after* the
-// accumulator is emitted, so overwriting the source in place would corrupt it.
+// force: materialize a delayed sequence to a real chunk_seq on SSD (one file per
+// drive, balls-in-bins).  Returns an index-ordered chunk_seq.  Allocates a fresh
+// output buffer per chunk (a scan chain reads the source element on ++ *after*
+// the accumulator is emitted, so in-place reuse would corrupt it).
 template<class D>
 chunk_seq force(const D& d, const std::string& result_prefix) {
     using R = typename D::value_type;
     static_assert(CHUNK_SIZE % sizeof(R) == 0,
         "sizeof(R) must divide CHUNK_SIZE for O_DIRECT alignment");
+    static_assert(sizeof(R) <= sizeof(uint64_t),
+        "force: the on-disk chunk grid assumes <=8B elements; map wider values "
+        "(e.g. zip's std::pair) down to a scalar before force");
 
     const size_t nc = d.num_chunks();
     if (nc == 0) return {};
@@ -315,7 +596,7 @@ chunk_seq force(const D& d, const std::string& result_prefix) {
     std::vector<chunk> out_chunks(nc);
     for (size_t i = 0; i < nc; i++)
         out_chunks[i] = {filenames[drive_of[i]], slot_of[i] * CHUNK_SIZE,
-                         chunk_len(d, i) * sizeof(R), i};
+                         d.chunk_len(i) * sizeof(R), i};
 
     UnorderedWriterConfig wcfg;
     wcfg.num_threads   = num_drives;
@@ -325,7 +606,7 @@ chunk_seq force(const D& d, const std::string& result_prefix) {
     UnorderedFileWriter<R> writer;
     writer.Start(filenames, wcfg);
 
-    run_chunks(d, /*reader_threads=*/5, [&](size_t ci, size_t n, auto it) {
+    for_each_chunk(d, [&](size_t ci, size_t n, auto it) {
         R* out = (R*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
         CHECK(out != nullptr) << "delayed::force: allocation failed";
         for (size_t i = 0; i < n; i++) { out[i] = *it; ++it; }
@@ -338,20 +619,21 @@ chunk_seq force(const D& d, const std::string& result_prefix) {
     return {out_chunks};
 }
 
-// filter: terminal that packs survivors (pred over the fused delayed elements)
-// into a tightly packed chunk_seq.  Modeled on ChunkFilter — index-contiguous
-// batches of FILTER_BATCH_SIZE chunks, sorted by index, per-chunk survivor
-// compaction, prefix sums, parallel scatter, dense CHUNK_SIZE packing — but each
-// chunk's elements are produced by walking the delayed iterator, so preceding
-// maps fuse into this read pass.  Returns an index-ordered chunk_seq.
+// filter: pack survivors (pred over the fused elements) into a dense chunk_seq.
+// Modeled on ChunkFilter — index-contiguous windows, per-chunk survivor
+// compaction, prefix sums, parallel scatter, dense CHUNK_SIZE packing with a
+// cross-window carry — but each chunk's elements come from walking the fused
+// node iterator, so preceding maps/zips fuse into this read pass.  Returns an
+// index-ordered chunk_seq.
 template<class D, class Pred>
 chunk_seq filter(const D& d, const std::string& result_prefix, Pred pred) {
     using R = typename D::value_type;
     static_assert(CHUNK_SIZE % sizeof(R) == 0,
         "sizeof(R) must divide CHUNK_SIZE for O_DIRECT alignment");
+    static_assert(sizeof(R) <= sizeof(uint64_t),
+        "filter: the on-disk chunk grid assumes <=8B elements");
 
-    const size_t n_in = d.num_chunks();
-    if (n_in == 0) return {};
+    if (d.num_chunks() == 0) return {};
     const size_t num_drives = GetSSDList().size();
     const size_t epct       = CHUNK_SIZE / sizeof(R);  // elements per output chunk
 
@@ -381,59 +663,27 @@ chunk_seq filter(const D& d, const std::string& result_prefix, Pred pred) {
     UnorderedFileWriter<R> writer;
     writer.Start(filenames, wcfg);
 
-    // Process input in index-contiguous batches.  surv[b]/scount[b] hold the
-    // compacted survivors (type R) of chunk (base + b).
-    for (size_t base = 0; base < n_in; base += FILTER_BATCH_SIZE) {
-        const size_t batch_n = std::min(FILTER_BATCH_SIZE, n_in - base);
-        std::vector<R*>     surv(batch_n, nullptr);
-        std::vector<size_t> scount(batch_n, 0);
+    // One window == one FILTER_BATCH_SIZE batch.  for_each_window runs windows
+    // sequentially, so the cross-window `carry` threads correctly.
+    for_each_window(d, [&](size_t base, size_t w, auto build_chunk) {
+        std::vector<R*>     surv(w, nullptr);   // compacted survivors of chunk base+b
+        std::vector<size_t> scount(w, 0);
 
-        // Extract + compact survivors for each chunk in the batch.
-        if constexpr (D::is_file) {
-            using TSrc = typename D::source_type;
-            chunk_seq sub;
-            sub.chunks.assign(d.source->chunks.begin() + base,
-                              d.source->chunks.begin() + base + batch_n);
-            ChunkSequenceReader<TSrc> reader;
-            reader.PrepChunks(sub);
-            reader.Start(5, 32, 16);
-
-            std::vector<std::tuple<TSrc*, size_t, size_t>> raws(batch_n);
-            for (size_t i = 0; i < batch_n; i++) raws[i] = reader.Poll();
-            std::sort(raws.begin(), raws.end(), [](const auto& a, const auto& b) {
-                return std::get<2>(a) < std::get<2>(b);   // by chunk index
-            });
-
-            parlay::parallel_for(0, batch_n, [&](size_t b) {
-                auto [raw, n, ci] = raws[b];
-                R* sb = (R*)malloc(std::max<size_t>(1, n) * sizeof(R));
-                CHECK(sb != nullptr) << "delayed::filter: allocation failed";
-                auto it = d.make_iter(raw, n, ci);
-                size_t s = 0;
-                for (size_t j = 0; j < n; j++) { R v = *it; ++it; if (pred(v)) sb[s++] = v; }
-                surv[b] = sb; scount[b] = s;
-            }, 1);
-
-            for (auto& r : raws) reader.allocator.Free(std::get<0>(r));
-        } else {
-            parlay::parallel_for(0, batch_n, [&](size_t b) {
-                const size_t ci   = base + b;
-                const size_t cbas = ci * ELEMS_PER_CHUNK;
-                const size_t n    = std::min(ELEMS_PER_CHUNK, d.n - cbas);
-                R* sb = (R*)malloc(std::max<size_t>(1, n) * sizeof(R));
-                CHECK(sb != nullptr) << "delayed::filter: allocation failed";
-                auto it = d.make_iter(cbas, n, ci);
-                size_t s = 0;
-                for (size_t j = 0; j < n; j++) { R v = *it; ++it; if (pred(v)) sb[s++] = v; }
-                surv[b] = sb; scount[b] = s;
-            }, 1);
-        }
+        parlay::parallel_for(0, w, [&](size_t b) {
+            auto it = build_chunk(b);
+            const size_t n = d.chunk_len(base + b);
+            R* sb = (R*)malloc(std::max<size_t>(1, n) * sizeof(R));
+            CHECK(sb != nullptr) << "delayed::filter: allocation failed";
+            size_t s = 0;
+            for (size_t j = 0; j < n; j++) { R v = *it; ++it; if (pred(v)) sb[s++] = v; }
+            surv[b] = sb; scount[b] = s;
+        }, 1);
 
         // Prefix sums: offset[b] = absolute position of chunk b's first survivor.
-        std::vector<size_t> offset(batch_n + 1);
+        std::vector<size_t> offset(w + 1);
         offset[0] = carry.size();
-        for (size_t b = 0; b < batch_n; b++) offset[b + 1] = offset[b] + scount[b];
-        const size_t total         = offset[batch_n];
+        for (size_t b = 0; b < w; b++) offset[b + 1] = offset[b] + scount[b];
+        const size_t total         = offset[w];
         const size_t num_out       = total / epct;
         const size_t new_carry_cnt = total % epct;
 
@@ -449,7 +699,7 @@ chunk_seq filter(const D& d, const std::string& result_prefix, Pred pred) {
             memcpy(obuf[0], carry.data(), carry.size() * sizeof(R));
 
         // Parallel scatter (non-overlapping ranges by construction).
-        parlay::parallel_for(0, batch_n, [&](size_t b) {
+        parlay::parallel_for(0, w, [&](size_t b) {
             if (scount[b] == 0) return;
             const R* src = surv[b];
             size_t pos = offset[b], rem = scount[b], src_o = 0;
@@ -462,7 +712,7 @@ chunk_seq filter(const D& d, const std::string& result_prefix, Pred pred) {
             }
         }, 1);
 
-        for (size_t b = 0; b < batch_n; b++) free(surv[b]);
+        for (size_t b = 0; b < w; b++) free(surv[b]);
 
         // Push full output chunks with balls-in-bins drive assignment.
         for (size_t k = 0; k < num_out; k++) {
@@ -478,7 +728,7 @@ chunk_seq filter(const D& d, const std::string& result_prefix, Pred pred) {
             memcpy(carry.data(), obuf[num_out], new_carry_cnt * sizeof(R));
             free(obuf[num_out]);
         }
-    }
+    });
 
     // Flush the final partial chunk.
     if (!carry.empty()) {

@@ -1,0 +1,50 @@
+# clangd / LSP configuration for external-chunk-seq
+# ---------------------------------------------------------------------------
+# Mirrors the compile flags in the Makefile (CXXFLAGS + INCLUDES) so that an
+# LSP such as clangd (neovim, VS Code, …) resolves this repo's headers, the
+# fetched dependencies under deps/, and the Nix-provided liburing without a
+# compile_commands.json.  Applies to every translation unit *and* header,
+# which is what a header-heavy library needs.
+#
+# Regenerate the machine-specific paths below (liburing, Compiler) after a
+# `nix-store --gc` or a toolchain bump — they are absolute on purpose so the
+# config does not depend on clangd's working directory.
+#
+# NixOS note: clangd cannot find libstdc++/glibc headers on its own here (the
+# toolchain lives in /nix/store).  `Compiler:` names the g++ driver so clangd
+# can extract the system include paths from it — but clangd only queries a
+# driver you have allow-listed.  Launch clangd with, e.g.:
+#
+#   clangd --query-driver=/etc/profiles/per-user/peter/bin/g++,/nix/store/*gcc*/bin/*g++
+#
+# In neovim/lspconfig:
+#   require('lspconfig').clangd.setup{
+#     cmd = { 'clangd',
+#       '--query-driver=/etc/profiles/per-user/peter/bin/g++,/nix/store/*gcc*/bin/*g++',
+#       '--background-index', '--clang-tidy' },
+#   }
+
+CompileFlags:
+  # Drive clangd's system-include discovery through the same g++ the Makefile
+  # uses (a Nix GCC 15.2.0).  Requires a matching --query-driver (see header).
+  Compiler: /etc/profiles/per-user/peter/bin/g++
+  Add:
+    - -xc++
+    - -std=c++17
+    - -Wall
+    # Repo root: local headers resolve as "ChunkSequence/…", "utils/…",
+    # "configs.h" (Makefile: -I.).
+    - -I/home/peter/Programming/reu-caar/plaidlaylib
+    # Fetched deps (Makefile: -Ideps -Ideps/parlaylib
+    # -Ideps/abseil-cpp/install/include).  -Ideps also lets the upstream
+    # example headers resolve as "parlaylib-examples/<name>.h".
+    - -I/home/peter/Programming/reu-caar/plaidlaylib/deps
+    - -I/home/peter/Programming/reu-caar/plaidlaylib/deps/parlaylib
+    - -I/home/peter/Programming/reu-caar/plaidlaylib/deps/abseil-cpp/install/include
+    # liburing (Nix-provided; not on any default search path, so the Makefile
+    # globs it out of /nix/store — this is that path resolved).
+    - -I/nix/store/lb93v0qrjhz1qvybmw5f3m8y5zk95c5f-liburing-2.14-dev/include
+
+Diagnostics:
+  UnusedIncludes: None
+  MissingIncludes: None
