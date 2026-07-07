@@ -75,6 +75,11 @@ static uint64_t key_at(size_t i) { return parlay::hash64(i); }
 
 int main(int argc, char* argv[]) {
     ParseGlobalArguments(argc, argv);
+    // The parallel recursive sort fans out one io_uring instance + one open file
+    // per drive for every concurrent reader/writer, which blows past the common
+    // 1024 soft fd limit (io_uring_queue_init then fails with EMFILE).  Lift the
+    // soft limit to the hard limit before any I/O starts.
+    RaiseFdLimit();
     const size_t n = (argc > 1) ? std::stoull(argv[1]) : 1'000'000;
     CHECK(n > 0) << "need n > 0 (n=" << n << ")";
 

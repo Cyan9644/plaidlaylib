@@ -7,8 +7,27 @@
 
 #include <vector>
 #include <string>
+#include <sys/resource.h>
 #include "utils/file_info.h"
 #include "configs.h"
+
+// Raise the process's soft open-file limit (RLIMIT_NOFILE) up to its hard limit.
+//
+// This library opens one file per drive AND one io_uring instance (each of which
+// costs a file descriptor) per worker thread, for every reader and writer.
+// Primitives that fan out concurrent readers/writers -- notably the parallel
+// recursive sorts (sample_sort's per-bucket parallel_for, primitive_quicksort's
+// par_do) -- can therefore need thousands of descriptors at once, far past the
+// common 1024 default soft limit, at which point io_uring_queue_init fails with
+// EMFILE.  Bumping the soft limit to the hard limit needs no privilege; call it
+// once at program start.  Returns the new soft limit (0 on failure).
+inline size_t RaiseFdLimit() {
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_NOFILE, &rl) != 0) return 0;
+    rl.rlim_cur = rl.rlim_max;
+    if (setrlimit(RLIMIT_NOFILE, &rl) != 0) return 0;
+    return (size_t)rl.rlim_cur;
+}
 
 std::vector<FileInfo> FindFiles(const std::string &prefix, bool parallel = false);
 
