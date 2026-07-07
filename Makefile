@@ -174,6 +174,9 @@ $(BINDIR)/rabinKarpTest: ChunkSequence/tests/rabin_karp_test.cpp $(UTIL_OBJS)
 $(BINDIR)/scalarTest: ChunkSequence/tests/scalar_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
+$(BINDIR)/tempMain: ChunkSequence/examples/temp_main.cpp $(UTIL_OBJS)
+	$(LINK)
+
 # ── examples ───────────────────────────────────────────────────────────────────
 
 # Build every example.  Each example lives in ChunkSequence/examples/<name>.cpp
