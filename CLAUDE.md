@@ -70,7 +70,7 @@ ChunkSequence/
   chunk_filter.h              ChunkFilter     (thin producer on DensePack)
   chunk_flat_tabulate.h       ChunkFlatTabulate (thin producer on DensePack)
   chunk_find_if.h             ChunkFindIf     (fold on RemoveWorker)
-  chunk_delayed.h             delayed (fused) map/reduce/scan/filter/tabulate — untouched
+  chunk_delayed.h             delayed (fused) recursive-node layer: delay/tabulate/map/scan/zip + reduce/force/filter
   tests/                      correctness tests (→ permTest … findIfTest)
   examples/                   demonstration programs (→ primesExample …); dual-purpose
     primes.cpp                out-of-core prime sieve on ChunkFlatTabulate
@@ -252,15 +252,80 @@ storage uses a small-buffer optimization (e.g. `parlay::sequence`).
 
 A port of parlaylib's block-iterable-delayed design (namespace
 `ChunkSequenceOps::delayed`) that fuses an operation chain so intermediates never
-touch disk.  Left **unchanged** from `chunk-sequence`; it already routes through
-the standardized reader/writer and keeps its own tuned drive.
+touch disk.  For `reduce(map(map(delay(seq),f),g),m)` the eager path moves
+3n reads + 2n writes; the delayed path moves 1n reads and 0 writes.
 
 ```cpp
 namespace d = ChunkSequenceOps::delayed;
-auto m           = d::map(d::delay(seq), f);        // lazy; composes with no I/O
-uint64_t r       = d::reduce(m, monoid);            // one read pass, zero writes
-chunk_seq out    = d::force(m, "out_prefix");       // materialize to SSD
+auto  m       = d::map(d::delay(seq), f);          // lazy; composes with no I/O
+uint64_t r    = d::reduce(m, monoid);              // one read pass, zero writes
+auto [s, tot] = d::scan(m, monoid);                // partially delayed; {seq, total}
+chunk_seq z   = d::force(d::zip(d::delay(a), d::delay(b), pad), "out");
 ```
+
+### The node model
+
+A delayed sequence is a **recursive tree of value-type nodes**, each templated
+(no `std::function`) so the fused chain inlines.  Every node exposes:
+
+- `length()` / `num_chunks()` / `chunk_len(i)` — sizing over the `ELEMS_PER_CHUNK`
+  grid.
+- `plan(i, planner)` — register the physical reads logical chunk `i` needs
+  (leaves call `planner.need(src, chunks[i])`; internal nodes forward to children
+  left-to-right).
+- `build(i, resolver)` — construct the fused forward-iterator for chunk `i`,
+  pulling each leaf's buffer from `resolver.next()` in the same order `plan`
+  registered them (the positional match is the core invariant; `build` must visit
+  children in `plan`'s order).
+
+Node kinds and the combinators that build them:
+
+| node | from | plan | build |
+|---|---|---|---|
+| `leaf_source<T>` | `delay(seq)` | one read `chunks[i]` | pointer into that buffer |
+| `leaf_index<F>` | `tabulate(n,f)` | none (generated) | counting iterator over `f` |
+| `map_node` | `map(d,g)` | forward to child | wrap child in `map_iter` |
+| `scan_node` | `scan(d,m)` | forward to child | seed `scan_iter` with the chunk's offset |
+| `zip_node` | `zip(a,b[,pad])` | union of both children | pad each child, `zip_iter` → `std::pair` |
+
+Because `plan`/`build` just recurse, **zip composes arbitrarily**:
+`zip(zip(A,B),C)` (N-ary via nesting), `zip(A, map(B))`, and
+`zip(A, scan(map(zip(A,B),f)))` (the out-of-core carry-lookahead **big-integer
+add** shape) all work.  `zip(a,b)` requires equal length; `zip(a,b,pad)` pads the
+shorter side with a runtime fill value.  Padding lives in `zip_node`: it wraps
+each child in a `pad_iter` to that child's real element count for the chunk, so a
+shorter operand emits `pad` past its end and a child with no chunk at `i`
+contributes no read.
+
+### Drivers and terminals
+
+Two drivers execute a tree; both plan each chunk with a `Planner` that **dedups
+reads by source** — a `chunk_seq` appearing in several leaves of one chunk (e.g.
+A,B in both `zip(A,B)` and a scan of it) is read once, not per occurrence:
+
+- **`for_each_chunk`** (streaming; used by `reduce`, `scan` pass-1, `force`):
+  **one** long-lived `ChunkSequenceReader` for the whole pass, a dispatcher
+  thread that assembles chunks from the reader's out-of-order completions and
+  releases each to a parlay worker the instant its reads land — reads and compute
+  overlap continuously, no window barrier.  `body` must be chunk-disjoint /
+  order-independent (true for reduce and force).  (An earlier windowed driver
+  re-created a reader per 128-chunk window; that ~40 ms/window setup cost is why
+  this path streams instead.)
+- **`for_each_window`** (collect a `FILTER_BATCH_SIZE` window, then compute; used
+  by `filter`): needed because filter's dense-packing carry threads sequentially
+  in index order and cannot consume chunks out of order.
+
+`scan` is partially delayed: pass 1 (a streaming read pass) computes per-chunk
+offsets + total; pass 2 is a lazy `scan_node`.  `force` writes one file per drive
+(balls-in-bins) and returns an index-ordered `chunk_seq`.
+
+### Constraints
+
+- **≤8-byte on-disk elements**: the chunk grid assumes 8-byte elements, so
+  `force`/`filter` `static_assert` `sizeof(R) ≤ 8`.  `zip`'s `std::pair` elements
+  are transient inside the fused pass; map them to a scalar before `force`.
+- **Lifetime**: every source `chunk_seq` (both operands of a zip) must outlive
+  every terminal call on a sequence derived from it.
 
 ## Notes / known trade-offs
 
