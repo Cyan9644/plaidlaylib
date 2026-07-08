@@ -220,6 +220,15 @@ $(BINDIR)/chunkSizeCompare_%: benchmarks/chunk_size_compare.cpp $(UTIL_OBJS)
 	$(CXX) $(CXXFLAGS) -DCHUNK_SIZE_BYTES=$* $(INCLUDES) $^ -o $@ \
 	    $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
+# One-off exploratory benchmarks (old vs new delayed-filter windowing; zip
+# chain depth scaling). Deliberately NOT part of TEST_BINARIES/EXAMPLE_BINARIES
+# or the bench/bench-full recipes — build and run manually, same as bin/tempMain.
+$(BINDIR)/filterCompare: benchmarks/filter_compare.cpp $(UTIL_OBJS)
+	$(LINK)
+
+$(BINDIR)/zipDepthCompare: benchmarks/zip_depth_compare.cpp $(UTIL_OBJS)
+	$(LINK)
+
 # Run both benchmark sweeps and write timestamped images + CSVs under results/.
 # The Python driver builds each binary via make, runs the sweep, and plots.
 # Override the sweep via env, e.g. `make bench BENCH_CHUNK_SIZES="2097152 8388608"`.
