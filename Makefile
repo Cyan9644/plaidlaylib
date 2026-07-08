@@ -45,11 +45,8 @@ TEST_BINARIES := $(BINDIR)/permTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/rabin_karpExample $(BINDIR)/kth_smallestExample \
-
-                    $(BINDIR)/external_samplesortExample $(BINDIR)/external_linefitExample
-
-                    $(BINDIR)/external_samplesortExample $(BINDIR)/bigint_addExample
-
+                    $(BINDIR)/external_samplesortExample $(BINDIR)/external_linefitExample \
+                    $(BINDIR)/bigint_addExample
 
 LINK = $(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
