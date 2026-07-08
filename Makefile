@@ -240,12 +240,12 @@ bench-full:
 # from `bench`/`bench-full` (examples are heterogeneous and some are expensive).
 # `bench-examples` uses small dev-box (tmpfs) defaults.
 bench-examples:
-	python3 benchmarks/run_benches.py --examples --outdir results
+	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add" --outdir results
 
 # Full-scale examples sweep tuned for the benchmark machine (500 GiB RAM, 30x 1TB
 # SSDs): sieve range 2^32 .. 2^40.  Multi-TB of I/O — not for a tmpfs dev box.
 bench-examples-full:
-	python3 benchmarks/run_benches.py --examples --outdir results \
+	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add" --outdir results \
 	    --example-n-values "2^32 2^34 2^36 2^38 2^40"
 
 # ── cleanup ────────────────────────────────────────────────────────────────────

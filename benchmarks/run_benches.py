@@ -67,6 +67,30 @@ DEFAULT_FSTRIM_GLOB = "/mnt/ssd*"
 # drives (cleared between sweep points).  Add a new example by appending one
 # entry (and, if it lives in examples/external/, an explicit Makefile rule).
 EXAMPLES = [
+    {"name": "primes", "target": "bin/primesExample",
+     "cols": ["n", "time_s", "inmem_time_s", "count", "throughput_gb_s"],
+     "inmem_col": "inmem_time_s",
+     "xlabel": "n (sieve range)",
+     "title": "Prime sieve: out-of-core (ChunkFlatTabulate) vs in-mem parlaylib",
+     "data_globs": ["primes[0-9]*"]},
+    # kmpExample sweeps n with the pattern length m at its constant built-in
+    # default; the plotted time is the search pass only (text build excluded).
+    {"name": "kmp", "target": "bin/kmpExample",
+     "cols": ["n", "m", "build_s", "search_s", "inmem_search_s", "count",
+              "throughput_gb_s"],
+     "time_col": "search_s", "inmem_col": "inmem_search_s",
+     "xlabel": "n (text length, chars)",
+     "title": "KMP search: out-of-core (ChunkKmp) vs in-mem parlaylib",
+     "data_globs": ["kmp_*"]},
+    # rabin_karpExample: same driver shape as kmp (constant m, sweep n),
+    # rolling-hash search instead of the KMP automaton.
+    {"name": "rabin_karp", "target": "bin/rabin_karpExample",
+     "cols": ["n", "m", "build_s", "search_s", "inmem_search_s", "count",
+              "throughput_gb_s"],
+     "time_col": "search_s", "inmem_col": "inmem_search_s",
+     "xlabel": "n (text length, chars)",
+     "title": "Rabin-Karp search: out-of-core (ChunkRabinKarp) vs in-mem parlaylib",
+     "data_globs": ["rk_*"]},
     # kth_smallestExample sweeps n with k at the median (n/2); the plotted time
     # is the selection pass only (input build excluded).  Its recursion leaves
     # id_/flags_/next_ intermediates in addition to the kth_in input.
