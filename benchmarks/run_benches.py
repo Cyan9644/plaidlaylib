@@ -347,8 +347,7 @@ def run_chunk_size(chunk_sizes, n, extra_args, clear_glob, clear_enabled):
 
 
 # ── examples sweep ──────────────────────────────────────────────────────────
-def run_example(entry, n_values, extra_args, clear_glob, clear_enabled, warnings,
-                reps=1):
+def run_example(entry, n_values, extra_args, clear_glob, clear_enabled, warnings):
     """Sweep one example over n_values; return parsed rows.
 
     Correctness is checked inside the binary: when the in-memory parlaylib
@@ -359,55 +358,27 @@ def run_example(entry, n_values, extra_args, clear_glob, clear_enabled, warnings
     is appended to `warnings` (echoed again at the end of the run) and the
     sweep continues — a crashed point that printed no CSV line is dropped.
 
-    Each point is run `reps` times and the *fastest* run is kept (min of the
-    plotted `time_col`, and independently the min of the in-mem `inmem_col`).
-    On a shared substrate the single-shot timing is dominated by cross-process
-    contention noise — writeback of the just-built input, page-cache reclaim
-    from the in-mem baseline's multi-GB allocation, other points' cleanup — so
-    a lone sample is often larger than the true op cost and, worse, its ordering
-    across sweep points is random (a point that happened to run while the disk
-    was busy looks slower than a larger one that ran while it was idle).  Taking
-    the min across reps rejects those upward spikes and restores a monotonic
-    curve.  Each rep re-runs the whole binary (input build included) so no
-    assumption is made about the op being re-runnable on an already-consumed
-    input; the drives are cleared between reps too.  reps>1 therefore multiplies
-    the build I/O — for the multi-TB `-full` sweeps, lower it (e.g. --reps 1).
+    Each point is run once: the binaries do real disk writes, so repeating a
+    point to keep the fastest sample would multiply the write endurance cost for
+    a modest noise win.  Instead the timed operation is isolated from its main
+    noise source in-binary (a sync()+settle between the input build and the op,
+    so the build's writeback doesn't inflate the op timer — see quiesce_drives()
+    in each example).
     """
     make(entry["target"])
     binary = os.path.join(BINDIR, os.path.basename(entry["target"]))
-    tcol, icol = entry["time_col"], entry["inmem_col"]
     rows = []
     for n in n_values:
-        print(f"\n=== example {entry['name']}: n={n} ({reps} rep(s), keep fastest) ===",
-              flush=True)
-        best = None            # row (dict) with the smallest tcol seen so far
-        best_inmem = None      # smallest non-blank icol across reps (float)
-        for rep in range(reps):
-            if reps > 1:
-                print(f"  -- rep {rep + 1}/{reps} --", flush=True)
-            fields, problem = run_binary(binary, [n] + extra_args, fatal=False)
-            if problem:
-                w = (f"example {entry['name']} at n={n} rep {rep + 1}/{reps}: "
-                     f"{problem}" + ("" if fields else " — rep dropped"))
-                print(f"  !!! {w}", flush=True)
-                warnings.append(w)
-            if fields:
-                row = dict(zip(entry["cols"], fields))
-                t = _f(row.get(tcol, ""))
-                if t is not None and (best is None
-                                      or t < _f(best[tcol])):
-                    best = row
-                im = _f(row.get(icol, ""))
-                if im is not None and (best_inmem is None or im < best_inmem):
-                    best_inmem = im
-            clear_bench_data(clear_glob, clear_enabled)   # clean between reps too
-        if best is not None:
-            if best_inmem is not None:              # keep the fastest in-mem sample
-                best[icol] = repr(best_inmem)
-            rows.append(best)
-        else:
-            print(f"  !!! example {entry['name']} at n={n}: all {reps} rep(s) "
-                  f"failed — point dropped", flush=True)
+        print(f"\n=== example {entry['name']}: n={n} ===", flush=True)
+        fields, problem = run_binary(binary, [n] + extra_args, fatal=False)
+        if problem:
+            w = (f"example {entry['name']} at n={n}: {problem}"
+                 + ("" if fields else " — point dropped"))
+            print(f"  !!! {w}", flush=True)
+            warnings.append(w)
+        if fields:
+            rows.append(dict(zip(entry["cols"], fields)))
+        clear_bench_data(clear_glob, clear_enabled)   # don't leave output on the drives
     return rows
 
 
@@ -578,12 +549,6 @@ def main():
                     help="examples n sweep (space-separated, e.g. '2^24 2^28 2^30')")
     ap.add_argument("--ssd-args", default=os.environ.get("BENCH_SSD_ARGS", ""),
                     help="extra global flags passed to each binary (e.g. '--num_ssd=4')")
-    ap.add_argument("--reps", type=int,
-                    default=int(os.environ.get("BENCH_EXAMPLE_REPS", "3")),
-                    help="examples sweep: runs per point, keep the fastest "
-                         "(default: 3; rejects contention spikes on a shared "
-                         "substrate).  Multiplies build I/O — set 1 for the "
-                         "multi-TB -full sweeps if that cost matters.")
     ap.add_argument("--fstrim-glob",
                     default=os.environ.get("BENCH_FSTRIM_GLOB", DEFAULT_FSTRIM_GLOB),
                     help="glob of mounts to fstrim once at startup (default: /mnt/ssd*)")
@@ -645,8 +610,7 @@ def main():
         for entry in examples_to_run:
             print(f"\n######## example: {entry['name']} ########")
             rows = run_example(entry, example_n_values, extra,
-                               args.fstrim_glob, clear_enabled, warnings,
-                               reps=max(1, args.reps))
+                               args.fstrim_glob, clear_enabled, warnings)
             write_csv(os.path.join(outdir, f"{entry['name']}_scale.csv"),
                       entry["cols"], rows)
             plot_example(rows, entry, os.path.join(outdir, f"{entry['name']}_scale.png"))
