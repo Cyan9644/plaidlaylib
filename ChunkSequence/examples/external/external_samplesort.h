@@ -18,7 +18,7 @@
 #include "ChunkSequence/ExternalPrimitives/flatten.h"
 #include "ChunkSequence/examples/external/primitive_quicksort.h"
 
-#define DRAM_SIZE 1024 * 1024 * 1024 * 500 //==500 GB
+#define DRAM_SIZE ((size_t)500 * 1024 * 1024 * 1024) //==500 GB
 
 
 namespace ChunkSequenceOps{
