@@ -42,6 +42,7 @@
 #include <sstream>
 #include <string>
 #include <unistd.h>
+#include <thread>
 
 #include "absl/log/check.h"
 
@@ -60,6 +61,17 @@
 using Clock = std::chrono::steady_clock;
 static double elapsed(Clock::time_point t0) {
     return std::chrono::duration<double>(Clock::now() - t0).count();
+}
+
+// Quiesce the drives between the input build and the timed operation: flush the
+// build's just-written dirty pages and let the devices settle, so its still-
+// draining writeback doesn't queue behind (and inflate) the operation's own I/O.
+// Called outside every timed region, so its cost never enters a measurement --
+// it isolates the op timer from the build, the biggest source of run-to-run
+// timing noise on a shared substrate.
+static void quiesce_drives() {
+    sync();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
 }
 static double to_gb(size_t bytes) { return (double)bytes / (1024.0 * 1024.0 * 1024.0); }
 
@@ -95,6 +107,7 @@ int main(int argc, char* argv[]) {
     const double build_s = elapsed(t0);
     std::cout << " done (" << std::fixed << std::setprecision(4) << build_s
               << "s)\n";
+    quiesce_drives();   // isolate the op timer from the build's writeback
 
     std::cout << "Selecting k=" << k << " (0-based) of " << n << "..." << std::flush;
     t0 = Clock::now();
