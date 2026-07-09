@@ -18,6 +18,8 @@
 #include "ChunkSequence/ExternalPrimitives/flatten.h"
 #include "ChunkSequence/examples/external/primitive_quicksort.h"
 
+#define DRAM_SIZE 1024 * 1024 * 1024 * 500 //==500 GB
+
 
 namespace ChunkSequenceOps{
 template <typename T, typename Less = std::less<>>
@@ -29,8 +31,12 @@ size_t n = 0;
 n+= seq.chunks[r].used;
   }
   n/=sizeof(T);
+
+  size_t min_sample_size = std::max(1UL, 4 * parlay::num_workers() * n*sizeof(T)/ DRAM_SIZE);
+size_t max_sample_size = std::max(1UL, std::min(n / sizeof(T), n / O_DIRECT_MULTIPLE));
+  auto num_samples = std::max(std::min(n / (1UL << 27), max_sample_size), min_sample_size);
   
-  if (n < (2 << 12)){
+  if (n < num_samples){
     //we're likely going to want a fast quicksort method that takes better advantage of our 
     //memory representation than just external->materialize->sort->external
     //but this clearly should work so we'll go with it for now, also any external quicksort would need to materialize everything anyway
@@ -181,7 +187,11 @@ n+= seq.chunks[r].used;
   }
   n/=sizeof(T);
 
-  if (n < (2 << 12)){
+  size_t min_sample_size = std::max(1UL, 4 * parlay::num_workers() * n*sizeof(T)/ DRAM_SIZE);
+size_t max_sample_size = std::max(1UL, std::min(n / sizeof(T), n / O_DIRECT_MULTIPLE));
+  auto num_samples = std::max(std::min(n / (1UL << 27), max_sample_size), min_sample_size);
+
+  if (n < num_samples){
     //we're likely going to want a fast quicksort method that takes better advantage of our
     //memory representation than just external->materialize->sort->external
     //but this clearly should work so we'll go with it for now, also any external quicksort would need to materialize everything anyway
@@ -199,7 +209,7 @@ n+= seq.chunks[r].used;
 
   }
 
-  int sample_size = 31;
+  int sample_size = num_samples;
   int over = 8;
   parlay::random_generator gen;
   std::uniform_int_distribution<long> dis(0, n-1);
