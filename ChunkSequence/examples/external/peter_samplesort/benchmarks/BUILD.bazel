@@ -1,0 +1,39 @@
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "io_benchmarks",
+    srcs = ["io_benchmarks.cpp"],
+    hdrs = ["io_benchmarks.h"],
+    deps = [
+        "//utils:command_line",
+        "//utils:io_utils",
+        "//utils:random_read",
+        "@com_google_absl//absl/log",
+        "@parlaylib//parlay:primitives",
+    ],
+)
+
+cc_library(
+    name = "in_memory_benchmarks",
+    srcs = ["in_memory_benchmarks.cpp"],
+    hdrs = ["in_memory_benchmarks.h"],
+    deps = [
+        "//utils:command_line",
+        "//utils:random_number_generator",
+        "@com_google_absl//absl/log:check",
+        "@parlaylib//parlay:primitives",
+    ],
+)
+
+cc_library(
+    name = "distribution_benchmarks",
+    srcs = ["distribution_benchmarks.cpp"],
+    hdrs = ["distribution_benchmarks.h"],
+    deps = [
+        "//scatter_gather_algorithms:scatter_gather",
+        "//utils:command_line",
+        "//utils:random_number_generator",
+        "@com_google_absl//absl/log:check",
+        "@parlaylib//parlay:primitives",
+    ],
+)

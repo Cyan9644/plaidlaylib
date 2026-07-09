@@ -112,6 +112,25 @@ EXAMPLES = [
      "title": "sample sort: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*"]},
 
+    # external_samplesort_vs_peterExample sweeps n and times BOTH out-of-core
+    # sorts on the identical key multiset: ours (ChunkSequenceOps::sample_sort)
+    # and Peter's (peter_samplesort/, via peter_shim).  Unlike the other
+    # examples the "baseline" series is not in-memory — both series are disk
+    # sorts and plot across the whole sweep (no RAM cliff).  Intermediates: our
+    # ss_* recursion files plus Peter's pss_in/pss_out inputs+outputs and his
+    # hard-coded spfx_ intermediate buckets.
+    {"name": "external_samplesort_vs_peter",
+     "target": "bin/external_samplesort_vs_peterExample",
+     "cols": ["n", "ext_build_s", "ext_sort_s", "peter_build_s", "peter_sort_s",
+              "ext_gb_s", "peter_gb_s"],
+     "time_col": "ext_sort_s", "inmem_col": "peter_sort_s",
+     "series_labels": ("Peter's sort (out-of-core)", "our sort (out-of-core)"),
+     "no_ram_cliff": True,
+     "xlabel": "n (number of keys)",
+     "title": "sample sort: ours (ChunkSequenceOps) vs Peter's — both out-of-core",
+     "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*",
+                    "pss_in*", "pss_out*", "spfx_*"]},
+
     # fitmem_kth_smallestExample: same driver shape as kth_smallest, but the
     # single-level "fitmem" variant (one bucketing round, then select the winning
     # bucket in DRAM).  Its intermediates are fk_id_/fk_next_ alongside fk_in.
@@ -510,13 +529,19 @@ def plot_example(rows, entry, path):
     import matplotlib.pyplot as plt
 
     xs = [int(r["n"]) for r in rows]
+    # Default: out-of-core chunk impl vs in-memory parlaylib baseline (which
+    # stops at the RAM cliff).  An entry may override the two series labels and
+    # suppress the RAM-cliff note when the "baseline" series is itself
+    # out-of-core (e.g. external_samplesort_vs_peter compares two disk sorts).
+    base_label, cmp_label = entry.get(
+        "series_labels", ("in-mem parlaylib (DRAM)", "out-of-core (chunk)"))
+    subtitle = "" if entry.get("no_ram_cliff") else \
+        "\n(in-mem line stops where the input exceeds the RAM budget)"
     fig, ax = plt.subplots(figsize=(7, 5.5), constrained_layout=True)
     _draw_panel(ax, xs, [
-        ("in-mem parlaylib (DRAM)", _series(rows, entry["inmem_col"]), "o-"),
-        ("out-of-core (chunk)", _series(rows, entry.get("time_col", "time_s")), "s-"),
-    ], entry["xlabel"],
-       entry["title"] + "\n(in-mem line stops where the input exceeds the RAM budget)",
-       xfmt=_pow2_fmt)
+        (base_label, _series(rows, entry["inmem_col"]), "o-"),
+        (cmp_label, _series(rows, entry.get("time_col", "time_s")), "s-"),
+    ], entry["xlabel"], entry["title"] + subtitle, xfmt=_pow2_fmt)
     fig.savefig(path, dpi=150)
     plt.close(fig)
     print(f"  wrote {path}", flush=True)

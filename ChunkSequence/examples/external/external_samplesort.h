@@ -14,7 +14,7 @@
 #include "ChunkSequence/ExternalPrimitives/materialize.h"
 #include "ChunkSequence/chunk_pack.h"
 #include "ChunkSequence/ExternalPrimitives/scan_find.h"
-#include "ChunkSequence/ExternalPrimitives/chunk_count_sort2.h"
+#include "ChunkSequence/ExternalPrimitives/chunk_count_sort.h"
 #include "ChunkSequence/ExternalPrimitives/flatten.h"
 #include "ChunkSequence/examples/external/primitive_quicksort.h"
 
@@ -167,129 +167,5 @@ return ChunkSequenceOps::flatten(externalSequenceVector);
 
 
 
-
-
-// Delayed variant of sample_sort: identical sampling, heap_tree bucketing, and
-// per-bucket recursion, but the per-element bucket id is computed on the fly
-// inside the counting sort (chunk_count_sort_by_key) instead of being
-// materialized to disk as a size_t id chunk_seq via ChunkMap and then re-read.
-// Fusing the map into the partition pass drops the top level's data movement
-// from ~3 reads + 2 writes (ChunkMap read+write, then count_sort2 re-reading
-// both the values and the id sequence and writing the partition) to a single
-// read + single write.  Everything else is unchanged.
-template <typename T, typename Less = std::less<>>
-chunk_seq sample_sort_delayed(chunk_seq& seq, Less less1 = {}) {
-static std::atomic<size_t> ss_counter{0};
-const std::string tag = std::to_string(ss_counter++);
-size_t n = 0;
-  for(size_t r = 0; r < seq.chunks.size(); r++){
-n+= seq.chunks[r].used;
-  }
-  n/=sizeof(T);
-
-  size_t min_sample_size = std::max(1UL, 4 * parlay::num_workers() * n*sizeof(T)/ DRAM_SIZE);
-size_t max_sample_size = std::max(1UL, std::min(n / sizeof(T), n / O_DIRECT_MULTIPLE));
-  auto num_samples = std::max(std::min(n / (1UL << 27), max_sample_size), min_sample_size);
-
-  if (n < num_samples){
-    //we're likely going to want a fast quicksort method that takes better advantage of our
-    //memory representation than just external->materialize->sort->external
-    //but this clearly should work so we'll go with it for now, also any external quicksort would need to materialize everything anyway
-    //but could overlap the I/O with computation.
-
-    auto i = ChunkSequenceOps::materialize<T>(seq); //it would be good to make this materialize into a parlay sequence (now done)
-
-    // std::sort(i.begin(), i.end(), less1);
-    // i = parlay::sort(i);
-    parlay::sort_inplace(i);
-    //this is going to be really slow if we just materialize and write back, probably the best thing to do is to pass a parlay sequence
-    //at the recurring call based on the size, but this is kind of messy
-    //the easiest way to fix the problem is to just make materialize faster by parallelizing it
-    return ChunkSequenceOps::to_chunk_seq(i, "ss_base_" + tag);
-
-  }
-
-  int sample_size = num_samples;
-  int over = 8;
-  parlay::random_generator gen;
-  std::uniform_int_distribution<long> dis(0, n-1);
-
-    auto less2 = [&](std::pair<size_t, T> i, std::pair<size_t, T> j){
-        return less1(i.second, j.second);
-    };
-    parlay::sequence<std::pair<size_t, T>> pivots(sample_size * over);
-    parlay::parallel_for(0, sample_size * over, [&](long o){
-        auto temp = gen[o];
-        pivots[o].first = dis(temp);
-
-    });
-
-
-    parlay::sequence<size_t> scan_seq(seq.chunks.size());
-    scan_size<T>(seq, scan_seq);
-
-    parlay::parallel_for(0, sample_size * over, [&](size_t count){
-
-        pivots[count].second = scan_find<T>(seq, scan_seq, pivots[count].first);
-    });
-
-
-    pivots = parlay::sort(pivots, less2);
-    pivots = parlay::tabulate(sample_size,[&] (long i)
-    {
-        return pivots[i*over];
-    });
-    auto num_buckets = sample_size + 1;
-
-
-auto seconds = parlay::map(pivots, [](const auto& p){ return p.second; });
-  parlay::internal::heap_tree ss(seconds);
-
-// Fused map + counting sort: chunk_count_sort_by_key streams seq once, deriving
-// each value's bucket via ss.rank inline, so no id chunk_seq is written or
-// re-read (the ChunkMap<T,size_t> + chunk_count_sort2 pair the eager path uses).
-std::vector<chunk_seq> externalSequenceVector(num_buckets);
-ChunkSequenceOps::chunk_count_sort_by_key<T>(seq, (size_t)num_buckets,
-    externalSequenceVector,
-    [&](T e){ return ss.rank(e, less1); }, "ss_bucket_" + tag);
-
-//it should now be the case that externalSequenceVector is a full vector of the individual external sequences
-//in this case we just need a simple flatten to put all the chunk headers into a single list
-//because each individual sequence should be sorted and they're in order,
-//we'll get a total sorted ordering
-parlay::parallel_for(0, num_buckets, [&](long i){
-
-    size_t z = 0;
-    for (const auto& c :externalSequenceVector[i].chunks){
-        z += c.used / sizeof(T);
-    }
-    if (z ==n) {
-        //if we're not going to get anything from the partition, i.e. we have an empty partition
-        auto v = ChunkSequenceOps::materialize<T>(externalSequenceVector[i]);
-        std::sort(v.begin(), v.end(), less1);
-        externalSequenceVector[i] = ChunkSequenceOps::to_chunk_seq(
-            v, "ss_deg_" + tag + "_" + std::to_string(i));
-        return;
-    }
-
-    //recurring on this samplesort chain is pretty expensive due to the buffer allocation
-    //we might consider just an external quicksort for this level, as it would use much less memory.
-    //probably multiple levels of parallelism won't help much regardless since we need to do reads
-    //for the pivots = large overhead on recurring calls
-
-    //so instead we're going to call the external quicksort method, which we actually have a method for now but it's
-    //implemented using primitives.
-    //to get the best performance out of this example, we're going to want to implement it manually with a reader/writer
-    externalSequenceVector[i] = primitive_quicksort<T>(externalSequenceVector[i], less1);
-
-
-});
-
-return ChunkSequenceOps::flatten(externalSequenceVector);
-}
-
-
-
-}
 
 #endif

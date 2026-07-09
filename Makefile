@@ -47,7 +47,17 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/rabin_karpExample $(BINDIR)/kth_smallestExample \
                     $(BINDIR)/external_samplesortExample $(BINDIR)/external_linefitExample \
                     $(BINDIR)/fitmem_sortExample $(BINDIR)/fitmem_kth_smallestExample \
-                    $(BINDIR)/bigint_addExample $(BINDIR)/chunk_cutExample
+                    $(BINDIR)/bigint_addExample $(BINDIR)/chunk_cutExample \
+                    $(BINDIR)/external_samplesort_vs_peterExample
+
+# Peter's external sample sort (the second contestant in the
+# external_samplesort_vs_peter comparison) ships its own configs.h /
+# utils/file_utils.h that clash by include guard with the main repo's, so it is
+# isolated in one shim TU compiled with its own directory first on the include
+# path.  Its shared utils (file_utils.cpp/logger/...) are byte-identical to the
+# main repo's, so it links against $(UTIL_OBJS) — do NOT also compile Peter's
+# utils/*.cpp (that would duplicate FindFiles/GetFileName/... symbols).
+PETER_DIR := ChunkSequence/examples/external/peter_samplesort
 
 LINK = $(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
@@ -220,6 +230,16 @@ $(BINDIR)/fitmem_kth_smallestExample: ChunkSequence/examples/external/fitmem_kth
 $(BINDIR)/chunk_cutExample: ChunkSequence/examples/external/chunk_cut.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
+# external_samplesort_vs_peter: our sample sort vs Peter's, head-to-head.  The
+# driver TU uses the main includes; Peter's sort is linked in via peter_shim.o,
+# compiled separately below with $(PETER_DIR) first so its own configs.h/utils
+# resolve (never the main repo's).
+$(OBJDIR)/peter_shim.o: $(PETER_DIR)/peter_shim.cpp | deps/parlaylib deps/abseil-cpp/install
+	$(CXX) $(CXXFLAGS) -I$(PETER_DIR) $(INCLUDES) -c $< -o $@
+
+$(BINDIR)/external_samplesort_vs_peterExample: ChunkSequence/examples/external/external_samplesort_vs_peter.cpp $(UTIL_OBJS) $(OBJDIR)/peter_shim.o | deps/parlaylib-examples
+	$(LINK)
+
 # ── benchmarks ─────────────────────────────────────────────────────────────────
 
 # delayed_compare: one binary, swept over n at runtime.
@@ -276,7 +296,7 @@ bench-examples-full:
 # ── cleanup ────────────────────────────────────────────────────────────────────
 
 clean:
-	rm -f $(UTIL_OBJS) $(TEST_BINARIES) $(EXAMPLE_BINARIES) \
+	rm -f $(UTIL_OBJS) $(OBJDIR)/peter_shim.o $(TEST_BINARIES) $(EXAMPLE_BINARIES) \
 	      $(BINDIR)/delayedCompare $(BINDIR)/chunkSizeCompare_*
 
 distclean: clean
