@@ -76,8 +76,8 @@ inline chunk_seq ChunkBigIntAdd(const chunk_seq& a, const chunk_seq& b,
     if (n_a < n_b) return ChunkBigIntAdd(b, a, result_prefix, extra_one);
     if (n_b == 0) return a;
 
-    const bool a_sign = peek(a, n_a - 1) >> (digit_bits - 1);
-    const bool b_sign = peek(b, n_b - 1) >> (digit_bits - 1);
+    const bool a_sign = a[n_a - 1] >> (digit_bits - 1);
+    const bool b_sign = b[n_b - 1] >> (digit_bits - 1);
     const double_digit mask = (static_cast<double_digit>(1) << digit_bits) - 1;
 
     const digit pad = b_sign ? static_cast<digit>(mask) : 0;  // sign-extend b
@@ -107,9 +107,9 @@ inline chunk_seq ChunkBigIntAdd(const chunk_seq& a, const chunk_seq& b,
     chunk_seq result_seq = delayed::force(result, result_prefix);
 
     // Same-sign addition that flips the sign bit overflowed into a new limb.
-    digit top = peek(result_seq, n_a - 1);
+    digit top = result_seq[n_a - 1];
     if (a_sign == b_sign && ((top >> (digit_bits - 1)) != a_sign))
-        ChunkSequenceOps::push(result_seq, a_sign ? static_cast<digit>(mask) : 0);
+        result_seq.push_back(a_sign ? static_cast<digit>(mask) : 0);
 
     return result_seq;
 }

@@ -21,14 +21,14 @@ struct SumMonoid {
 };
 
 // Remove all per-drive files created under a given prefix (one file per drive).
-// Used for both perm input files and filter output files.
+// Used for both iota input files and filter output files.
 static void cleanup_prefix(const std::string& prefix) {
     const auto& ssds = GetSSDList();
     for (size_t d = 0; d < ssds.size(); d++)
         unlink(GetFileName(prefix, d).c_str());
 }
 
-// Builds perm(n), applies ChunkFilter, consolidates the survivor stream in index
+// Builds iota(n), applies ChunkFilter, consolidates the survivor stream in index
 // order to a local file, and verifies every element equals expected_at(j) — i.e.
 // that filter PRESERVES global element order across batch boundaries (which the
 // order-insensitive sum check in run_filter_test cannot catch).
@@ -42,7 +42,7 @@ static bool run_order_test(
     std::cout << "  " << name
               << "  (n=" << n << ", expected=" << expected_count << ")\n" << std::flush;
 
-    chunk_seq seq = ChunkSequenceOps::perm(n);
+    chunk_seq seq = ChunkSequenceOps::iota(n);
 
     const std::string out_prefix    = "filter_test_out";
     const std::string consolidated  = "filter_test_order_consolidated";
@@ -106,14 +106,14 @@ static bool run_order_test(
 
     std::cout << "    => " << (pass ? "PASS" : "FAIL") << "\n\n";
 
-    cleanup_prefix("perm");
+    cleanup_prefix("iota");
     cleanup_prefix(out_prefix);
     unlink(consolidated.c_str());
 
     return pass;
 }
 
-// Builds perm(n), applies ChunkFilter with pred, verifies count / packing /
+// Builds iota(n), applies ChunkFilter with pred, verifies count / packing /
 // index-order / sum, cleans up everything, and returns true iff all checks pass.
 //
 // expected_chunks: if >= 0, also verifies the exact number of output chunks.
@@ -128,7 +128,7 @@ static bool run_filter_test(
     std::cout << "  " << name
               << "  (n=" << n << ", expected=" << expected_count << ")\n" << std::flush;
 
-    chunk_seq seq = ChunkSequenceOps::perm(n);
+    chunk_seq seq = ChunkSequenceOps::iota(n);
 
     const std::string out_prefix = "filter_test_out";
     chunk_seq filtered = ChunkSequenceOps::ChunkFilter<uint64_t>(seq, out_prefix, pred);
@@ -206,7 +206,7 @@ static bool run_filter_test(
     std::cout << "    => " << (pass ? "PASS" : "FAIL") << "\n\n";
 
     // Always clean up so the next sub-test starts with a clean slate.
-    cleanup_prefix("perm");
+    cleanup_prefix("iota");
     cleanup_prefix(out_prefix);
 
     return pass;
@@ -316,7 +316,7 @@ int main(int argc, char* argv[]) {
     }
 
     // ── 8. Order preservation across batch boundaries ────────────────────────
-    // 256 input chunks = 2 full batches.  x%2==0 keeps exactly half; for perm the
+    // 256 input chunks = 2 full batches.  x%2==0 keeps exactly half; for iota the
     // in-order survivors are 0,2,4,… so element j must equal 2*j.  Any cross-batch
     // reordering (chunks arriving out of completion order) breaks this.
     {

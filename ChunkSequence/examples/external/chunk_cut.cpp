@@ -91,7 +91,7 @@ static double to_gb(size_t bytes) { return (double)bytes / (1024.0 * 1024.0 * 10
 static uint64_t key_at(size_t i) { return parlay::hash64(i); }
 
 // Read a chunk_seq back into DRAM in logical (vector) order, concatenating each
-// chunk's `used` bytes.  Unlike ChunkSequenceOps::materialize / peek, this does
+// chunk's `used` bytes.  Unlike chunk_seq::to_vector / operator[], this does
 // NOT assume the index-ordered invariant or that every chunk but the last is
 // full: the cut's output has a (possibly partial) rewritten head chunk and reuses
 // interior chunks with their original index fields, so it must be read strictly

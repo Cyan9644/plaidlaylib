@@ -159,29 +159,29 @@ static void run_size(size_t n) {
 
     // map -> force  (x -> 3x+1)
     {
-        chunk_seq seq = ChunkSequenceOps::perm(n);
+        chunk_seq seq = ChunkSequenceOps::iota(n);
         auto d = cd::map(cd::delay(seq), [](uint64_t x) { return 3 * x + 1; });
         chunk_seq out = cd::force(d, "dl_map");
         expect_eq_vec<uint64_t>("map->force  3x+1", out,
                                 ref_map(base, [](uint64_t x) { return 3 * x + 1; }));
-        cleanup_prefix("perm"); cleanup_prefix("dl_map");
+        cleanup_prefix("iota"); cleanup_prefix("dl_map");
     }
 
     // type-changing map u64 -> u32, then force
     {
-        chunk_seq seq = ChunkSequenceOps::perm(n);
+        chunk_seq seq = ChunkSequenceOps::iota(n);
         auto d = cd::map(cd::delay(seq),
                          [](uint64_t x) { return (uint32_t)(x & 0xFFFFFFFFu); });
         chunk_seq out = cd::force(d, "dl_map32");
         std::vector<uint32_t> expected(n);
         for (size_t i = 0; i < n; i++) expected[i] = (uint32_t)(base[i] & 0xFFFFFFFFu);
         expect_eq_vec<uint32_t>("map->force  u64->u32", out, expected);
-        cleanup_prefix("perm"); cleanup_prefix("dl_map32");
+        cleanup_prefix("iota"); cleanup_prefix("dl_map32");
     }
 
     // chained map | map | reduce  ((x+1) then *2, summed)
     {
-        chunk_seq seq = ChunkSequenceOps::perm(n);
+        chunk_seq seq = ChunkSequenceOps::iota(n);
         auto d = cd::map(cd::map(cd::delay(seq),
                                  [](uint64_t x) { return x + 1; }),
                          [](uint64_t x) { return 2 * x; });
@@ -189,22 +189,22 @@ static void run_size(size_t n) {
         auto rv = ref_map(ref_map(base, [](uint64_t x) { return x + 1; }),
                           [](uint64_t x) { return 2 * x; });
         expect_scalar("map|map|reduce  sum", got, ref_reduce(rv, SumMonoid{}));
-        cleanup_prefix("perm");
+        cleanup_prefix("iota");
     }
 
-    // reduce variants directly over delay(perm)
+    // reduce variants directly over delay(iota)
     {
-        chunk_seq seq = ChunkSequenceOps::perm(n);
+        chunk_seq seq = ChunkSequenceOps::iota(n);
         expect_scalar("reduce sum", cd::reduce(cd::delay(seq), SumMonoid{}),
                       ref_reduce(base, SumMonoid{}));
         expect_scalar("reduce xor", cd::reduce(cd::delay(seq), XorMonoid{}),
                       ref_reduce(base, XorMonoid{}));
-        cleanup_prefix("perm");
+        cleanup_prefix("iota");
     }
 
     // scan(map) -> force; output + total
     {
-        chunk_seq seq = ChunkSequenceOps::perm(n);
+        chunk_seq seq = ChunkSequenceOps::iota(n);
         auto d = cd::map(cd::delay(seq), [](uint64_t x) { return x + 1; });
         auto [sd, total] = cd::scan(d, SumMonoid{});
         chunk_seq out = cd::force(sd, "dl_scan");
@@ -213,12 +213,12 @@ static void run_size(size_t n) {
                                    SumMonoid{}, &rt);
         expect_eq_vec<uint64_t>("scan(map) -> force  output", out, rscan);
         expect_scalar("scan(map) total", total, rt);
-        cleanup_prefix("perm"); cleanup_prefix("dl_scan");
+        cleanup_prefix("iota"); cleanup_prefix("dl_scan");
     }
 
     // map after scan, then reduce(max of exclusive prefixes)
     {
-        chunk_seq seq = ChunkSequenceOps::perm(n);
+        chunk_seq seq = ChunkSequenceOps::iota(n);
         auto [sd, total] = cd::scan(cd::delay(seq), SumMonoid{});
         auto md = cd::map(sd, [](uint64_t x) { return x; });
         uint64_t got = cd::reduce(md, MaxMonoid{});
@@ -226,18 +226,18 @@ static void run_size(size_t n) {
         auto rscan = ref_scan_excl(base, SumMonoid{}, &rt);
         expect_scalar("reduce(max(map(scan)))", got, ref_reduce(rscan, MaxMonoid{}));
         (void)total;
-        cleanup_prefix("perm");
+        cleanup_prefix("iota");
     }
 
     // filter(map) -> packed chunk_seq  (keep evens of x+1)
     {
-        chunk_seq seq = ChunkSequenceOps::perm(n);
+        chunk_seq seq = ChunkSequenceOps::iota(n);
         auto d = cd::map(cd::delay(seq), [](uint64_t x) { return x + 1; });
         chunk_seq out = cd::filter(d, "dl_flt", [](uint64_t x) { return x % 2 == 0; });
         auto rv = ref_filter(ref_map(base, [](uint64_t x) { return x + 1; }),
                              [](uint64_t x) { return x % 2 == 0; });
         expect_eq_vec<uint64_t>("filter(map)  evens", out, rv);
-        cleanup_prefix("perm"); cleanup_prefix("dl_flt");
+        cleanup_prefix("iota"); cleanup_prefix("dl_flt");
     }
 
     // zip index × index (equal length)  -> (i) + (2i) = 3i
@@ -254,7 +254,7 @@ static void run_size(size_t n) {
 
     // zip file × index (equal length)  -> (i) + (10i) = 11i
     {
-        chunk_seq seq = ChunkSequenceOps::perm(n);
+        chunk_seq seq = ChunkSequenceOps::iota(n);
         auto z = cd::map(cd::zip(cd::delay(seq),
                                  cd::tabulate(n, [](size_t i) { return (uint64_t)10 * i; })),
                          add_pair);
@@ -262,14 +262,14 @@ static void run_size(size_t n) {
         std::vector<uint64_t> expected(n);
         for (size_t i = 0; i < n; i++) expected[i] = 11 * (uint64_t)i;
         expect_eq_vec<uint64_t>("zip file×idx map->force", out, expected);
-        cleanup_prefix("perm"); cleanup_prefix("dl_zfi");
+        cleanup_prefix("iota"); cleanup_prefix("dl_zfi");
     }
 
     // zip file × file (equal length)  -> (i) + (2i) = 3i, via force and reduce
     {
-        chunk_seq A = ChunkSequenceOps::perm(n);
+        chunk_seq A = ChunkSequenceOps::iota(n);
         chunk_seq B = ChunkSequenceOps::tabulate<uint64_t>(
-            n, "permB", [](size_t i) { return (uint64_t)2 * i; });
+            n, "iotaB", [](size_t i) { return (uint64_t)2 * i; });
         chunk_seq out = cd::force(cd::map(cd::zip(cd::delay(A), cd::delay(B)), add_pair),
                                   "dl_zff");
         std::vector<uint64_t> expected(n);
@@ -279,14 +279,14 @@ static void run_size(size_t n) {
                       cd::reduce(cd::map(cd::zip(cd::delay(A), cd::delay(B)), add_pair),
                                  SumMonoid{}),
                       ref_reduce(expected, SumMonoid{}));
-        cleanup_prefix("perm"); cleanup_prefix("permB"); cleanup_prefix("dl_zff");
+        cleanup_prefix("iota"); cleanup_prefix("iotaB"); cleanup_prefix("dl_zff");
     }
 
     // composition: zip(map(delay(A), x+1), delay(B))  -> (i+1) + (i) = 2i+1
     {
-        chunk_seq A = ChunkSequenceOps::perm(n);
+        chunk_seq A = ChunkSequenceOps::iota(n);
         chunk_seq B = ChunkSequenceOps::tabulate<uint64_t>(
-            n, "permB", [](size_t i) { return (uint64_t)i; });
+            n, "iotaB", [](size_t i) { return (uint64_t)i; });
         auto z = cd::map(cd::zip(cd::map(cd::delay(A), [](uint64_t x) { return x + 1; }),
                                  cd::delay(B)),
                          add_pair);
@@ -294,7 +294,7 @@ static void run_size(size_t n) {
         std::vector<uint64_t> expected(n);
         for (size_t i = 0; i < n; i++) expected[i] = 2 * (uint64_t)i + 1;
         expect_eq_vec<uint64_t>("zip(map(A),B) fuse", out, expected);
-        cleanup_prefix("perm"); cleanup_prefix("permB"); cleanup_prefix("dl_zc");
+        cleanup_prefix("iota"); cleanup_prefix("iotaB"); cleanup_prefix("dl_zc");
     }
 }
 
@@ -326,41 +326,41 @@ static void run_zip_pad() {
     // file (A, shorter) × index — tail output chunks have no A buffer
     {
         chunk_seq A = ChunkSequenceOps::tabulate<uint64_t>(
-            nA, "permA", [](size_t i) { return (uint64_t)i; });
+            nA, "iotaA", [](size_t i) { return (uint64_t)i; });
         auto z = cd::map(cd::zip(cd::delay(A),
                                  cd::tabulate(nB, [](size_t i) { return (uint64_t)100 + i; }),
                                  pad),
                          add_pair);
         chunk_seq out = cd::force(z, "dl_zp_fi");
         expect_eq_vec<uint64_t>("zip pad file(short)×idx", out, expected);
-        cleanup_prefix("permA"); cleanup_prefix("dl_zp_fi");
+        cleanup_prefix("iotaA"); cleanup_prefix("dl_zp_fi");
     }
 
     // file × file, A shorter
     {
         chunk_seq A = ChunkSequenceOps::tabulate<uint64_t>(
-            nA, "permA", [](size_t i) { return (uint64_t)i; });
+            nA, "iotaA", [](size_t i) { return (uint64_t)i; });
         chunk_seq B = ChunkSequenceOps::tabulate<uint64_t>(
-            nB, "permB", [](size_t i) { return (uint64_t)100 + i; });
+            nB, "iotaB", [](size_t i) { return (uint64_t)100 + i; });
         auto z = cd::map(cd::zip(cd::delay(A), cd::delay(B), pad), add_pair);
         chunk_seq out = cd::force(z, "dl_zp_ff");
         expect_eq_vec<uint64_t>("zip pad file×file (A short)", out, expected);
-        cleanup_prefix("permA"); cleanup_prefix("permB"); cleanup_prefix("dl_zp_ff");
+        cleanup_prefix("iotaA"); cleanup_prefix("iotaB"); cleanup_prefix("dl_zp_ff");
     }
 
     // file × file, B shorter (the padded side is the second operand)
     {
         chunk_seq A = ChunkSequenceOps::tabulate<uint64_t>(
-            nB, "permA", [](size_t i) { return (uint64_t)100 + i; });
+            nB, "iotaA", [](size_t i) { return (uint64_t)100 + i; });
         chunk_seq B = ChunkSequenceOps::tabulate<uint64_t>(
-            nA, "permB", [](size_t i) { return (uint64_t)i; });
+            nA, "iotaB", [](size_t i) { return (uint64_t)i; });
         auto z = cd::map(cd::zip(cd::delay(A), cd::delay(B), pad), add_pair);
         chunk_seq out = cd::force(z, "dl_zp_ff2");
         std::vector<uint64_t> exp2(nB);
         for (size_t i = 0; i < nB; i++)
             exp2[i] = (100 + (uint64_t)i) + (i < nA ? (uint64_t)i : pad);
         expect_eq_vec<uint64_t>("zip pad file×file (B short)", out, exp2);
-        cleanup_prefix("permA"); cleanup_prefix("permB"); cleanup_prefix("dl_zp_ff2");
+        cleanup_prefix("iotaA"); cleanup_prefix("iotaB"); cleanup_prefix("dl_zp_ff2");
     }
 }
 
@@ -370,16 +370,16 @@ static void run_zip_multibatch() {
     const size_t n = chunks * ELEMS_PER_CHUNK;
     std::cout << "  zip multi-batch  n=" << n << "  (" << chunks << " chunks)\n";
 
-    chunk_seq A = ChunkSequenceOps::perm(n);   // i
+    chunk_seq A = ChunkSequenceOps::iota(n);   // i
     chunk_seq B = ChunkSequenceOps::tabulate<uint64_t>(
-        n, "permB", [](size_t i) { return (uint64_t)i; });   // i
+        n, "iotaB", [](size_t i) { return (uint64_t)i; });   // i
 
     // sum_i (i + i) = n(n-1)
     expect_scalar("zip multibatch reduce sum",
                   cd::reduce(cd::map(cd::zip(cd::delay(A), cd::delay(B)), add_pair),
                              SumMonoid{}),
                   (uint64_t)n * (n - 1));
-    cleanup_prefix("perm"); cleanup_prefix("permB");
+    cleanup_prefix("iota"); cleanup_prefix("iotaB");
 }
 
 // ── nested / composed zip ─────────────────────────────────────────────────────
@@ -387,7 +387,7 @@ static void run_zip_multibatch() {
 static void run_zip_compose() {
     const size_t n = 2 * ELEMS_PER_CHUNK + 37;
     std::cout << "  zip composition  n=" << n << "\n";
-    chunk_seq A = ChunkSequenceOps::perm(n);                                        // i
+    chunk_seq A = ChunkSequenceOps::iota(n);                                        // i
     chunk_seq B = ChunkSequenceOps::tabulate<uint64_t>(n, "cmpB", [](size_t i){ return (uint64_t)10 * i; });
     chunk_seq C = ChunkSequenceOps::tabulate<uint64_t>(n, "cmpC", [](size_t i){ return (uint64_t)100 * i; });
 
@@ -428,7 +428,7 @@ static void run_zip_compose() {
         cleanup_prefix("cmpO");
     }
 
-    cleanup_prefix("perm"); cleanup_prefix("cmpB"); cleanup_prefix("cmpC");
+    cleanup_prefix("iota"); cleanup_prefix("cmpB"); cleanup_prefix("cmpC");
 }
 
 // ── big-integer addition via nested zip (carry-lookahead) ─────────────────────
@@ -527,7 +527,7 @@ static void run_multibatch() {
     const size_t n = chunks * ELEMS_PER_CHUNK;
     std::cout << "  multi-batch  n=" << n << "  (" << chunks << " chunks)\n";
 
-    chunk_seq seq = ChunkSequenceOps::perm(n);
+    chunk_seq seq = ChunkSequenceOps::iota(n);
     // Fuse an identity map into the filter to exercise the delayed read path.
     auto d = cd::map(cd::delay(seq), [](uint64_t x) { return x; });
     chunk_seq filt = cd::filter(d, "dl_mb", [](uint64_t x) { return x % 2 == 0; });
@@ -546,7 +546,7 @@ static void run_multibatch() {
     expect_scalar("multibatch scan total", total, cnt * (cnt - 1));
     (void)sc;
 
-    cleanup_prefix("perm"); cleanup_prefix("dl_mb");
+    cleanup_prefix("iota"); cleanup_prefix("dl_mb");
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────

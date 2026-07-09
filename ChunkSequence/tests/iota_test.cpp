@@ -13,7 +13,7 @@
 #include "ChunkSequence/chunk_seq.h"
 
 /**
- * Verify that perm(n) writes the identity sequence correctly.
+ * Verify that iota(n) writes the identity sequence correctly.
  *
  * For every chunk in the returned chunk_seq, this test opens chunk.filename
  * directly with open(O_DIRECT|O_RDONLY) and reads chunk.used bytes from
@@ -30,8 +30,8 @@ int main(int argc, char* argv[]) {
     using T = uint64_t;
 
     // ── write ────────────────────────────────────────────────────────────────
-    std::cout << "perm(" << n << ") writing...\n" << std::flush;
-    const chunk_seq seq = ChunkSequenceOps::perm(n);
+    std::cout << "iota(" << n << ") writing...\n" << std::flush;
+    const chunk_seq seq = ChunkSequenceOps::iota(n);
     std::cout << "wrote " << seq.chunks.size() << " chunks across "
               << GetSSDList().size() << " drives\n" << std::flush;
 

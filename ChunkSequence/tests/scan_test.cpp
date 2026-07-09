@@ -188,14 +188,14 @@ int main(int argc, char* argv[]) {
     // chunk count comfortably exceeds the drive count (one file per SSD).
     const size_t n = (argc > 1) ? std::stoull(argv[1]) : 134'217'728ULL;
 
-    std::cout << "Building perm(" << n << ")...\n" << std::flush;
-    const chunk_seq input = ChunkSequenceOps::perm(n);
+    std::cout << "Building iota(" << n << ")...\n" << std::flush;
+    const chunk_seq input = ChunkSequenceOps::iota(n);
     std::cout << input.chunks.size() << " chunks across "
               << GetSSDList().size() << " drives\n\n";
 
     bool all_pass = true;
 
-    // exclusive sum scan over perm(n): out[i] = 0+1+…+(i-1) = i*(i-1)/2
+    // exclusive sum scan over iota(n): out[i] = 0+1+…+(i-1) = i*(i-1)/2
     // (out[0] = 0); total = 0+1+…+(n-1) = n*(n-1)/2.
     all_pass &= run_test<SumMonoid>(
         "sum  exclusive prefix",
@@ -204,7 +204,7 @@ int main(int argc, char* argv[]) {
             [](uint64_t i) -> uint64_t { return i * (i - 1) / 2; }),
         /*expected_total=*/(uint64_t)(n - 1) * n / 2);
 
-    // exclusive xor scan over perm(n): out[i] = 0^1^…^(i-1) = xor_prefix(i-1)
+    // exclusive xor scan over iota(n): out[i] = 0^1^…^(i-1) = xor_prefix(i-1)
     // (out[0] = 0); total = 0^1^…^(n-1) = xor_prefix(n-1).
     all_pass &= run_test<XorMonoid>(
         "xor  exclusive prefix",

@@ -10,7 +10,7 @@
 // Plus a raw-read ceiling (a bare ChunkReduce = one read pass).
 //
 // Pipelines (data generated outside the timed region):
-//   raw read         ChunkReduce(perm)                          (device-read ceiling)
+//   raw read         ChunkReduce(iota)                          (device-read ceiling)
 //   map|reduce       eager 2r+1w (3n)  delayed 1r (n)  in-mem delayed::reduce(map)
 //   map|map|reduce   eager 3r+2w (5n)  delayed 1r (n)  in-mem delayed::reduce(map(map))
 //   force(map|map)   eager 2r+2w (4n)  delayed 1r+1w (2n)  in-mem delayed::to_sequence(map(map))
@@ -98,14 +98,14 @@ int main(int argc, char* argv[]) {
               << ";  in-mem force line: " << (inmem_force_ok ? "ON" : "OFF") << "\n\n";
 
     // ── data generation (outside every timed region) ─────────────────────────
-    std::cout << "Generating chunk_seq perm(" << n << ")..." << std::flush;
-    const chunk_seq cseq = ChunkSequenceOps::perm(n);
+    std::cout << "Generating chunk_seq iota(" << n << ")..." << std::flush;
+    const chunk_seq cseq = ChunkSequenceOps::iota(n);
     const size_t in_bytes = chunk_seq_bytes(cseq);
     std::cout << " " << cseq.chunks.size() << " chunks, " << to_gb(in_bytes) << " GB\n";
 
     parlay::sequence<uint64_t> A;   // in-memory source (materialized, data in RAM)
     if (inmem_reduce_ok) {
-        std::cout << "Generating in-memory perm(" << n << ")..." << std::flush;
+        std::cout << "Generating in-memory iota(" << n << ")..." << std::flush;
         A = parlay::tabulate(n, [](size_t i) { return (uint64_t)i; });
         std::cout << " done\n";
     }

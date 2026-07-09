@@ -1,7 +1,7 @@
 // Combined / integration test for the ChunkSequence primitives.
 //
 // Where the per-primitive tests (map/reduce/filter/scan) check one operation in
-// isolation against a closed form, this suite *chains* tabulate/perm → ChunkMap →
+// isolation against a closed form, this suite *chains* tabulate/iota → ChunkMap →
 // ChunkFilter → ChunkScan → ChunkReduce and verifies the composed result against a
 // plain serial reference computed over a std::vector.  Each pipeline is run across
 // a battery of edge-case sizes: empty, single element, partial last chunk, exact
@@ -164,50 +164,50 @@ static void run_size(size_t n) {
 
     // ── ChunkMap: x -> x+1 (in-place, T==R) ──────────────────────────────────
     {
-        chunk_seq seq = ChunkSequenceOps::perm(n);
+        chunk_seq seq = ChunkSequenceOps::iota(n);
         chunk_seq out = ChunkSequenceOps::ChunkMap<uint64_t>(
             seq, "comb_map", std::function<uint64_t(uint64_t)>([](uint64_t x){ return x + 1; }));
         expect_eq_vec<uint64_t>("map  x->x+1", out,
                                 ref_map(base, [](uint64_t x){ return x + 1; }));
-        cleanup_prefix("perm"); cleanup_prefix("comb_map");
+        cleanup_prefix("iota"); cleanup_prefix("comb_map");
     }
 
     // ── ChunkMap: type-changing u64 -> u32 (non-in-place path) ───────────────
     {
-        chunk_seq seq = ChunkSequenceOps::perm(n);
+        chunk_seq seq = ChunkSequenceOps::iota(n);
         chunk_seq out = ChunkSequenceOps::ChunkMap<uint64_t, uint32_t>(
             seq, "comb_map32",
             std::function<uint32_t(uint64_t)>([](uint64_t x){ return (uint32_t)(x & 0xFFFFFFFFu); }));
         std::vector<uint32_t> expected(n);
         for (size_t i = 0; i < n; i++) expected[i] = (uint32_t)(base[i] & 0xFFFFFFFFu);
         expect_eq_vec<uint32_t>("map  u64->u32", out, expected);
-        cleanup_prefix("perm"); cleanup_prefix("comb_map32");
+        cleanup_prefix("iota"); cleanup_prefix("comb_map32");
     }
 
     // ── ChunkScan: exclusive sum, with returned total ────────────────────────
     {
-        chunk_seq seq = ChunkSequenceOps::perm(n);
+        chunk_seq seq = ChunkSequenceOps::iota(n);
         auto [out, total] = ChunkSequenceOps::ChunkScan<uint64_t>(seq, "comb_scan", SumMonoid{});
         uint64_t ref_total = 0;
         auto ref = ref_scan_excl(base, SumMonoid{}, &ref_total);
         expect_eq_vec<uint64_t>("scan sum (exclusive)", out, ref);
         expect_scalar("scan sum total", total, ref_total);
-        cleanup_prefix("perm"); cleanup_prefix("comb_scan");
+        cleanup_prefix("iota"); cleanup_prefix("comb_scan");
     }
 
     // ── ChunkFilter: keep evens, order-preserving ────────────────────────────
     {
-        chunk_seq seq = ChunkSequenceOps::perm(n);
+        chunk_seq seq = ChunkSequenceOps::iota(n);
         chunk_seq out = ChunkSequenceOps::ChunkFilter<uint64_t>(
             seq, "comb_flt", std::function<bool(uint64_t)>([](uint64_t x){ return x % 2 == 0; }));
         expect_eq_vec<uint64_t>("filter evens", out,
                                 ref_filter(base, [](uint64_t x){ return x % 2 == 0; }));
-        cleanup_prefix("perm"); cleanup_prefix("comb_flt");
+        cleanup_prefix("iota"); cleanup_prefix("comb_flt");
     }
 
     // ── ChunkReduce: sum / max / min / xor (scalars, identity-correct on empty) ─
     {
-        chunk_seq seq = ChunkSequenceOps::perm(n);
+        chunk_seq seq = ChunkSequenceOps::iota(n);
         expect_scalar("reduce sum", ChunkSequenceOps::ChunkReduce<uint64_t>(seq, SumMonoid{}),
                       ref_reduce(base, SumMonoid{}));
         expect_scalar("reduce max", ChunkSequenceOps::ChunkReduce<uint64_t>(seq, MaxMonoid{}),
@@ -216,13 +216,13 @@ static void run_size(size_t n) {
                       ref_reduce(base, MinMonoid{}));
         expect_scalar("reduce xor", ChunkSequenceOps::ChunkReduce<uint64_t>(seq, XorMonoid{}),
                       ref_reduce(base, XorMonoid{}));
-        cleanup_prefix("perm");
+        cleanup_prefix("iota");
     }
 
     // ── Flagship: map -> filter -> scan -> reduce, all chained ────────────────
-    // perm(n) -> (3x+1) -> keep even -> exclusive-sum scan -> max reduce.
+    // iota(n) -> (3x+1) -> keep even -> exclusive-sum scan -> max reduce.
     {
-        chunk_seq seq = ChunkSequenceOps::perm(n);
+        chunk_seq seq = ChunkSequenceOps::iota(n);
         chunk_seq mapped = ChunkSequenceOps::ChunkMap<uint64_t>(
             seq, "comb_p_map", std::function<uint64_t(uint64_t)>([](uint64_t x){ return 3*x + 1; }));
         chunk_seq filt = ChunkSequenceOps::ChunkFilter<uint64_t>(
@@ -241,7 +241,7 @@ static void run_size(size_t n) {
         expect_scalar("pipeline scan total", total, ref_total);
         expect_scalar("pipeline reduce(max)", mx, ref_mx);
 
-        cleanup_prefix("perm"); cleanup_prefix("comb_p_map");
+        cleanup_prefix("iota"); cleanup_prefix("comb_p_map");
         cleanup_prefix("comb_p_flt"); cleanup_prefix("comb_p_scan");
     }
 }
@@ -256,16 +256,16 @@ static void run_edge_cases() {
 
     // filter that keeps everything → identity-shaped, order preserved.
     {
-        chunk_seq seq = ChunkSequenceOps::perm(n);
+        chunk_seq seq = ChunkSequenceOps::iota(n);
         chunk_seq out = ChunkSequenceOps::ChunkFilter<uint64_t>(
             seq, "edge_flt_all", std::function<bool(uint64_t)>([](uint64_t){ return true; }));
         expect_eq_vec<uint64_t>("filter keep-all == input", out, base);
-        cleanup_prefix("perm"); cleanup_prefix("edge_flt_all");
+        cleanup_prefix("iota"); cleanup_prefix("edge_flt_all");
     }
 
     // filter that drops everything → empty; chaining scan/reduce on the empty seq.
     {
-        chunk_seq seq = ChunkSequenceOps::perm(n);
+        chunk_seq seq = ChunkSequenceOps::iota(n);
         chunk_seq empty = ChunkSequenceOps::ChunkFilter<uint64_t>(
             seq, "edge_flt_none", std::function<bool(uint64_t)>([](uint64_t){ return false; }));
         expect_scalar("filter drop-all -> 0 chunks", empty.chunks.size(), 0);
@@ -275,10 +275,10 @@ static void run_edge_cases() {
         expect_scalar("scan(empty) total == identity", total, 0);
         expect_scalar("reduce(empty) == identity",
                       ChunkSequenceOps::ChunkReduce<uint64_t>(empty, SumMonoid{}), 0);
-        cleanup_prefix("perm"); cleanup_prefix("edge_flt_none"); cleanup_prefix("edge_scan_empty");
+        cleanup_prefix("iota"); cleanup_prefix("edge_flt_none"); cleanup_prefix("edge_scan_empty");
     }
 
-    // tabulate with a non-perm function: f(i) = i*i (mod 2^64).
+    // tabulate with a non-iota function: f(i) = i*i (mod 2^64).
     {
         chunk_seq seq = ChunkSequenceOps::tabulate<uint64_t>(
             n, "edge_tab", std::function<uint64_t(size_t)>([](size_t i){ return (uint64_t)i * i; }));
@@ -297,11 +297,11 @@ static void run_multibatch() {
     const size_t n = chunks * ELEMS_PER_CHUNK;
     std::cout << "  multi-batch  n=" << n << "  (" << chunks << " chunks)\n";
 
-    chunk_seq seq = ChunkSequenceOps::perm(n);
+    chunk_seq seq = ChunkSequenceOps::iota(n);
     chunk_seq filt = ChunkSequenceOps::ChunkFilter<uint64_t>(
         seq, "mb_flt", std::function<bool(uint64_t)>([](uint64_t x){ return x % 2 == 0; }));
 
-    // Survivors of perm(n) with x%2==0 are 0,2,…,n-2: count = n/2.
+    // Survivors of iota(n) with x%2==0 are 0,2,…,n-2: count = n/2.
     const uint64_t cnt = n / 2;
     expect_scalar("filter count == n/2",
                   ChunkSequenceOps::ChunkReduce<uint64_t,uint64_t>(
@@ -325,7 +325,7 @@ static void run_multibatch() {
                   ChunkSequenceOps::ChunkReduce<uint64_t>(sc, MaxMonoid{}),
                   cnt * (cnt - 1) - 2 * (cnt - 1));
 
-    cleanup_prefix("perm"); cleanup_prefix("mb_flt"); cleanup_prefix("mb_scan");
+    cleanup_prefix("iota"); cleanup_prefix("mb_flt"); cleanup_prefix("mb_scan");
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────

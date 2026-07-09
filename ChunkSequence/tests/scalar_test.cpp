@@ -11,14 +11,14 @@
 
 /**
  * Verify the scalar element ops on a materialized chunk_seq:
- *   ChunkSequenceOps::size  — total element count (not chunk count)
- *   ChunkSequenceOps::peek  — read one element at a logical index
- *   ChunkSequenceOps::push  — append one element (in place)
+ *   ChunkSequenceOps::size    — total element count (not chunk count)
+ *   chunk_seq::operator[]     — read one element at a logical index
+ *   chunk_seq::push_back      — append one element (in place)
  *
- * Uses perm(n) as ground truth (element i == i), then exercises both push
+ * Uses iota(n) as ground truth (element i == i), then exercises both push_back
  * paths: appending into a partial last chunk (read-modify-write of one block)
  * and appending past a full last chunk (new-chunk allocation).  Correctness is
- * cross-checked with peek and, finally, consolidate() to a local file.
+ * cross-checked with operator[] and, finally, consolidate() to a local file.
  */
 int main(int argc, char* argv[]) {
     ParseGlobalArguments(argc, argv);
@@ -31,50 +31,50 @@ int main(int argc, char* argv[]) {
         if (!ok) { std::cerr << "FAIL: " << msg << "\n"; fails++; }
     };
 
-    // ── size + peek on a partial-last-chunk perm ───────────────────────────────
+    // ── size + operator[] on a partial-last-chunk iota ─────────────────────────
     const size_t n = (argc > 1) ? std::stoull(argv[1])
                                 : (3 * ELEMS_PER_CHUNK + 12345);  // partial last chunk
-    std::cout << "perm(" << n << "), ELEMS_PER_CHUNK=" << ELEMS_PER_CHUNK << "\n";
-    chunk_seq seq = ops::perm(n);
+    std::cout << "iota(" << n << "), ELEMS_PER_CHUNK=" << ELEMS_PER_CHUNK << "\n";
+    chunk_seq seq = ops::iota(n);
 
-    expect(ops::size(seq) == n, "size(perm(n)) != n");
+    expect(ops::size(seq) == n, "size(iota(n)) != n");
 
     for (size_t i : {(size_t)0, n / 2, n - 1, 3 * ELEMS_PER_CHUNK,      // last-chunk head
                      3 * ELEMS_PER_CHUNK + 6000}) {                     // mid last chunk
         if (i >= n) continue;
-        T got = ops::peek(seq, i);
-        expect(got == (T)i, "peek(" + std::to_string(i) + ")=" + std::to_string(got));
+        T got = seq[i];
+        expect(got == (T)i, "seq[" + std::to_string(i) + "]=" + std::to_string(got));
     }
 
-    // ── push into a partial last chunk (read-modify-write path) ────────────────
+    // ── push_back into a partial last chunk (read-modify-write path) ───────────
     for (size_t k = 0; k < 5; k++) {
         const size_t before = ops::size(seq);
         const T v = 1'000'000'000ULL + k;
-        ops::push(seq, v);
-        expect(ops::size(seq) == before + 1, "size did not grow by 1 after push");
-        expect(ops::peek(seq, before) == v, "peek(new tail) != pushed value");
+        seq.push_back(v);
+        expect(ops::size(seq) == before + 1, "size did not grow by 1 after push_back");
+        expect(seq[before] == v, "seq[new tail] != pushed value");
         // identity neighbors in the same RMW block/chunk stay untouched
-        expect(ops::peek(seq, n - 1) == (T)(n - 1), "push corrupted neighbor n-1");
-        expect(ops::peek(seq, 0) == (T)0, "push corrupted element 0");
+        expect(seq[n - 1] == (T)(n - 1), "push_back corrupted neighbor n-1");
+        expect(seq[0] == (T)0, "push_back corrupted element 0");
     }
 
-    // ── push that spills into a brand-new chunk ────────────────────────────────
+    // ── push_back that spills into a brand-new chunk ───────────────────────────
     // Fill the current last chunk exactly, then push once more.
     {
         size_t last_used = seq.chunks.back().used;   // bytes
         size_t room = (CHUNK_SIZE - last_used) / sizeof(T);
-        for (size_t j = 0; j < room; j++) ops::push(seq, (T)0xABCD0000 + j);
+        for (size_t j = 0; j < room; j++) seq.push_back((T)0xABCD0000 + j);
         expect(seq.chunks.back().used == CHUNK_SIZE, "last chunk not full after filling");
 
         const size_t nc_before = seq.chunks.size();
         const size_t idx = ops::size(seq);
         const T v = 0xFEED1234ULL;
-        ops::push(seq, v);
-        expect(seq.chunks.size() == nc_before + 1, "push did not allocate a new chunk");
+        seq.push_back(v);
+        expect(seq.chunks.size() == nc_before + 1, "push_back did not allocate a new chunk");
         expect(seq.chunks.back().index == nc_before, "new chunk index wrong");
         expect(seq.chunks.back().used == sizeof(T), "new chunk used != sizeof(T)");
-        expect(ops::size(seq) == idx + 1, "size wrong after new-chunk push");
-        expect(ops::peek(seq, idx) == v, "peek(new-chunk element) != pushed value");
+        expect(ops::size(seq) == idx + 1, "size wrong after new-chunk push_back");
+        expect(seq[idx] == v, "seq[new-chunk element] != pushed value");
     }
 
     // ── consolidate + verify the whole thing matches an in-memory model ────────
@@ -97,7 +97,7 @@ int main(int argc, char* argv[]) {
     // ── delayed::size (file / map / index / zip) ───────────────────────────────
     {
         namespace d = ChunkSequenceOps::delayed;
-        chunk_seq base = ops::perm(n);                       // fresh, exactly n elems
+        chunk_seq base = ops::iota(n);                       // fresh, exactly n elems
         auto del = d::delay(base);
         expect(d::size(del) == n, "delayed::size(delay(seq)) != n");
         auto m = d::map(del, [](uint64_t x) { return x + 1; });

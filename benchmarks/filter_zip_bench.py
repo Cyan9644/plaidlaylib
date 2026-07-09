@@ -34,7 +34,7 @@ DEFAULT_MAX_K = 64
 FILTER_COLS = ["n", "in_bytes", "eager_s", "old_delayed_s", "new_delayed_s", "agree"]
 ZIP_COLS = ["k", "n", "reduce_s", "throughput_gb_s", "agree"]
 
-BENCH_FILE_GLOBS = ("perm[0-9]*", "bw_fc_*", "zsrc*")
+BENCH_FILE_GLOBS = ("iota[0-9]*", "bw_fc_*", "zsrc*")
 
 
 def parse_count(s):

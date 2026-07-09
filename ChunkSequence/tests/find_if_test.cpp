@@ -10,7 +10,7 @@
 #include "ChunkSequence/chunk_seq.h"
 #include "ChunkSequence/chunk_find_if.h"
 
-// perm(n) holds the sequence 0, 1, …, n-1 in order, so the element equal to
+// iota(n) holds the sequence 0, 1, …, n-1 in order, so the element equal to
 // `target` sits at logical position `target`.  find_if(== target) must return
 // exactly `target`, and a predicate that never fires must return n.
 
@@ -27,8 +27,8 @@ int main(int argc, char* argv[]) {
 
     const size_t n = (argc > 1) ? std::stoull(argv[1]) : 5'000'000ULL;
 
-    std::cout << "Building perm(" << n << ")...\n" << std::flush;
-    const chunk_seq input = ChunkSequenceOps::perm(n);
+    std::cout << "Building iota(" << n << ")...\n" << std::flush;
+    const chunk_seq input = ChunkSequenceOps::iota(n);
     std::cout << input.chunks.size() << " chunks across "
               << GetSSDList().size() << " drives\n\n";
 

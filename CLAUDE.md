@@ -60,7 +60,7 @@ utils/                        vendored shared I/O utilities
   unordered_file_writer.h     UnorderedFileWriter<T> — the standardized writer
   command_line.{h,cpp}        ParseGlobalArguments (used by the tests)
 ChunkSequence/
-  chunk_seq.h                 chunk / chunk_seq structs, tabulate, perm, consolidate
+  chunk_seq.h                 chunk / chunk_seq structs, tabulate, iota, consolidate
   chunk_seq_reader.h          ChunkSequenceReader<T> — the standardized async reader
   external_engine.h           ChunkEmitter + ExternalTransform + RemoveWorker
   dense_pack.h                shared batch/carry/prefix/scatter packer
@@ -71,7 +71,7 @@ ChunkSequence/
   chunk_flat_tabulate.h       ChunkFlatTabulate (thin producer on DensePack)
   chunk_find_if.h             ChunkFindIf     (fold on RemoveWorker)
   chunk_delayed.h             delayed (fused) recursive-node layer: delay/tabulate/map/scan/zip + reduce/force/filter
-  tests/                      correctness tests (→ permTest … findIfTest)
+  tests/                      correctness tests (→ iotaTest … findIfTest)
   examples/                   demonstration programs (→ primesExample …); dual-purpose
     primes.cpp                out-of-core prime sieve on ChunkFlatTabulate
     chunk_kmp.h  kmp.cpp      out-of-core KMP search (ChunkKmp, a producer on DensePack)
@@ -103,7 +103,7 @@ test.
 `make bench` defaults are sized for a ~5 GiB tmpfs dev box; override via env or
 the driver's flags, e.g. `make bench BENCH_CHUNK_SIZES="2097152 8388608"` or
 `python3 benchmarks/run_benches.py --delayed --n-values "1M 8M 64M"`.  The driver
-deletes the benchmarks' data files (`perm<drive>` + `bw_*`) between every sweep
+deletes the benchmarks' data files (`iota<drive>` + `bw_*`) between every sweep
 point and after the run so nothing accumulates on the drives (`--no-clean` to
 disable).  It also best-effort `fstrim`s the mounts once at startup
 (`--fstrim-glob`, default `/mnt/ssd*`; a no-op on tmpfs, `--no-fstrim` to
@@ -235,7 +235,7 @@ Primitive mapping:
 | `ChunkFindIf`       | `RemoveWorker` (per-worker min matching index; `n` if none) |
 | `ChunkFilter`       | `DensePack` (reader source + predicate compaction) |
 | `ChunkFlatTabulate` | `DensePack` (generator source, `f(start,end) -> sequence<R>`) |
-| `tabulate` / `perm` | own writer pipeline (`chunk_seq.h`) — no reader stage to unify |
+| `tabulate` / `iota` | own writer pipeline (`chunk_seq.h`) — no reader stage to unify |
 
 ### Dense packing  (`dense_pack.h`)
 

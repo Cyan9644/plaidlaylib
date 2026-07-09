@@ -21,7 +21,7 @@
 
 // Read one output chunk from disk via pread and verify every element.
 //
-// f_expected maps the global input index (= value written by perm) to the
+// f_expected maps the global input index (= value written by iota) to the
 // expected output value.  No assumption is made about begin_addr or which
 // file the chunk lives in — we use the chunk descriptor as-is.
 template<typename R>
@@ -153,8 +153,8 @@ int main(int argc, char* argv[]) {
 
     using T = uint64_t;
 
-    std::cout << "Building perm(" << n << ")...\n" << std::flush;
-    const chunk_seq input = ChunkSequenceOps::perm(n);
+    std::cout << "Building iota(" << n << ")...\n" << std::flush;
+    const chunk_seq input = ChunkSequenceOps::iota(n);
     std::cout << input.chunks.size() << " chunks across "
               << GetSSDList().size() << " drives\n\n";
 

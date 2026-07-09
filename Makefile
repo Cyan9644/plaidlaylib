@@ -36,7 +36,7 @@ ABSL_LIBS   := $(shell find $(ABSL_LIBDIR) -name '*.a' 2>/dev/null | sort)
 UTIL_OBJS := $(OBJDIR)/logger.o $(OBJDIR)/command_line.o $(OBJDIR)/file_utils.o
 
 # ChunkSequence correctness tests (each exits 0 on PASS, non-zero on FAIL).
-TEST_BINARIES := $(BINDIR)/permTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
+TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/filterTest $(BINDIR)/scanTest $(BINDIR)/combinedTest \
                  $(BINDIR)/delayedTest $(BINDIR)/flatTabulateTest $(BINDIR)/findIfTest \
                  $(BINDIR)/histogramTest $(BINDIR)/kmpTest $(BINDIR)/rabinKarpTest \
@@ -137,7 +137,7 @@ $(OBJDIR)/%.o: utils/%.cpp
 
 # ── test binaries ──────────────────────────────────────────────────────────────
 
-$(BINDIR)/permTest: ChunkSequence/tests/perm_test.cpp $(UTIL_OBJS)
+$(BINDIR)/iotaTest: ChunkSequence/tests/iota_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
 $(BINDIR)/mapTest: ChunkSequence/tests/map_test.cpp $(UTIL_OBJS)

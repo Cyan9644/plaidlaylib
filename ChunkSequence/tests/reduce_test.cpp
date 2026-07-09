@@ -19,7 +19,7 @@ struct SumMonoid {
 };
 
 struct MaxMonoid {
-    // perm(n) starts at 0, so 0 is the correct min-identity for max.
+    // iota(n) starts at 0, so 0 is the correct min-identity for max.
     uint64_t identity = 0;
     uint64_t operator()(uint64_t a, uint64_t b) const { return std::max(a, b); }
 };
@@ -61,8 +61,8 @@ int main(int argc, char* argv[]) {
 
     const size_t n = (argc > 1) ? std::stoull(argv[1]) : 5'000'000ULL;
 
-    std::cout << "Building perm(" << n << ")...\n" << std::flush;
-    const chunk_seq input = ChunkSequenceOps::perm(n);
+    std::cout << "Building iota(" << n << ")...\n" << std::flush;
+    const chunk_seq input = ChunkSequenceOps::iota(n);
     std::cout << input.chunks.size() << " chunks across "
               << GetSSDList().size() << " drives\n\n";
 
@@ -73,12 +73,12 @@ int main(int argc, char* argv[]) {
                        ChunkSequenceOps::ChunkReduce<uint64_t>(input, SumMonoid{}),
                        (uint64_t)(n - 1) * n / 2);
 
-    // max element of perm(n) = n-1
+    // max element of iota(n) = n-1
     all_pass &= report("max  element",
                        ChunkSequenceOps::ChunkReduce<uint64_t>(input, MaxMonoid{}),
                        (uint64_t)(n - 1));
 
-    // min element of perm(n) = 0
+    // min element of iota(n) = 0
     all_pass &= report("min  element",
                        ChunkSequenceOps::ChunkReduce<uint64_t>(input, MinMonoid{}),
                        0ULL);

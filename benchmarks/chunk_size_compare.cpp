@@ -4,7 +4,7 @@
 // rule for chunkSizeCompare_%).  For a fixed problem size n, times the same
 // logical pipeline four ways:
 //
-//   raw read          ChunkReduce(perm)                   — device-read ceiling (1n I/O)
+//   raw read          ChunkReduce(iota)                   — device-read ceiling (1n I/O)
 //   map|reduce        eager 2r+1w (3n)  delayed 1r (1n)
 //   map|map|reduce    eager 3r+2w (5n)  delayed 1r (1n)  — clearest fusion win
 //   force(map|map)    eager 2r+2w (4n)  delayed 1r+1w (2n)
@@ -77,8 +77,8 @@ int main(int argc, char* argv[]) {
     std::cout << "CHUNK_SIZE=" << CHUNK_SIZE << " bytes (" << CHUNK_SIZE / 1024 << " KB)"
               << "  n=" << n << "\n";
 
-    std::cout << "Generating chunk_seq perm(" << n << ")..." << std::flush;
-    const chunk_seq cseq = ChunkSequenceOps::perm(n);
+    std::cout << "Generating chunk_seq iota(" << n << ")..." << std::flush;
+    const chunk_seq cseq = ChunkSequenceOps::iota(n);
     const size_t in_bytes = chunk_seq_bytes(cseq);
     std::cout << " " << cseq.chunks.size() << " chunks, "
               << std::fixed << std::setprecision(3) << to_gb(in_bytes) << " GB\n\n";
@@ -162,7 +162,7 @@ int main(int argc, char* argv[]) {
     }
 
     // ── cleanup input ────────────────────────────────────────────────────────
-    cleanup_prefix("perm");
+    cleanup_prefix("iota");
 
     std::cout << "\n" << (agree ? "agree=1 (all substrates match)"
                                 : "agree=0 (MISMATCH — see above)") << "\n";

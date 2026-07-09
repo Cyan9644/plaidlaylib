@@ -22,9 +22,9 @@ predecessor's standalone plotters, and the plots follow the same two-panel
 (read-bound map|map|reduce vs write-bound force(map|map)) base-2 log-log style.
 
 To keep data off the drives, the script deletes the benchmarks' data files
-(`perm<drive>` inputs + `bw_*` intermediates) between every sweep point and after
+(`iota<drive>` inputs + `bw_*` intermediates) between every sweep point and after
 the run, so nothing accumulates (the C++ binaries clean their own intermediates,
-but delayed_compare leaves its `perm` input behind).  It also best-effort
+but delayed_compare leaves its `iota` input behind).  It also best-effort
 `fstrim`s the mounts once at startup (fstrim can be slow on real SSDs, so it is
 not repeated between points; a no-op on a tmpfs dev box, where FITRIM is
 unsupported — skipped quietly).  `--no-clean` / `--no-fstrim` disable each.
@@ -209,10 +209,10 @@ def _f(s):
 
 # ── device maintenance ──────────────────────────────────────────────────────
 # File-name globs (per mount) of every prefix the benchmarks write: the shared
-# `perm<drive>` input plus each pipeline's intermediates.  Used to clear the
+# `iota<drive>` input plus each pipeline's intermediates.  Used to clear the
 # drives between points so nothing accumulates — the C++ binaries clean their
-# own intermediates, but delayed_compare leaves its `perm` input behind.
-BENCH_FILE_GLOBS = ("perm[0-9]*", "bw_dl_*", "bw_cs_*") + \
+# own intermediates, but delayed_compare leaves its `iota` input behind.
+BENCH_FILE_GLOBS = ("iota[0-9]*", "bw_dl_*", "bw_cs_*") + \
     tuple(g for e in EXAMPLES for g in e["data_globs"])
 
 
