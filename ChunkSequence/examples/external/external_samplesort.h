@@ -165,7 +165,6 @@ return ChunkSequenceOps::flatten(externalSequenceVector);
 
 }
 
-
-
+}  // namespace ChunkSequenceOps
 
 #endif
