@@ -1,3 +1,5 @@
+//purely external samplesort, assumes that buckets CANNOT fit in memory
+
 #ifndef EXTERNAL_SAMPLE_SORT_H
 #define EXTERNAL_SAMPLE_SORT_H
 #include <algorithm>

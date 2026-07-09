@@ -74,6 +74,9 @@ struct chunk_seq {
         for (auto& [name, fd] : fd_cache) close(fd);
         close(out_fd);
     }
+    const size_t headers_size(){
+        return this->chunks.size();
+    }
 
     // Read the whole sequence into an in-DRAM std::vector<T> in index order.
     // Convenience for tests / small out-of-core results; assumes the sequence
@@ -277,6 +280,16 @@ size_t size(const chunk_seq& seq) {
     if (seq.chunks.empty()) return 0;
     const size_t ept = CHUNK_SIZE / sizeof(T);
     return (seq.chunks.size() - 1) * ept + seq.chunks.back().used / sizeof(T);
+}
+
+// Wrap an already-populated, index-ordered header list into a chunk_seq.
+// Minimal helper so callers that build chunk headers by hand (e.g. cut) can
+// produce a chunk_seq without touching the struct internals.  Does NOT verify
+// the index-ordered invariant.
+inline chunk_seq from_chunks(const parlay::sequence<chunk>& headers) {
+    chunk_seq seq;
+    seq.chunks.assign(headers.begin(), headers.end());
+    return seq;
 }
 
 // Read the single element at logical index i.  Reads one O_DIRECT-aligned block

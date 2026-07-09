@@ -46,6 +46,7 @@ TEST_BINARIES := $(BINDIR)/permTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/rabin_karpExample $(BINDIR)/kth_smallestExample \
                     $(BINDIR)/external_samplesortExample $(BINDIR)/external_linefitExample \
+                    $(BINDIR)/fitmem_sortExample $(BINDIR)/fitmem_kth_smallestExample \
                     $(BINDIR)/bigint_addExample
 
 LINK = $(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
@@ -206,6 +207,14 @@ $(BINDIR)/external_samplesortExample: ChunkSequence/examples/external/external_s
 	$(LINK)
 
 $(BINDIR)/external_linefitExample: ChunkSequence/examples/external/external_linefit.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(LINK)
+
+# fitmem variants: single-level (buckets fit in DRAM) sample sort / kth-smallest,
+# same examples/external/ location and recipe as the fully external siblings.
+$(BINDIR)/fitmem_sortExample: ChunkSequence/examples/external/fitmem_sort.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(LINK)
+
+$(BINDIR)/fitmem_kth_smallestExample: ChunkSequence/examples/external/fitmem_kth_smallest.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # ── benchmarks ─────────────────────────────────────────────────────────────────

@@ -112,6 +112,28 @@ EXAMPLES = [
      "title": "sample sort: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*"]},
 
+    # fitmem_kth_smallestExample: same driver shape as kth_smallest, but the
+    # single-level "fitmem" variant (one bucketing round, then select the winning
+    # bucket in DRAM).  Its intermediates are fk_id_/fk_next_ alongside fk_in.
+    {"name": "fitmem_kth_smallest", "target": "bin/fitmem_kth_smallestExample",
+     "cols": ["n", "k", "build_s", "select_s", "inmem_select_s", "result",
+              "throughput_gb_s"],
+     "time_col": "select_s", "inmem_col": "inmem_select_s",
+     "xlabel": "n (number of keys)",
+     "title": "fitmem kth-smallest: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
+     "data_globs": ["fk_in*", "fk_id_*", "fk_next_*"]},
+
+    # fitmem_sortExample: same driver shape as external_samplesort, but the
+    # single-level "fitmem" variant (one bucketing round, then each bucket is
+    # sorted directly in DRAM).  Its intermediates are fs_id_/fs_bucket_/fs_base_/
+    # fs_sorted_ (the sorted output references the fs_sorted_ files) alongside fs_in.
+    {"name": "fitmem_sort", "target": "bin/fitmem_sortExample",
+     "cols": ["n", "build_s", "sort_s", "inmem_sort_s", "throughput_gb_s"],
+     "time_col": "sort_s", "inmem_col": "inmem_sort_s",
+     "xlabel": "n (number of keys)",
+     "title": "fitmem sample sort: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
+     "data_globs": ["fs_in*", "fs_id_*", "fs_bucket_*", "fs_base_*", "fs_sorted_*"]},
+
     # external_linefitExample sweeps n; the plotted time is the fit itself
     # (input build excluded).  Both passes are fully delayed, so the fit leaves
     # no intermediates beyond the lf_x/lf_y inputs.
