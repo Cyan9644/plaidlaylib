@@ -96,7 +96,7 @@ auto ids = ChunkMap<T, size_t>(seq, "ss_id_" + tag,[&](T e){//problem: the dual 
 });
 
 std::vector<chunk_seq> externalSequenceVector(num_buckets);
-ChunkSequenceOps::chunk_count_sort2<T>(seq, ids, externalSequenceVector, "ss_bucket_" + tag);
+ChunkSequenceOps::chunk_count_sort<T>(seq, ids, externalSequenceVector, "ss_bucket_" + tag);
 
 //it should now be the case that externalSequenceVector is a full vector of the individual external sequences
 //in this case we just need a simple flatten to put all the chunk headers into a single list

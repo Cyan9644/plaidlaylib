@@ -112,7 +112,7 @@ void chunk_count_sort(const chunk_seq& seq, const chunk_seq& ids,
 
 
 /**
- * Keyed variant of chunk_count_sort2: instead of consuming a precomputed,
+ * Keyed variant of chunk_count_sort: instead of consuming a precomputed,
  * chunk-parallel bucket-id sequence, the bucket for each element is computed
  * inline from its value via key_fn(value) -> bucket index.  This lets callers
  * skip materializing an id chunk_seq to disk entirely (no ChunkMap write pass,
