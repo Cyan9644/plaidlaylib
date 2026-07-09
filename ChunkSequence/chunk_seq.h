@@ -282,14 +282,78 @@ size_t size(const chunk_seq& seq) {
     return (seq.chunks.size() - 1) * ept + seq.chunks.back().used / sizeof(T);
 }
 
-// Wrap an already-populated, index-ordered header list into a chunk_seq.
-// Minimal helper so callers that build chunk headers by hand (e.g. cut) can
-// produce a chunk_seq without touching the struct internals.  Does NOT verify
-// the index-ordered invariant.
-inline chunk_seq from_chunks(const parlay::sequence<chunk>& headers) {
-    chunk_seq seq;
-    seq.chunks.assign(headers.begin(), headers.end());
-    return seq;
+// Materialize an index-ordered header list into a *fresh, independent* on-disk
+// chunk_seq.  Callers that build chunk headers by hand (e.g. cut) may hand us
+// headers that reference another sequence's files -- interior chunks shared by
+// reference, seam chunks in "<file>_cut" scratch files.  Rather than alias those
+// files, this copies every chunk's bytes into new files (named result_prefix +
+// drive_index) spread balls-in-bins across the drives and packed at CHUNK_SIZE
+// slots, so the returned sequence owns all its data and outlives the input.
+// The per-chunk `used` and `index` are preserved (the head chunk may be partial,
+// so this does NOT re-densify and does NOT verify the every-chunk-but-last-full
+// invariant).  Reads and writes are O_DIRECT.
+inline chunk_seq from_chunks(const parlay::sequence<chunk>& headers,
+                             const std::string& result_prefix = "cut_out") {
+    const size_t num_chunks = headers.size();
+    if (num_chunks == 0) return {};
+    const size_t num_drives = GetSSDList().size();
+
+    // Assign each output chunk to a drive (balls-in-bins) and its slot within
+    // that drive's file, exactly like tabulate.
+    std::vector<size_t> drive_of(num_chunks);
+    {
+        std::mt19937_64 rng(std::random_device{}());
+        std::uniform_int_distribution<size_t> dist(0, num_drives - 1);
+        for (size_t i = 0; i < num_chunks; i++) drive_of[i] = dist(rng);
+    }
+    std::vector<std::vector<size_t>> drive_chunks(num_drives);
+    for (size_t i = 0; i < num_chunks; i++) drive_chunks[drive_of[i]].push_back(i);
+    std::vector<size_t> slot_of(num_chunks);
+    for (size_t d = 0; d < num_drives; d++)
+        for (size_t s = 0; s < drive_chunks[d].size(); s++)
+            slot_of[drive_chunks[d][s]] = s;
+
+    // Create + size each destination drive file so O_DIRECT writes can land at
+    // any slot offset immediately.
+    std::vector<std::string> filenames(num_drives);
+    parlay::parallel_for(0, num_drives, [&](size_t d) {
+        filenames[d] = GetFileName(result_prefix, d);
+        const size_t file_size = drive_chunks[d].size() * CHUNK_SIZE;
+        if (file_size == 0) return;
+        int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        SYSCALL(fd);
+        if (fallocate(fd, 0, 0, (off_t)file_size) != 0)
+            SYSCALL(ftruncate(fd, (off_t)file_size));
+        SYSCALL(close(fd));
+    }, /*granularity=*/1);
+
+    // New descriptors: fresh file + slot offset, preserved `used` and `index`.
+    std::vector<chunk> chunks(num_chunks);
+    for (size_t i = 0; i < num_chunks; i++)
+        chunks[i] = {filenames[drive_of[i]], slot_of[i] * CHUNK_SIZE,
+                     headers[i].used, headers[i].index};
+
+    // Copy each source chunk's bytes into its fresh slot, in parallel.  Read
+    // AlignUp(used) into a CHUNK_SIZE buffer (zero-pad the tail so the on-disk
+    // block is deterministic) and write a full O_DIRECT-aligned CHUNK_SIZE block.
+    parlay::parallel_for(0, num_chunks, [&](size_t i) {
+        const chunk& src = headers[i];
+        void* buf = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
+        CHECK(buf != nullptr) << "from_chunks: buffer allocation failed";
+        int rfd = open(src.filename.c_str(), O_RDONLY | O_DIRECT);
+        SYSCALL(rfd);
+        SYSCALL(pread(rfd, buf, AlignUp(src.used), (off_t)src.begin_addr));
+        close(rfd);
+        if (src.used < CHUNK_SIZE)
+            memset((char*)buf + src.used, 0, CHUNK_SIZE - src.used);
+        int wfd = open(filenames[drive_of[i]].c_str(), O_WRONLY | O_DIRECT);
+        SYSCALL(wfd);
+        SYSCALL(pwrite(wfd, buf, CHUNK_SIZE, (off_t)(slot_of[i] * CHUNK_SIZE)));
+        close(wfd);
+        free(buf);
+    }, /*granularity=*/1);
+
+    return {chunks};
 }
 
 // Read the single element at logical index i.  Reads one O_DIRECT-aligned block

@@ -5,8 +5,11 @@
 // then extracts the half-open range [start, end) into a new, independent
 // out-of-core sequence with the cut in ExternalPrimitives/chunk_cut.h.  The cut
 // rewrites the (possibly unaligned) first/last partial chunks into fresh O_DIRECT
-// files and shares the interior full chunks by reference, so its I/O is the two
-// seam chunks rather than the whole range.
+// seam files and threads the interior chunk headers through; from_chunks then
+// materializes the whole result into fresh, independent on-disk files (a full
+// copy of the range across the drives), so the returned sequence owns all its
+// data -- symmetric with the in-memory baseline, which copies the range into a
+// fresh DRAM sequence.
 //
 // Dual-purpose, like the benchmarks and the other examples: prints human-readable
 // results AND a machine-readable "CSV," line that benchmarks/run_benches.py greps.
@@ -33,8 +36,8 @@
 // CSV line: CSV,<n>,<start>,<end>,<build_s>,<cut_s>,<inmem_cut_s>,<out_elems>,<throughput_gb_s>
 //   throughput = cut-range bytes ((end-start)*8) / cut_s.
 //
-// Complexity: O(k / CHUNK_SIZE) chunk headers touched for a k-element range;
-// the physical I/O is the (at most two) unaligned seam chunks.
+// Complexity: O(k) work for a k-element range -- from_chunks copies the whole
+// range (interior chunks + the two rewritten seam chunks) to fresh on-disk files.
 
 #include <chrono>
 #include <cstdint>
@@ -184,14 +187,19 @@ int main(int argc, char* argv[]) {
               << (inmem_ok ? f9(inmem_cut_s) : std::string()) << ','
               << out_elems << ',' << f9(gb_s) << '\n';
 
-    // Don't leave data on the drives across sweep points.  The cut shares the
-    // input's interior chunk files and adds "<inputfile>_cut" seam files; unlink
-    // both (the "cut_in*" glob in run_benches.py matches "cut_in<d>_cut" too).
+    // Don't leave data on the drives across sweep points.  Four sets of files
+    // exist: the input ("cut_in<d>"), the two seam scratch files the cut writes
+    // ("cut_in<d>_cut_start" / "cut_in<d>_cut_end"), and the materialized,
+    // independent cut output that from_chunks now writes ("cut_out<d>").  Unlink
+    // all of them (run_benches.py's "cut_in*"/"cut_out*" globs cover them across
+    // sweep points).
     const auto& ssds = GetSSDList();
     for (size_t d = 0; d < ssds.size(); d++) {
         const std::string f = GetFileName(in_prefix, d);
         unlink(f.c_str());
-        unlink((f + "_cut").c_str());
+        unlink((f + "_cut_start").c_str());
+        unlink((f + "_cut_end").c_str());
+        unlink(GetFileName("cut_out", d).c_str());
     }
     return agree ? 0 : 1;
 }

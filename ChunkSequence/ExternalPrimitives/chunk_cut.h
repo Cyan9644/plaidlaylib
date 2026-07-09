@@ -71,7 +71,10 @@ int fd1 = open(seq.chunks[index_counter].filename.c_str(), O_RDONLY | O_DIRECT);
 //index we want to see, which means we need to read size of the difference between the two to get all the data from start to end
 SYSCALL(pread(fd1, buff, AlignUp(seq.chunks[index_counter].used), (off_t) seq.chunks[index_counter].begin_addr));
 memmove(buff, buff + tracker, (seq.chunks[index_counter].used/sizeof(T) - tracker) * sizeof(T));
-std::string start_cut = seq.chunks[index_counter].filename + "_cut";
+// Distinct suffix from the end seam below: if the start and end chunks land on
+// the same drive their base filenames are identical, so a shared "_cut" suffix
+// would make both seams write offset 0 of the same file and clobber each other.
+std::string start_cut = seq.chunks[index_counter].filename + "_cut_start";
 
 int fd1_filename1 = open(start_cut.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
 //we know that the O_DIRECT alignment below us is already full of the original data, so we're trying the one above
@@ -114,7 +117,7 @@ int fd = open(seq.chunks[index_counter].filename.c_str(), O_RDONLY | O_DIRECT);
 // SYSCALL(pread(fd, buf, AlignUp(seq.chunks[index_counter].used/sizeof(T) - tracker) * sizeof(T), (off_t) AlignDown((seq.chunks[index_counter].begin_addr + tracker*sizeof(T)))));
 SYSCALL(pread(fd, buf, AlignUp(tracker * sizeof(T)), (off_t) seq.chunks[index_counter].begin_addr));
 
-std::string end_cut = seq.chunks[index_counter].filename + "_cut";
+std::string end_cut = seq.chunks[index_counter].filename + "_cut_end";
 int fd_filename = open(end_cut.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
 // SYSCALL(pwrite(fd_filename,buf, (seq.chunks[index_counter].used/sizeof(T)-tracker) * sizeof(T), (off_t)(AlignUp(seq.chunks[index_counter].begin_addr + tracker*sizeof(T)))));
 SYSCALL(pwrite(fd_filename,buf, AlignUp(tracker * sizeof(T)), (off_t)0));
