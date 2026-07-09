@@ -156,10 +156,14 @@ EXAMPLES = [
      "data_globs": ["bi_a*", "bi_b*", "bi_sum*"]},
 
     # chunk_cutExample sweeps n; the plotted time is the cut itself (input build
-    # excluded).  It cuts the middle half ([n/4, 3n/4)) so the cut length scales
-    # with n.  Baseline is parlaylib's slice::cut materialized into an
-    # independent DRAM sequence; the out-of-core cut symmetrically materializes
-    # the range into fresh on-disk files.  Three file sets: the "cut_in<d>" input,
+    # excluded).  It cuts the middle ~half (k = n/2) with both endpoints in the
+    # MIDDLE of a chunk (never on a chunk boundary), so the cut length scales with
+    # n and every sweep point does the same real seam-rewrite work regardless of
+    # how n aligns to the chunk grid (see chunk_cut.cpp for why naive n/4, 3n/4
+    # endpoints alias the grid for power-of-two n).  Baseline is parlaylib's
+    # slice::cut materialized into an independent DRAM sequence; the out-of-core
+    # cut symmetrically materializes the range into fresh on-disk files.  Three
+    # file sets: the "cut_in<d>" input,
     # "cut_in<d>_cut" seam scratch (matched by "cut_in*"), and the materialized
     # "cut_out<d>" output.
     {"name": "chunk_cut", "target": "bin/chunk_cutExample",

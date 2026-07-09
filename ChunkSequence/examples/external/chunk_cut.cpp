@@ -14,7 +14,12 @@
 // Dual-purpose, like the benchmarks and the other examples: prints human-readable
 // results AND a machine-readable "CSV," line that benchmarks/run_benches.py greps.
 // The examples sweep (make bench-examples) times the cut across a sweep of n with
-// the range held at the middle half ([n/4, 3n/4)), so the cut length scales with n.
+// the range held at the middle ~half (k = n/2), so the cut length scales with n.
+// Both endpoints are placed in the MIDDLE of a chunk (offset ELEMS_PER_CHUNK/2),
+// never on a chunk boundary, so every sweep point deterministically exercises the
+// same real seam-rewrite work (see the default computation in main() for why the
+// naive n/4, 3n/4 endpoints alias the chunk grid for power-of-two n and skew the
+// timings).  The in-mem baseline cuts the identical [start, end).
 //
 // Baseline: parlaylib's slice/cut on the same keys in DRAM.  parlay::slice::cut
 // itself is O(1) -- it returns a view, copying nothing -- so timing it alone is
@@ -98,9 +103,31 @@ static std::vector<T> read_in_order(const chunk_seq& seq) {
 
 int main(int argc, char* argv[]) {
     ParseGlobalArguments(argc, argv);
-    const size_t n     = (argc > 1) ? std::stoull(argv[1]) : 1'000'000;
-    const size_t start = (argc > 2) ? std::stoull(argv[2]) : n / 4;
-    const size_t end   = (argc > 3) ? std::stoull(argv[3]) : (3 * n) / 4;
+    const size_t n = (argc > 1) ? std::stoull(argv[1]) : 1'000'000;
+
+    // Default range: the middle ~half of the sequence ([start, end) with k = n/2),
+    // with BOTH endpoints landing in the MIDDLE of a chunk (offset
+    // ELEMS_PER_CHUNK/2) rather than on a chunk boundary.  This is deterministic
+    // regardless of how n aligns to the CHUNK grid.
+    //
+    // Why it matters: the old defaults (n/4, 3n/4) land *exactly* on chunk
+    // boundaries for every power-of-two sweep size >= 2^21 (n/4 is then a multiple
+    // of ELEMS_PER_CHUNK).  A boundary-aligned cut hits a degenerate seam path --
+    // the start seam rewrites a whole chunk and the end seam is an empty (used=0)
+    // chunk -- so it exercises little of the real per-seam read/rewrite work and
+    // its cost jumps around vs. the one non-aligned point (2^20).  Forcing each
+    // seam to split its chunk ~half-half makes every sweep point do the same real
+    // work.  The in-mem baseline below uses this identical [start, end), so both
+    // substrates always cut the same range.
+    constexpr size_t EPC = ELEMS_PER_CHUNK;
+    size_t def_start = (n / 4 / EPC) * EPC + EPC / 2;
+    size_t def_end   = (3 * n / 4 / EPC) * EPC + EPC / 2;
+    if (def_start >= def_end || def_end > n) {   // tiny n: fall back to a valid range
+        def_start = n / 4;
+        def_end   = (3 * n) / 4;
+    }
+    const size_t start = (argc > 2) ? std::stoull(argv[2]) : def_start;
+    const size_t end   = (argc > 3) ? std::stoull(argv[3]) : def_end;
     CHECK(n > 0 && start < end && end <= n)
         << "need 0 <= start < end <= n (n=" << n << ", start=" << start
         << ", end=" << end << ")";
