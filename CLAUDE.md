@@ -343,4 +343,4 @@ offsets + total; pass 2 is a lazy `scan_node`.  `force` writes one file per driv
 | `SSD_COUNT` | 30 | number of SSD mount points |
 | `SSD_ROOT` | `/mnt/ssd%lu` | mount-path printf template |
 | `O_DIRECT_MULTIPLE` | 4096 | alignment for O_DIRECT buffers and offsets |
-| `CHUNK_SIZE` | 4 MB | size of one chunk (`chunk_seq.h`; override `-DCHUNK_SIZE_BYTES=N`) |
+| `CHUNK_SIZE` | 4 MB | size of one chunk (`configs.h`; override `-DCHUNK_SIZE_BYTES=N`) |
