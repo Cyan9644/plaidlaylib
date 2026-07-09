@@ -111,7 +111,7 @@ int main(int argc, char* argv[]) {
     // the read-back of the out-of-core cut (8k) for the element-wise cross-check
     // -- call it ~24n worst case.
     const size_t phys = (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
-    size_t budget = phys / 2;
+    size_t budget = phys;
     if (const char* e = getenv("EXAMPLE_INMEM_BUDGET_BYTES")) budget = std::stoull(e);
     const bool inmem_ok = n <= budget / 24;
 

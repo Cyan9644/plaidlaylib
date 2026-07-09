@@ -84,7 +84,7 @@ int main(int argc, char* argv[]) {
     // the per-recursion bucket ids (~n bytes) and packed survivors, with sort/pack
     // roughly doubling the top level -- call it ~16n.
     const size_t phys = (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
-    size_t budget = phys / 2;
+    size_t budget = phys;
     if (const char* e = getenv("EXAMPLE_INMEM_BUDGET_BYTES")) budget = std::stoull(e);
     const bool inmem_ok = n <= budget / 16;
 
