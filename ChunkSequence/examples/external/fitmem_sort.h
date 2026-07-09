@@ -8,10 +8,7 @@
 
 #include <parlay/primitives.h>
 #include <parlay/random.h>
-#include "ChunkSequence/chunk_map.h"
-#include "ChunkSequence/chunk_histogram_by_index.h"
 #include "ChunkSequence/ExternalPrimitives/materialize.h"
-#include "ChunkSequence/chunk_pack.h"
 #include "ChunkSequence/ExternalPrimitives/scan_find.h"
 #include "ChunkSequence/ExternalPrimitives/chunk_count_sort2.h"
 #include "ChunkSequence/ExternalPrimitives/flatten.h"
@@ -77,12 +74,16 @@ n+= seq.chunks[r].used;
 auto seconds = parlay::map(pivots, [](const auto& p){ return p.second; });
   parlay::internal::heap_tree ss(seconds);
 
-auto ids = ChunkMap<T, size_t>(seq, "fs_id_" + tag,[&](T e){
-    return ss.rank(e, less1);
-});
-
+// Route every key into its bucket in a single streaming pass over seq, deriving
+// the bucket from the value (ss.rank) on the fly.  The earlier version first
+// materialized a full size_t bucket-id chunk_seq to disk with ChunkMap (an 8n
+// write + 8n read) purely to feed chunk_count_sort2; folding the rank into the
+// count sort drops that entire pass -- seq is now read once here, not twice.
 std::vector<chunk_seq> externalSequenceVector(num_buckets);
-ChunkSequenceOps::chunk_count_sort2<T>(seq, ids, externalSequenceVector, "fs_bucket_" + tag);
+ChunkSequenceOps::chunk_count_sort_by_key<T>(
+    seq, num_buckets, externalSequenceVector,
+    [&](T e){ return ss.rank(e, less1); },
+    "fs_bucket_" + tag);
 
 // Each bucket is assumed to fit in DRAM: pull it in, sort it in place, and write
 // the sorted run back out.  No recursion (that is external_samplesort's job).

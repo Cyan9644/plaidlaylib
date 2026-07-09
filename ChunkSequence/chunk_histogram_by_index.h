@@ -119,6 +119,34 @@ parlay::sequence<size_t> ChunkHistogramByIndex(const chunk_seq& seq, size_t num_
 
 }
 
+// Keyed variant: instead of counting a chunk_seq whose elements are already the
+// bucket ids, count seq's *values* by key_fn(value) -> bucket index.  This lets
+// callers get per-bucket counts straight from the value sequence without first
+// materializing an id chunk_seq to disk (no ChunkMap write pass, no read-back of
+// the ids) -- the bucket key is derived on the fly during the single read pass.
+//
+// @tparam T       Element type stored in seq.
+// @tparam KeyFn   Callable T -> integral bucket index in [0, num_buckets).
+template<typename T, typename KeyFn>
+parlay::sequence<size_t> ChunkHistogramByKey(const chunk_seq& seq,
+                                             size_t num_buckets, KeyFn key_fn){
+    auto locals = ChunkSequenceOps::RemoveWorker<T>(seq, /*reader_threads=*/10,
+        [&](ChunkSequenceReader<T>& reader){
+            parlay::sequence<size_t> h(num_buckets, 0);
+            while(true){
+                auto [ptr, size, index] = reader.Poll();
+                if(ptr == nullptr) break;
+                for(size_t k = 0; k < size; k++) h[(size_t)key_fn(ptr[k])]++;
+                reader.allocator.Free(ptr);
+            }
+            return h;
+        });
+    parlay::sequence<size_t> total(num_buckets, 0);
+    for(auto& h : locals)
+        for(size_t j = 0; j < num_buckets; j++) total[j] += h[j];
+    return total;
+}
+
 }  // namespace ChunkSequenceOps
 
 #endif

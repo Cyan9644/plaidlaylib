@@ -47,7 +47,7 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/rabin_karpExample $(BINDIR)/kth_smallestExample \
                     $(BINDIR)/external_samplesortExample $(BINDIR)/external_linefitExample \
                     $(BINDIR)/fitmem_sortExample $(BINDIR)/fitmem_kth_smallestExample \
-                    $(BINDIR)/bigint_addExample
+                    $(BINDIR)/bigint_addExample $(BINDIR)/chunk_cutExample
 
 LINK = $(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
@@ -215,6 +215,9 @@ $(BINDIR)/fitmem_sortExample: ChunkSequence/examples/external/fitmem_sort.cpp $(
 	$(LINK)
 
 $(BINDIR)/fitmem_kth_smallestExample: ChunkSequence/examples/external/fitmem_kth_smallest.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(LINK)
+
+$(BINDIR)/chunk_cutExample: ChunkSequence/examples/external/chunk_cut.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # ── benchmarks ─────────────────────────────────────────────────────────────────

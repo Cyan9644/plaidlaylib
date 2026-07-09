@@ -7,7 +7,6 @@
 
 #include <parlay/primitives.h>
 #include <parlay/random.h>
-#include "ChunkSequence/chunk_map.h"
 #include "ChunkSequence/chunk_histogram_by_index.h"
 #include "ChunkSequence/ExternalPrimitives/materialize.h"
 #include "ChunkSequence/chunk_pack.h"
@@ -92,25 +91,25 @@ n+= seq.chunks[r].used; //add the used size of each chunk to the n; this tells u
 //for this. also we're on C++ 17 instead of 20
 auto seconds = parlay::map(pivots, [](const auto& p){ return p.second; });
   parlay::internal::heap_tree ss(seconds);
-  
-//   auto ids = ChunkSequenceOps::tabulate(seq, [&] (long i) -> unsigned char {
-//     return ss.find(in[i], less);});
-// auto ids = ChunkMap<T, unsigned char>(seq,"ids_prefix", [&](T e){ return ss.find(e, less1);});
-auto ids = ChunkMap<T, unsigned char>(seq, "fk_id_" + std::to_string(n),[&](T e){
-    return ss.rank(e, less1);
-});
-  // Count how many in keys are each bucket
-//   auto sums = ChunkSequenceOps::histogram_by_index(ids, sample_size+1);
-auto sums = ChunkSequenceOps::ChunkHistogramByIndex<unsigned char>(ids, sample_size+1);
+
+  // Bucket of a key = its rank among the pivots.  Cheap (a heap_tree walk, ~5
+  // comparisons for 32 buckets), so we recompute it inline in both remaining
+  // passes rather than materializing a bucket-id chunk_seq to disk with ChunkMap
+  // (which cost a write of the ids plus a read-back in each of the two uses).
+  auto key_of = [&](T e){ return (size_t)ss.rank(e, less1); };
+
+  // Count how many keys fall in each bucket, straight from the values.
+auto sums = ChunkSequenceOps::ChunkHistogramByKey<T>(seq, sample_size + 1, key_of);
 
   // find which bucket k belongs in, and pack the keys in that bucket into next
   auto [offsets, total] = parlay::scan(sums);
   auto id = std::upper_bound(offsets.begin(), offsets.end(), k) - offsets.begin() - 1;
-// auto flags = ChunkSequenceOps::delayed::force(ChunkSequenceOps::delayed::map(ChunkSequenceOps::delayed::delay<unsigned char>(ids),[=](unsigned char b){ return b == id; }),"flags_" + std::to_string(n));auto next= ChunkSequenceOps::pack<T>(seq, "next_" +std::to_string(n), flags);
 
-auto next = ChunkSequenceOps::pack_if<T, unsigned char>(
-    seq, "fk_next_" + std::to_string(n), ids,
-    [id](unsigned char b){ return b == id; });
+  // Pack the winning bucket directly on the value predicate -- one read pass over
+  // seq, no id chunk_seq to read alongside it.
+auto next = ChunkSequenceOps::pack_value<T>(
+    seq, "fk_next_" + std::to_string(n),
+    [&, id](T e){ return key_of(e) == (size_t)id; });
   // The winning bucket is assumed to fit in DRAM (its probabilistic size bound is
   // O(n/sqrt(m)) for m buckets), so instead of recursing out-of-core we pull it
   // in and select directly, adjusting k to the bucket-local rank (k - offsets[id]).

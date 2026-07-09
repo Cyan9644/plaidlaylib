@@ -329,6 +329,72 @@ chunk_seq pack_if(const chunk_seq& seq,
         });
 }
 
+/**
+ * Value-predicate pack: keep every element g of seq for which pred(seq[g]) is
+ * true, writing survivors tightly packed and index-ordered (element order
+ * preserved).  Unlike the other overloads there is no selector at all -- neither
+ * a DRAM boolean nor a chunk-parallel keep_seq on disk -- the predicate is
+ * evaluated directly against each data element.
+ *
+ * This is the scalable "pack by a property of the value" primitive: callers that
+ * would otherwise map values to a flag/id sequence, force it to disk, then pack
+ * by it can instead pack in a single read pass, recomputing the (cheap) property
+ * inline.  It reads only seq -- no selector read, no flag write, and no
+ * n-element boolean in DRAM.
+ *
+ * A thin producer on top of DensePack, like the other overloads.
+ *
+ * @tparam T     Element type stored in seq.
+ * @tparam Pred  Callable T -> bool.
+ */
+template<typename T, typename Pred>
+chunk_seq pack_value(const chunk_seq& seq,
+                     const std::string& result_prefix,
+                     Pred pred) {
+    const size_t n_in = seq.chunks.size();
+    if (n_in == 0) return {};
+
+    return DensePack<T>(n_in, result_prefix,
+        [&](size_t base, size_t batch_n) {
+            // Read this batch's contiguous slice with its own reader, so
+            // completions can only belong to this batch.
+            chunk_seq sub;
+            sub.chunks.assign(seq.chunks.begin() + base,
+                              seq.chunks.begin() + base + batch_n);
+            auto reader = std::make_unique<ChunkSequenceReader<T>>();
+            reader->PrepChunks(sub);
+            reader->Start(5, 32, 16);
+
+            struct FC { T* buf; size_t n; size_t idx; };
+            std::vector<FC> fc(batch_n);
+            for (size_t i = 0; i < batch_n; i++) {
+                auto [ptr, n, cidx] = reader->Poll();
+                fc[i] = {ptr, n, cidx};
+            }
+            // Restore logical order before packing.
+            std::sort(fc.begin(), fc.end(),
+                      [](const FC& a, const FC& b) { return a.idx < b.idx; });
+
+            // Compact survivors to the front of each buffer, in parallel, gated
+            // by pred() over the element itself.
+            detail::PackBatch<T> batch;
+            batch.reader = std::move(reader);
+            batch.bufs.resize(batch_n);
+            batch.counts.resize(batch_n);
+            parlay::parallel_for(0, batch_n, [&](size_t b) {
+                T* buf = fc[b].buf;
+                const size_t n = fc[b].n;
+                size_t s = 0;
+                for (size_t j = 0; j < n; j++)
+                    if (pred(buf[j])) buf[s++] = buf[j];
+                batch.bufs[b]   = buf;
+                batch.counts[b] = s;
+            }, /*granularity=*/1);
+
+            return batch;
+        });
+}
+
 } // namespace ChunkSequenceOps
 
 #endif // CHUNK_PACK_H

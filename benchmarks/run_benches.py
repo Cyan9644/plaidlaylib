@@ -155,6 +155,19 @@ EXAMPLES = [
      "title": "big-integer add: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["bi_a*", "bi_b*", "bi_sum*"]},
 
+    # chunk_cutExample sweeps n; the plotted time is the cut itself (input build
+    # excluded).  It cuts the middle half ([n/4, 3n/4)) so the cut length scales
+    # with n.  Baseline is parlaylib's slice::cut materialized into an
+    # independent sequence.  The cut writes "cut_in<d>_cut" seam files alongside
+    # the cut_in input; the "cut_in*" glob matches both.
+    {"name": "chunk_cut", "target": "bin/chunk_cutExample",
+     "cols": ["n", "start", "end", "build_s", "cut_s", "inmem_cut_s",
+              "out_elems", "throughput_gb_s"],
+     "time_col": "cut_s", "inmem_col": "inmem_cut_s",
+     "xlabel": "n (number of keys)",
+     "title": "cut / slice: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
+     "data_globs": ["cut_in*"]},
+
 ]
 
 

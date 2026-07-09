@@ -10,6 +10,7 @@
 #include "absl/log/check.h"
 
 #include "ChunkSequence/chunk_seq.h"
+#include "ChunkSequence/chunk_seq_reader.h"
 #include "ChunkSequence/n_reader.h"
 #include "utils/file_utils.h"
 #include "utils/unordered_file_writer.h"
@@ -107,6 +108,104 @@ void chunk_count_sort2(const chunk_seq& seq, const chunk_seq& ids,
 
     writer.Wait();
 
+}
+
+
+/**
+ * Keyed variant of chunk_count_sort2: instead of consuming a precomputed,
+ * chunk-parallel bucket-id sequence, the bucket for each element is computed
+ * inline from its value via key_fn(value) -> bucket index.  This lets callers
+ * skip materializing an id chunk_seq to disk entirely (no ChunkMap write pass,
+ * no second read to route by it): the routing key is derived on the fly during
+ * the single streaming pass over seq.  Reads one sequence instead of two.
+ *
+ * Bucket assignment is order-independent across chunks (the reader completes
+ * chunks out of order), which is exactly what a counting sort into per-bucket
+ * runs needs -- callers that require sorted output sort each bucket afterward.
+ *
+ * @tparam T       Element type stored in seq.
+ * @tparam KeyFn   Callable T -> integral bucket index in [0, num_buckets).
+ */
+template<typename T = uint64_t, typename KeyFn>
+void chunk_count_sort_by_key(const chunk_seq& seq, size_t num_buckets,
+                      std::vector<chunk_seq>& externalSequenceVector,
+                      KeyFn key_fn,
+                      const std::string& result_prefix = "bucket") {
+    CHECK(externalSequenceVector.size() == num_buckets)
+        << "chunk_count_sort_by_key: externalSequenceVector must be pre-sized to "
+           "num_buckets";
+    static_assert(CHUNK_SIZE % sizeof(T) == 0,
+        "sizeof(T) must divide CHUNK_SIZE for O_DIRECT alignment");
+    const size_t ept        = CHUNK_SIZE / sizeof(T);
+    const size_t num_drives = GetSSDList().size();
+
+    std::vector<std::string> filenames(num_drives);
+    for (size_t d = 0; d < num_drives; d++) {
+        filenames[d] = GetFileName(result_prefix, d);
+        int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        SYSCALL(fd);
+        SYSCALL(close(fd));
+    }
+
+    UnorderedWriterConfig wcfg;
+    wcfg.num_threads   = num_drives;
+    wcfg.io_uring_size = 32;
+    wcfg.queue_size    = 64;
+    wcfg.num_files     = num_drives;
+    UnorderedFileWriter<T> writer;
+    writer.Start(filenames, wcfg);
+
+    std::vector<T*> buffers(num_buckets);
+    std::vector<size_t> buffer_counters(num_buckets, 0);
+    for (size_t b = 0; b < num_buckets; b++) {
+        buffers[b] = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
+        CHECK(buffers[b] != nullptr) << "chunk_count_sort_by_key: buffer alloc failed";
+    }
+
+    size_t slot = 0;
+    std::vector<size_t> drive_off(num_drives, 0);
+
+    auto flush = [&](size_t b) {
+        const size_t d    = slot++ % num_drives;
+        const size_t base = drive_off[d];
+        drive_off[d] += CHUNK_SIZE;
+        const size_t used = buffer_counters[b];
+
+        if (used < ept)
+            memset(buffers[b] + used, 0, (ept - used) * sizeof(T));
+        externalSequenceVector[b].chunks.push_back(
+            chunk{filenames[d], base, used * sizeof(T),
+                  externalSequenceVector[b].chunks.size()});
+        writer.Push(std::shared_ptr<T>(buffers[b], free), ept, d, base);
+        buffers[b] = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
+        CHECK(buffers[b] != nullptr) << "chunk_count_sort_by_key: buffer alloc failed";
+        buffer_counters[b] = 0;
+    };
+
+    // A single streaming reader over seq -- no co-indexed id sequence to match,
+    // so a plain ChunkSequenceReader suffices (cheaper than NReader's matcher).
+    ChunkSequenceReader<T> reader;
+    reader.PrepChunks(seq);
+    reader.Start(10, 32, 8);
+    while (true) {
+        auto [ptr, n, idx] = reader.Poll();
+        if (ptr == nullptr) break;                 // sequence exhausted
+        for (size_t k = 0; k < n; k++) {
+            const size_t j = (size_t)key_fn(ptr[k]);
+            CHECK(j < num_buckets) << "chunk_count_sort_by_key: bucket id " << j
+                << " out of range (num_buckets=" << num_buckets << ")";
+            buffers[j][buffer_counters[j]++] = ptr[k];
+            if (buffer_counters[j] == ept) flush(j);
+        }
+        reader.allocator.Free(ptr);
+    }
+
+    for (size_t b = 0; b < num_buckets; b++) {
+        if (buffer_counters[b] > 0) flush(b);
+        free(buffers[b]);
+    }
+
+    writer.Wait();
 }
 
 
