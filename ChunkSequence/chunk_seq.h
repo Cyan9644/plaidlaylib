@@ -18,13 +18,7 @@
 #include "utils/logger.h"
 #include "utils/unordered_file_writer.h"
 
-#ifdef CHUNK_SIZE_BYTES
-static_assert(CHUNK_SIZE_BYTES % 4096 == 0,
-    "CHUNK_SIZE_BYTES must be a multiple of O_DIRECT_MULTIPLE (4096)");
-constexpr size_t CHUNK_SIZE = CHUNK_SIZE_BYTES;
-#else
-constexpr size_t CHUNK_SIZE = 1024 * 1024 * 4; // 4 MB default
-#endif
+// CHUNK_SIZE lives in configs.h (override with -DCHUNK_SIZE_BYTES=<n>).
 constexpr size_t ELEMS_PER_CHUNK = CHUNK_SIZE / sizeof(uint64_t);
 
 struct chunk {
