@@ -4,8 +4,14 @@
 #define EXTERNAL_SAMPLE_SORT_H
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <random>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include <parlay/primitives.h>
 #include <parlay/random.h>
@@ -17,16 +23,62 @@
 #include "ChunkSequence/ExternalPrimitives/chunk_count_sort.h"
 #include "ChunkSequence/ExternalPrimitives/flatten.h"
 #include "ChunkSequence/ExternalPrimitives/sort_buckets.h"
+#include "ChunkSequence/ExternalPrimitives/inplace_bucket_sort.h"
 #include "ChunkSequence/examples/external/primitive_quicksort.h"
 
 #define DRAM_SIZE ((size_t)500 * 1024 * 1024 * 1024) //==500 GB
 
 
 namespace ChunkSequenceOps{
+
+// Lightweight per-phase timer for sample_sort, enabled by setting the
+// environment variable SS_PHASE_TIMING (to anything).  Each mark() prints the
+// wall-clock time since the previous mark to stderr, so a single run yields a
+// phase-by-phase breakdown of where the sort spends its time.  On destruction it
+// additionally prints one machine-readable line to stdout that
+// benchmarks/samplesort_phase_bench.py (and any other harness) can grep:
+//
+//   SSPHASE,<tag>,<phase1>=<s>,<phase2>=<s>,...,total=<s>
+//
+// Only the outermost/first sample_sort call (tag "0") emits the machine line, so
+// a sweep gets exactly one SSPHASE row per input.  Disabled (zero overhead
+// beyond a branch) when the env var is unset, so it is safe to leave compiled
+// into the shipping header.
+struct SsPhaseTimer {
+    using Clock = std::chrono::steady_clock;
+    bool on;
+    std::string tag;
+    Clock::time_point last, start;
+    std::vector<std::pair<std::string, double>> phases;
+    explicit SsPhaseTimer(const char* t)
+        : on(std::getenv("SS_PHASE_TIMING") != nullptr), tag(t),
+          last(Clock::now()), start(last) {}
+    void mark(const char* name) {
+        if (!on) return;
+        auto now = Clock::now();
+        double s  = std::chrono::duration<double>(now - last).count();
+        double tot = std::chrono::duration<double>(now - start).count();
+        std::fprintf(stderr, "[ss %-3s] %-22s %8.4f s   (cum %8.4f s)\n",
+                     tag.c_str(), name, s, tot);
+        phases.emplace_back(name, s);
+        last = now;
+    }
+    ~SsPhaseTimer() {
+        if (!on || tag != "0" || phases.empty()) return;
+        double tot = std::chrono::duration<double>(Clock::now() - start).count();
+        std::string line = "SSPHASE," + tag;
+        for (auto& p : phases) line += "," + p.first + "=" + std::to_string(p.second);
+        line += ",total=" + std::to_string(tot);
+        std::fprintf(stdout, "%s\n", line.c_str());
+        std::fflush(stdout);
+    }
+};
+
 template <typename T, typename Less = std::less<>>
 chunk_seq sample_sort(chunk_seq& seq, Less less1 = {}) {
 static std::atomic<size_t> ss_counter{0};
 const std::string tag = std::to_string(ss_counter++);
+SsPhaseTimer _pt(tag.c_str());
 size_t n = 0;
   for(size_t r = 0; r < seq.chunks.size(); r++){
 n+= seq.chunks[r].used;
@@ -37,8 +89,15 @@ n+= seq.chunks[r].used;
   size_t min_sample_size = std::max(1UL, 4 * parlay::num_workers() * filer/ DRAM_SIZE);
 // size_t max_sample_size = std::max(1UL, std::min(n / sizeof(T), filer / O_DIRECT_MULTIPLE));
 size_t max_sample_size = std::max(1UL, std::min(n, filer / O_DIRECT_MULTIPLE));
-  auto num_samples = std::max(std::min(filer / (1UL << 27), max_sample_size), min_sample_size);
-  
+  size_t num_samples = std::max(std::min(filer / (1UL << 27), max_sample_size), min_sample_size);
+  // parlay::internal::heap_tree (used below to rank each key against the pivots)
+  // is only correct when the pivot count is 2^k-1 -- a fully balanced tree; any
+  // other count makes to_tree() index out of bounds (segfault).  Round the
+  // desired sample count up to the next 2^k-1, so the bucket count (pivots+1) is
+  // a power of two, exactly as parlay's in-memory sample_sort buckets.
+  num_samples = (size_t{1} << parlay::log2_up(num_samples + 1)) - 1;
+  _pt.mark("size/params");
+
   if (n < num_samples){
     //we're likely going to want a fast quicksort method that takes better advantage of our 
     //memory representation than just external->materialize->sort->external
@@ -46,10 +105,12 @@ size_t max_sample_size = std::max(1UL, std::min(n, filer / O_DIRECT_MULTIPLE));
     //but could overlap the I/O with computation.
 
     auto i = ChunkSequenceOps::materialize<T>(seq); //it would be good to make this materialize into a parlay sequence (now done)
+    _pt.mark("base:materialize");
 
     // std::sort(i.begin(), i.end(), less1);
     // i = parlay::sort(i);
     parlay::sort_inplace(i);
+    _pt.mark("base:sort");
     //this is going to be really slow if we just materialize and write back, probably the best thing to do is to pass a parlay sequence
     //at the recurring call based on the size, but this is kind of messy
     //the easiest way to fix the problem is to just make materialize faster by parallelizing it
@@ -77,13 +138,14 @@ unsigned int sample_size = std::max<size_t>(1, num_samples);
     scan_size<T>(seq, scan_seq);
 
     parlay::parallel_for(0, sample_size * over, [&](size_t count){
-  
+
         pivots[count].second = scan_find<T>(seq, scan_seq, pivots[count].first);
     });
+    _pt.mark("sample:probe");
 
 
     pivots = parlay::sort(pivots, less2);
-    pivots = parlay::tabulate(sample_size,[&] (long i) 
+    pivots = parlay::tabulate(sample_size,[&] (long i)
     {
         return pivots[i*over];
     });
@@ -92,7 +154,8 @@ unsigned int sample_size = std::max<size_t>(1, num_samples);
 
 auto seconds = parlay::map(pivots, [](const auto& p){ return p.second; });
   parlay::internal::heap_tree ss(seconds);
-  
+  _pt.mark("sample:pivots/heap");
+
 
 // std::vector<chunk_seq> externalSequenceVector(num_buckets);
 // ChunkSequenceOps::chunk_count_sort<T>(seq, ids, externalSequenceVector, "ss_bucket_" + tag);
@@ -113,40 +176,21 @@ auto ids = ChunkSequenceOps::delayed::map(ChunkSequenceOps::delayed::delay<T>(se
 std::vector<chunk_seq> externalSequenceVector(num_buckets);
 ChunkSequenceOps::chunk_count_sort(ids, num_buckets, externalSequenceVector,
                                    "ss_bucket_" + tag);
+_pt.mark("count_sort");
 
-//it should now be the case that externalSequenceVector is a full vector of the individual external sequences
-//in this case we just need a simple flatten to put all the chunk headers into a single list
-//because each individual sequence should be sorted and they're in order,
-//we'll get a total sorted ordering
-parlay::parallel_for(0, num_buckets, [&](long i){
+//it should now be the case that externalSequenceVector is a full vector of the individual external sequences.
+//Each bucket is sized to fit in DRAM (num_buckets was chosen so), so we sort
+//each one internally with the lean in-place base sorter (read the bucket's
+//chunks straight into DRAM, sort, write them back to the same files/offsets --
+//no per-bucket reader/writer thread pools, mirroring peter_samplesort's phase 2).
+//Because the buckets are already in pivot order and each is now internally
+//sorted, flattening the chunk headers yields a total sorted ordering.
+ChunkSequenceOps::sort_buckets_inplace<T>(externalSequenceVector, less1);
+_pt.mark("bucket_sort");
 
-    size_t z = 0;
-    for (const auto& c :externalSequenceVector[i].chunks){
-        z += c.used / sizeof(T);
-    }
-    if (z ==n) {
-        //if we're not going to get anything from the partition, i.e. we have an empty partition
-        auto v = ChunkSequenceOps::materialize<T>(externalSequenceVector[i]);
-        std::sort(v.begin(), v.end(), less1);
-        externalSequenceVector[i] = ChunkSequenceOps::to_chunk_seq(
-            v, "ss_deg_" + tag + "_" + std::to_string(i));
-        return;
-    }
-
-    //recurring on this samplesort chain is pretty expensive due to the buffer allocation
-    //we might consider just an external quicksort for this level, as it would use much less memory.
-    //probably multiple levels of parallelism won't help much regardless since we need to do reads
-    //for the pivots = large overhead on recurring calls
-
-    //so instead we're going to call the external quicksort method, which we actually have a method for now but it's 
-    //implemented using primitives.
-    //to get the best performance out of this example, we're going to want to implement it manually with a reader/writer
-    externalSequenceVector[i] = primitive_quicksort<T>(externalSequenceVector[i], less1);
-
-
-});
-
-return ChunkSequenceOps::flatten(externalSequenceVector);
+auto _out = ChunkSequenceOps::flatten(externalSequenceVector);
+_pt.mark("flatten");
+return _out;
 
 
 //this sort_buckets method doesn't actually help the performance
