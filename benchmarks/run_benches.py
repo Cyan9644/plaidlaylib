@@ -238,10 +238,18 @@ BENCH_FILE_GLOBS = ("iota[0-9]*", "bw_dl_*", "bw_cs_*") + \
 
 
 def clear_bench_data(glob_pat, enabled):
-    """Best-effort unlink of leftover bench files under every mount in glob_pat."""
+    """Force-unlink leftover bench files under every mount in glob_pat.
+
+    Called after every sweep point so nothing accumulates between runs.  A first
+    unlink can fail if a prior (possibly crashed or sudo) run left a file without
+    the owner write bit -- rather than silently skipping it (which lets files
+    pile up invisibly), chmod it writable and retry, and if it *still* will not
+    go, surface the path loudly instead of swallowing the error.
+    """
     if not enabled:
         return
     removed = 0
+    failed = []
     for m in sorted(glob.glob(glob_pat)):
         for pat in BENCH_FILE_GLOBS:
             for f in glob.glob(os.path.join(m, pat)):
@@ -249,9 +257,21 @@ def clear_bench_data(glob_pat, enabled):
                     os.unlink(f)
                     removed += 1
                 except OSError:
-                    pass
+                    try:
+                        os.chmod(f, 0o644)
+                        os.unlink(f)
+                        removed += 1
+                    except OSError as e:
+                        failed.append(f"{f}: {e}")
     if removed:
         print(f"  cleared {removed} leftover bench files", flush=True)
+    if failed:
+        print(f"  !!! could NOT remove {len(failed)} bench file(s) "
+              f"(they will accumulate):", flush=True)
+        for line in failed[:10]:
+            print(f"      {line}", flush=True)
+        if len(failed) > 10:
+            print(f"      ... and {len(failed) - 10} more", flush=True)
 
 
 def fstrim_mounts(glob_pat, enabled):

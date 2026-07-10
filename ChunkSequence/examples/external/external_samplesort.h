@@ -45,35 +45,7 @@ namespace ChunkSequenceOps{
 // a sweep gets exactly one SSPHASE row per input.  Disabled (zero overhead
 // beyond a branch) when the env var is unset, so it is safe to leave compiled
 // into the shipping header.
-struct SsPhaseTimer {
-    using Clock = std::chrono::steady_clock;
-    bool on;
-    std::string tag;
-    Clock::time_point last, start;
-    std::vector<std::pair<std::string, double>> phases;
-    explicit SsPhaseTimer(const char* t)
-        : on(std::getenv("SS_PHASE_TIMING") != nullptr), tag(t),
-          last(Clock::now()), start(last) {}
-    void mark(const char* name) {
-        if (!on) return;
-        auto now = Clock::now();
-        double s  = std::chrono::duration<double>(now - last).count();
-        double tot = std::chrono::duration<double>(now - start).count();
-        std::fprintf(stderr, "[ss %-3s] %-22s %8.4f s   (cum %8.4f s)\n",
-                     tag.c_str(), name, s, tot);
-        phases.emplace_back(name, s);
-        last = now;
-    }
-    ~SsPhaseTimer() {
-        if (!on || tag != "0" || phases.empty()) return;
-        double tot = std::chrono::duration<double>(Clock::now() - start).count();
-        std::string line = "SSPHASE," + tag;
-        for (auto& p : phases) line += "," + p.first + "=" + std::to_string(p.second);
-        line += ",total=" + std::to_string(tot);
-        std::fprintf(stdout, "%s\n", line.c_str());
-        std::fflush(stdout);
-    }
-};
+
 
 template <typename T, typename Less = std::less<>>
 chunk_seq sample_sort(chunk_seq& seq, Less less1 = {}) {
@@ -91,11 +63,7 @@ n+= seq.chunks[r].used;
 // size_t max_sample_size = std::max(1UL, std::min(n / sizeof(T), filer / O_DIRECT_MULTIPLE));
 size_t max_sample_size = std::max(1UL, std::min(n, filer / O_DIRECT_MULTIPLE));
   size_t num_samples = std::max(std::min(filer / (1UL << 27), max_sample_size), min_sample_size);
-  // parlay::internal::heap_tree (used below to rank each key against the pivots)
-  // is only correct when the pivot count is 2^k-1 -- a fully balanced tree; any
-  // other count makes to_tree() index out of bounds (segfault).  Round the
-  // desired sample count up to the next 2^k-1, so the bucket count (pivots+1) is
-  // a power of two, exactly as parlay's in-memory sample_sort buckets.
+
   num_samples = (size_t{1} << parlay::log2_up(num_samples + 1)) - 1;
   _pt.mark("size/params");
 
