@@ -30,11 +30,13 @@ size_t n = 0;
   for(size_t r = 0; r < seq.chunks.size(); r++){
 n+= seq.chunks[r].used;
   }
+  size_t filer= n;
   n/=sizeof(T);
-
-  size_t min_sample_size = std::max(1UL, 4 * parlay::num_workers() * n*sizeof(T)/ DRAM_SIZE);
-size_t max_sample_size = std::max(1UL, std::min(n / sizeof(T), n / O_DIRECT_MULTIPLE));
-  auto num_samples = std::max(std::min(n / (1UL << 27), max_sample_size), min_sample_size);
+  
+  size_t min_sample_size = std::max(1UL, 4 * parlay::num_workers() * filer/ DRAM_SIZE);
+// size_t max_sample_size = std::max(1UL, std::min(n / sizeof(T), filer / O_DIRECT_MULTIPLE));
+size_t max_sample_size = std::max(1UL, std::min(n, filer / O_DIRECT_MULTIPLE));
+  auto num_samples = std::max(std::min(filer / (1UL << 27), max_sample_size), min_sample_size);
   
   if (n < num_samples){
     //we're likely going to want a fast quicksort method that takes better advantage of our 
@@ -54,7 +56,7 @@ size_t max_sample_size = std::max(1UL, std::min(n / sizeof(T), n / O_DIRECT_MULT
 
   } 
 
-  int sample_size = 31;
+unsigned int sample_size = std::max<size_t>(1, num_samples);
   int over = 8;
   parlay::random_generator gen;
   std::uniform_int_distribution<long> dis(0, n-1);
