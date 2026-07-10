@@ -16,6 +16,7 @@
 #include "ChunkSequence/ExternalPrimitives/scan_find.h"
 #include "ChunkSequence/ExternalPrimitives/chunk_count_sort.h"
 #include "ChunkSequence/ExternalPrimitives/flatten.h"
+#include "ChunkSequence/ExternalPrimitives/sort_buckets.h"
 #include "ChunkSequence/examples/external/primitive_quicksort.h"
 
 #define DRAM_SIZE ((size_t)500 * 1024 * 1024 * 1024) //==500 GB
@@ -117,35 +118,38 @@ ChunkSequenceOps::chunk_count_sort(ids, num_buckets, externalSequenceVector,
 //in this case we just need a simple flatten to put all the chunk headers into a single list
 //because each individual sequence should be sorted and they're in order,
 //we'll get a total sorted ordering
-parlay::parallel_for(0, num_buckets, [&](long i){
+// parlay::parallel_for(0, num_buckets, [&](long i){
 
-    size_t z = 0;
-    for (const auto& c :externalSequenceVector[i].chunks){
-        z += c.used / sizeof(T);
-    }
-    if (z ==n) {
-        //if we're not going to get anything from the partition, i.e. we have an empty partition
-        auto v = ChunkSequenceOps::materialize<T>(externalSequenceVector[i]);
-        std::sort(v.begin(), v.end(), less1);
-        externalSequenceVector[i] = ChunkSequenceOps::to_chunk_seq(
-            v, "ss_deg_" + tag + "_" + std::to_string(i));
-        return;
-    }
+//     size_t z = 0;
+//     for (const auto& c :externalSequenceVector[i].chunks){
+//         z += c.used / sizeof(T);
+//     }
+//     if (z ==n) {
+//         //if we're not going to get anything from the partition, i.e. we have an empty partition
+//         auto v = ChunkSequenceOps::materialize<T>(externalSequenceVector[i]);
+//         std::sort(v.begin(), v.end(), less1);
+//         externalSequenceVector[i] = ChunkSequenceOps::to_chunk_seq(
+//             v, "ss_deg_" + tag + "_" + std::to_string(i));
+//         return;
+//     }
 
-    //recurring on this samplesort chain is pretty expensive due to the buffer allocation
-    //we might consider just an external quicksort for this level, as it would use much less memory.
-    //probably multiple levels of parallelism won't help much regardless since we need to do reads
-    //for the pivots = large overhead on recurring calls
+//     //recurring on this samplesort chain is pretty expensive due to the buffer allocation
+//     //we might consider just an external quicksort for this level, as it would use much less memory.
+//     //probably multiple levels of parallelism won't help much regardless since we need to do reads
+//     //for the pivots = large overhead on recurring calls
 
-    //so instead we're going to call the external quicksort method, which we actually have a method for now but it's 
-    //implemented using primitives.
-    //to get the best performance out of this example, we're going to want to implement it manually with a reader/writer
-    externalSequenceVector[i] = primitive_quicksort<T>(externalSequenceVector[i], less1);
+//     //so instead we're going to call the external quicksort method, which we actually have a method for now but it's 
+//     //implemented using primitives.
+//     //to get the best performance out of this example, we're going to want to implement it manually with a reader/writer
+//     externalSequenceVector[i] = primitive_quicksort<T>(externalSequenceVector[i], less1);
 
 
-});
+// });
 
 return ChunkSequenceOps::flatten(externalSequenceVector);
+
+return ChunkSequenceOps::sort_buckets<T>(externalSequenceVector, less1,
+                                         "ss_deg_" + tag);
 // auto sums = ChunkSequenceOps::ChunkHistogramByIndex<unsigned char>(ids, sample_size+1);
 
 //   auto [offsets, total] = parlay::scan(sums);
