@@ -6,7 +6,10 @@
 #include <atomic>
 #include <functional>
 #include <random>
-
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include "ChunkSequence/ExternalPrimitives/inplace_bucket_sort.h"
 #include <parlay/primitives.h>
 #include <parlay/random.h>
 #include "ChunkSequence/chunk_map.h"
@@ -37,8 +40,8 @@ n+= seq.chunks[r].used;
   size_t min_sample_size = std::max(1UL, 4 * parlay::num_workers() * filer/ DRAM_SIZE);
 // size_t max_sample_size = std::max(1UL, std::min(n / sizeof(T), filer / O_DIRECT_MULTIPLE));
 size_t max_sample_size = std::max(1UL, std::min(n, filer / O_DIRECT_MULTIPLE));
-  auto num_samples = std::max(std::min(filer / (1UL << 27), max_sample_size), min_sample_size);
-  
+  // auto num_samples = std::max(std::min(filer / (1UL << 27), max_sample_size), min_sample_size);
+   size_t num_samples = std::max(std::min(filer / (1UL << 27), max_sample_size), min_sample_size);
   if (n < num_samples){
     //we're likely going to want a fast quicksort method that takes better advantage of our 
     //memory representation than just external->materialize->sort->external
@@ -118,33 +121,34 @@ ChunkSequenceOps::chunk_count_sort(ids, num_buckets, externalSequenceVector,
 //in this case we just need a simple flatten to put all the chunk headers into a single list
 //because each individual sequence should be sorted and they're in order,
 //we'll get a total sorted ordering
-parlay::parallel_for(0, num_buckets, [&](long i){
+// parlay::parallel_for(0, num_buckets, [&](long i){
 
-    size_t z = 0;
-    for (const auto& c :externalSequenceVector[i].chunks){
-        z += c.used / sizeof(T);
-    }
-    if (z ==n) {
-        //if we're not going to get anything from the partition, i.e. we have an empty partition
-        auto v = ChunkSequenceOps::materialize<T>(externalSequenceVector[i]);
-        std::sort(v.begin(), v.end(), less1);
-        externalSequenceVector[i] = ChunkSequenceOps::to_chunk_seq(
-            v, "ss_deg_" + tag + "_" + std::to_string(i));
-        return;
-    }
+//     size_t z = 0;
+//     for (const auto& c :externalSequenceVector[i].chunks){
+//         z += c.used / sizeof(T);
+//     }
+//     if (z ==n) {
+//         //if we're not going to get anything from the partition, i.e. we have an empty partition
+//         auto v = ChunkSequenceOps::materialize<T>(externalSequenceVector[i]);
+//         std::sort(v.begin(), v.end(), less1);
+//         externalSequenceVector[i] = ChunkSequenceOps::to_chunk_seq(
+//             v, "ss_deg_" + tag + "_" + std::to_string(i));
+//         return;
+//     }
 
-    //recurring on this samplesort chain is pretty expensive due to the buffer allocation
-    //we might consider just an external quicksort for this level, as it would use much less memory.
-    //probably multiple levels of parallelism won't help much regardless since we need to do reads
-    //for the pivots = large overhead on recurring calls
+//     //recurring on this samplesort chain is pretty expensive due to the buffer allocation
+//     //we might consider just an external quicksort for this level, as it would use much less memory.
+//     //probably multiple levels of parallelism won't help much regardless since we need to do reads
+//     //for the pivots = large overhead on recurring calls
 
-    //so instead we're going to call the external quicksort method, which we actually have a method for now but it's 
-    //implemented using primitives.
-    //to get the best performance out of this example, we're going to want to implement it manually with a reader/writer
-    externalSequenceVector[i] = primitive_quicksort<T>(externalSequenceVector[i], less1);
+//     //so instead we're going to call the external quicksort method, which we actually have a method for now but it's 
+//     //implemented using primitives.
+//     //to get the best performance out of this example, we're going to want to implement it manually with a reader/writer
+//     externalSequenceVector[i] = primitive_quicksort<T>(externalSequenceVector[i], less1);
 
 
-});
+// });
+ChunkSequenceOps::sort_buckets_inplace<T>(externalSequenceVector, less1);
 
 return ChunkSequenceOps::flatten(externalSequenceVector);
 

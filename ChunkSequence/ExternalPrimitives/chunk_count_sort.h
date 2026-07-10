@@ -404,8 +404,10 @@ void chunk_count_sort(const D& dseq, size_t num_buckets,
     // Lock-free per-(worker,bucket) staging.  STAGE is small (one O_DIRECT
     // block) so the bucket lock is touched only once per STAGE elements.
     const size_t W = std::max<size_t>(1, parlay::num_workers());
-    constexpr size_t STAGE = O_DIRECT_MULTIPLE / sizeof(T) > 0
-                                 ? O_DIRECT_MULTIPLE / sizeof(T) : 1;
+    // constexpr size_t STAGE = O_DIRECT_MULTIPLE / sizeof(T) > 0
+    //                              ? O_DIRECT_MULTIPLE / sizeof(T) : 1;
+    constexpr size_t STAGE = (O_DIRECT_MULTIPLE / sizeof(T) > 0
+                                 ? O_DIRECT_MULTIPLE / sizeof(T) : 1) * 8;
     std::vector<T>      stage((size_t)W * num_buckets * STAGE);
     std::vector<size_t> stage_cnt((size_t)W * num_buckets, 0);
 
