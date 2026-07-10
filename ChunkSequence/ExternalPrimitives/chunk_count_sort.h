@@ -4,8 +4,11 @@
 #define CHUNK_COUNT_SORT_H
 
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <vector>
+
+#include <parlay/parallel.h>
 
 #include "absl/log/check.h"
 
@@ -234,8 +237,12 @@ void chunk_count_sort_by_key(const chunk_seq& seq, size_t num_buckets,
  *
  * @tparam D  A delayed node whose value_type is std::pair<T, IntegralBucket>.
  */
+// Serial reference implementation (single-threaded scatter over the fused read
+// pass).  Kept for A/B comparison; prefer the parallel chunk_count_sort below,
+// which does the same routing across all workers.  The two are interchangeable
+// (both order-independent within a bucket).
 template<class D>
-void chunk_count_sort(const D& dseq, size_t num_buckets,
+void chunk_count_sort_serial(const D& dseq, size_t num_buckets,
                       std::vector<chunk_seq>& externalSequenceVector,
                       const std::string& result_prefix = "bucket") {
     using Pair = typename D::value_type;
@@ -312,6 +319,139 @@ void chunk_count_sort(const D& dseq, size_t num_buckets,
     for (size_t b = 0; b < num_buckets; b++) {
         if (buffer_counters[b] > 0) flush(b);
         free(buffers[b]);
+    }
+
+    writer.Wait();
+}
+
+
+// Parallel delayed-source chunk_count_sort.  Same contract as the serial
+// version above (route each element of a fused pair{value,bucket} sequence into
+// its bucket's per-bucket run), but the scatter runs across all parlay workers
+// via for_each_chunk instead of the single-threaded for_each_window.  This is
+// the phase-1 bottleneck fix for external_samplesort: the per-element routing
+// work (e.g. a heap_tree rank) is what dominates at scale, and here it is done
+// in parallel with continuous read/compute overlap.
+//
+// Memory is bounded with two-level buffering (mirroring peter_samplesort, whose
+// per-worker buffers are one O_DIRECT block): each (worker,bucket) has a small
+// lock-free staging buffer; when it fills it is drained under that bucket's lock
+// into a single shared CHUNK_SIZE assembly buffer, which is emitted as a chunk
+// when full.  Peak DRAM ~= num_workers*num_buckets*STAGE + num_buckets*CHUNK_SIZE
+// (the latter matches the serial version's footprint), so this stays feasible
+// even when num_buckets grows with n.
+template<class D>
+void chunk_count_sort(const D& dseq, size_t num_buckets,
+                      std::vector<chunk_seq>& externalSequenceVector,
+                      const std::string& result_prefix = "bucket") {
+    using Pair = typename D::value_type;
+    using T    = typename Pair::first_type;
+    CHECK(externalSequenceVector.size() == num_buckets)
+        << "chunk_count_sort(parallel): externalSequenceVector must be pre-sized "
+           "to num_buckets";
+    static_assert(CHUNK_SIZE % sizeof(T) == 0,
+        "sizeof(T) must divide CHUNK_SIZE for O_DIRECT alignment");
+    const size_t ept        = CHUNK_SIZE / sizeof(T);
+    const size_t num_drives = GetSSDList().size();
+
+    std::vector<std::string> filenames(num_drives);
+    for (size_t d = 0; d < num_drives; d++) {
+        filenames[d] = GetFileName(result_prefix, d);
+        int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        SYSCALL(fd);
+        SYSCALL(close(fd));
+    }
+
+    UnorderedWriterConfig wcfg;
+    wcfg.num_threads   = num_drives;
+    wcfg.io_uring_size = 32;
+    wcfg.queue_size    = 64;
+    wcfg.num_files     = num_drives;
+    UnorderedFileWriter<T> writer;
+    writer.Start(filenames, wcfg);
+
+    // Shared per-bucket assembly: one CHUNK_SIZE block being filled, guarded by
+    // its own lock so workers can drain into it concurrently across buckets.
+    std::vector<T*>         asm_buf(num_buckets);
+    std::vector<size_t>     asm_cnt(num_buckets, 0);
+    std::vector<std::mutex> asm_mu(num_buckets);
+    for (size_t b = 0; b < num_buckets; b++) {
+        asm_buf[b] = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
+        CHECK(asm_buf[b] != nullptr) << "chunk_count_sort(parallel): assembly alloc failed";
+    }
+
+    // Drive/offset assignment + per-bucket chunk-list append (both quick, done
+    // once per emitted chunk).  A distinct lock from asm_mu so emitting a full
+    // chunk while holding a bucket's asm lock cannot deadlock.
+    std::mutex          place_mu;
+    size_t              slot = 0;
+    std::vector<size_t> drive_off(num_drives, 0);
+    auto emit_chunk = [&](size_t b, T* buf, size_t used) {
+        size_t d, base;
+        {
+            std::lock_guard<std::mutex> lk(place_mu);
+            d    = slot++ % num_drives;
+            base = drive_off[d];
+            drive_off[d] += CHUNK_SIZE;
+            externalSequenceVector[b].chunks.push_back(
+                chunk{filenames[d], base, used * sizeof(T),
+                      externalSequenceVector[b].chunks.size()});
+        }
+        if (used < ept) memset(buf + used, 0, (ept - used) * sizeof(T));
+        writer.Push(std::shared_ptr<T>(buf, free), ept, d, base);
+    };
+
+    // Lock-free per-(worker,bucket) staging.  STAGE is small (one O_DIRECT
+    // block) so the bucket lock is touched only once per STAGE elements.
+    const size_t W = std::max<size_t>(1, parlay::num_workers());
+    constexpr size_t STAGE = O_DIRECT_MULTIPLE / sizeof(T) > 0
+                                 ? O_DIRECT_MULTIPLE / sizeof(T) : 1;
+    std::vector<T>      stage((size_t)W * num_buckets * STAGE);
+    std::vector<size_t> stage_cnt((size_t)W * num_buckets, 0);
+
+    auto drain_stage = [&](size_t w, size_t b) {
+        const size_t si = w * num_buckets + b;
+        const size_t sc = stage_cnt[si];
+        if (sc == 0) return;
+        T* src = stage.data() + si * STAGE;
+        std::lock_guard<std::mutex> lk(asm_mu[b]);
+        size_t off = 0;
+        while (off < sc) {
+            const size_t take = std::min(ept - asm_cnt[b], sc - off);
+            memcpy(asm_buf[b] + asm_cnt[b], src + off, take * sizeof(T));
+            asm_cnt[b] += take;
+            off        += take;
+            if (asm_cnt[b] == ept) {                 // assembly full -> emit
+                T* full = asm_buf[b];
+                asm_buf[b] = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
+                CHECK(asm_buf[b] != nullptr) << "chunk_count_sort(parallel): assembly realloc failed";
+                asm_cnt[b] = 0;
+                emit_chunk(b, full, ept);
+            }
+        }
+        stage_cnt[si] = 0;
+    };
+
+    delayed::for_each_chunk(dseq, [&](size_t ci, size_t n, auto it) {
+        const size_t w = parlay::worker_id();
+        for (size_t k = 0; k < n; k++) {
+            Pair pr = *it; ++it;
+            const size_t j = (size_t)pr.second;
+            CHECK(j < num_buckets) << "chunk_count_sort(parallel): bucket id " << j
+                << " out of range (num_buckets=" << num_buckets << ")";
+            const size_t si = w * num_buckets + j;
+            stage[si * STAGE + stage_cnt[si]++] = pr.first;
+            if (stage_cnt[si] == STAGE) drain_stage(w, j);
+        }
+    });
+
+    // Drain every worker's residual staging, then flush partial assemblies.
+    for (size_t w = 0; w < W; w++)
+        for (size_t b = 0; b < num_buckets; b++)
+            drain_stage(w, b);
+    for (size_t b = 0; b < num_buckets; b++) {
+        if (asm_cnt[b] > 0) emit_chunk(b, asm_buf[b], asm_cnt[b]);
+        else                free(asm_buf[b]);
     }
 
     writer.Wait();
