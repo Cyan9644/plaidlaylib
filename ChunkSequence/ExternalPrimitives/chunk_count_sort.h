@@ -11,6 +11,7 @@
 
 #include "ChunkSequence/chunk_seq.h"
 #include "ChunkSequence/chunk_seq_reader.h"
+#include "ChunkSequence/chunk_delayed.h"
 #include "ChunkSequence/n_reader.h"
 #include "utils/file_utils.h"
 #include "utils/unordered_file_writer.h"
@@ -199,6 +200,114 @@ void chunk_count_sort_by_key(const chunk_seq& seq, size_t num_buckets,
         }
         reader.allocator.Free(ptr);
     }
+
+    for (size_t b = 0; b < num_buckets; b++) {
+        if (buffer_counters[b] > 0) flush(b);
+        free(buffers[b]);
+    }
+
+    writer.Wait();
+}
+
+
+/**
+ * Delayed-source variant of chunk_count_sort: instead of a materialized id
+ * chunk_seq co-indexed with seq, the bucket for each element is carried by a
+ * *delayed* (fused) sequence whose elements are std::pair{value, bucket}.  The
+ * caller builds it as, e.g.,
+ *
+ *   namespace d = ChunkSequenceOps::delayed;
+ *   auto ids = d::map(d::delay<T>(seq),
+ *                     [&](T v){ return std::pair<T, size_t>{v, key(v)}; });
+ *   chunk_count_sort(ids, num_buckets, out, prefix);
+ *
+ * so the routing key is recomputed on the fly during a single fused read pass
+ * over seq -- no ChunkMap write pass, no second co-indexed read.  Same result as
+ * chunk_count_sort_by_key, but expressed through the delayed layer so the map
+ * stays a first-class delayed op.
+ *
+ * The pair carries the value because the count sort must write the value into
+ * its bucket, and mapping seq -> bucket alone would drop it (one fused read
+ * still yields both).  Walked in index order via for_each_window (sequential
+ * across windows, single-threaded within one), which is what the per-bucket run
+ * buffers -- shared mutable state with a cross-chunk carry -- require.
+ *
+ * @tparam D  A delayed node whose value_type is std::pair<T, IntegralBucket>.
+ */
+template<class D>
+void chunk_count_sort(const D& dseq, size_t num_buckets,
+                      std::vector<chunk_seq>& externalSequenceVector,
+                      const std::string& result_prefix = "bucket") {
+    using Pair = typename D::value_type;
+    using T    = typename Pair::first_type;
+    CHECK(externalSequenceVector.size() == num_buckets)
+        << "chunk_count_sort(delayed): externalSequenceVector must be pre-sized "
+           "to num_buckets";
+    static_assert(CHUNK_SIZE % sizeof(T) == 0,
+        "sizeof(T) must divide CHUNK_SIZE for O_DIRECT alignment");
+    const size_t ept        = CHUNK_SIZE / sizeof(T);
+    const size_t num_drives = GetSSDList().size();
+
+    std::vector<std::string> filenames(num_drives);
+    for (size_t d = 0; d < num_drives; d++) {
+        filenames[d] = GetFileName(result_prefix, d);
+        int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        SYSCALL(fd);
+        SYSCALL(close(fd));
+    }
+
+    UnorderedWriterConfig wcfg;
+    wcfg.num_threads   = num_drives;
+    wcfg.io_uring_size = 32;
+    wcfg.queue_size    = 64;
+    wcfg.num_files     = num_drives;
+    UnorderedFileWriter<T> writer;
+    writer.Start(filenames, wcfg);
+
+    std::vector<T*> buffers(num_buckets);
+    std::vector<size_t> buffer_counters(num_buckets, 0);
+    for (size_t b = 0; b < num_buckets; b++) {
+        buffers[b] = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
+        CHECK(buffers[b] != nullptr) << "chunk_count_sort(delayed): buffer alloc failed";
+    }
+
+    size_t slot = 0;
+    std::vector<size_t> drive_off(num_drives, 0);
+
+    auto flush = [&](size_t b) {
+        const size_t d    = slot++ % num_drives;
+        const size_t base = drive_off[d];
+        drive_off[d] += CHUNK_SIZE;
+        const size_t used = buffer_counters[b];
+
+        if (used < ept)
+            memset(buffers[b] + used, 0, (ept - used) * sizeof(T));
+        externalSequenceVector[b].chunks.push_back(
+            chunk{filenames[d], base, used * sizeof(T),
+                  externalSequenceVector[b].chunks.size()});
+        writer.Push(std::shared_ptr<T>(buffers[b], free), ept, d, base);
+        buffers[b] = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
+        CHECK(buffers[b] != nullptr) << "chunk_count_sort(delayed): buffer alloc failed";
+        buffer_counters[b] = 0;
+    };
+
+    // for_each_window drives the fused read pass; buffers are freed after the
+    // window body returns, so the values we route are copied into bucket blocks
+    // in-body (scalars).  Chunks are walked in index order, single-threaded.
+    delayed::for_each_window(dseq, [&](size_t base, size_t w, auto build_chunk) {
+        for (size_t b = 0; b < w; b++) {
+            auto it        = build_chunk(b);
+            const size_t n = dseq.chunk_len(base + b);
+            for (size_t k = 0; k < n; k++) {
+                Pair pr = *it; ++it;
+                const size_t j = (size_t)pr.second;
+                CHECK(j < num_buckets) << "chunk_count_sort(delayed): bucket id "
+                    << j << " out of range (num_buckets=" << num_buckets << ")";
+                buffers[j][buffer_counters[j]++] = pr.first;
+                if (buffer_counters[j] == ept) flush(j);
+            }
+        }
+    });
 
     for (size_t b = 0; b < num_buckets; b++) {
         if (buffer_counters[b] > 0) flush(b);

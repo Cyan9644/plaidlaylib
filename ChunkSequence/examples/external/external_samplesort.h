@@ -90,13 +90,26 @@ size_t max_sample_size = std::max(1UL, std::min(n / sizeof(T), n / O_DIRECT_MULT
 auto seconds = parlay::map(pivots, [](const auto& p){ return p.second; });
   parlay::internal::heap_tree ss(seconds);
   
-auto ids = ChunkMap<T, size_t>(seq, "ss_id_" + tag,[&](T e){//problem: the dual reader can only deal with
-    //a single type, so we're going to have to waste by using size_t instead of 
-    return ss.rank(e, less1);
-});
+
+// std::vector<chunk_seq> externalSequenceVector(num_buckets);
+// ChunkSequenceOps::chunk_count_sort<T>(seq, ids, externalSequenceVector, "ss_bucket_" + tag);
+
+// std::vector<chunk_seq> externalSequenceVector(num_buckets);
+// ChunkSequenceOps::chunk_count_sort_by_key<T>(
+//     seq, num_buckets, externalSequenceVector,
+//     [&](T e){ return ss.rank(e, less1); },
+//     "ss_bucket_" + tag);
+
+// //one potential optimization here is that ChunkMap doesn't really need to write its data back to disk
+// //we could just make this delayed
+// //the issue then is that chunk_count_sort takes a materialized chunk sequence, so we'll need to edit it or make a new one
+//this is exactly what the code does now
+auto ids = ChunkSequenceOps::delayed::map(ChunkSequenceOps::delayed::delay<T>(seq),
+    [&](T e){ return std::pair<T, size_t>{e, ss.rank(e, less1)}; });
 
 std::vector<chunk_seq> externalSequenceVector(num_buckets);
-ChunkSequenceOps::chunk_count_sort<T>(seq, ids, externalSequenceVector, "ss_bucket_" + tag);
+ChunkSequenceOps::chunk_count_sort(ids, num_buckets, externalSequenceVector,
+                                   "ss_bucket_" + tag);
 
 //it should now be the case that externalSequenceVector is a full vector of the individual external sequences
 //in this case we just need a simple flatten to put all the chunk headers into a single list
