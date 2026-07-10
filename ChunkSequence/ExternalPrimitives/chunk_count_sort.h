@@ -401,8 +401,12 @@ void chunk_count_sort(const D& dseq, size_t num_buckets,
         writer.Push(std::shared_ptr<T>(buf, free), ept, d, base);
     };
 
-    // Lock-free per-(worker,bucket) staging.  STAGE is small (one O_DIRECT
-    // block) so the bucket lock is touched only once per STAGE elements.
+    // Lock-free per-(worker,bucket) staging.  The bucket's assembly lock is
+    // touched only once per STAGE elements, so a larger STAGE means far fewer
+    // lock acquisitions on the hot scatter path (the dominant phase-1 cost at
+    // scale); the trade is W*num_buckets*STAGE of DRAM.  ~32 KiB per stage (8
+    // O_DIRECT blocks) cuts locking 8x versus a single-block stage while keeping
+    // the footprint modest (e.g. 16 workers * 64 buckets * 32 KiB = 32 MiB).
     const size_t W = std::max<size_t>(1, parlay::num_workers());
     // constexpr size_t STAGE = O_DIRECT_MULTIPLE / sizeof(T) > 0
     //                              ? O_DIRECT_MULTIPLE / sizeof(T) : 1;
