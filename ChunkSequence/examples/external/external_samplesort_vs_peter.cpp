@@ -91,11 +91,13 @@ static void remove_prefixes(const std::vector<std::string>& prefixes) {
 }
 
 // The two substrates' on-disk file families (see run_benches data_globs).  Our
-// sort: the ss_in input + ss_id_/ss_bucket_/ss_base_/ss_deg_ recursion files
-// (the sorted output references the latter).  Peter's: pss_in/pss_out +
-// his hard-coded spfx_ intermediate buckets.
+// sort: the ss_in input + ss_id_/ss_bucket_/ss_base_/ss_deg_ recursion files and
+// the per-bucket base sorter's qs_base_ output (the sorted result flatten returns
+// *is* the qs_base_ files, so this prefix must be swept or the entire output
+// leaks on the drives every point).  Peter's: pss_in/pss_out + his hard-coded
+// spfx_ intermediate buckets.
 static const std::vector<std::string> kOurPrefixes =
-    {"ss_in", "ss_id_", "ss_bucket_", "ss_base_", "ss_deg_"};
+    {"ss_in", "ss_id_", "ss_bucket_", "ss_base_", "ss_deg_", "qs_base_"};
 static const std::vector<std::string> kPeterPrefixes = {"pss_in", "pss_out", "spfx_"};
 
 // Same key the shim uses on Peter's side (peter_shim::key_at) — keep in sync.

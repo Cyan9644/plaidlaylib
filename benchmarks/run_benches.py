@@ -103,14 +103,16 @@ EXAMPLES = [
      "data_globs": ["kth_in*", "id_*", "flags_*", "next_*"]},
     # external_samplesortExample sweeps n; the plotted time is the sort pass only
     # (input build excluded).  Its recursion leaves ss_id_/ss_bucket_/ss_base_/
-    # ss_deg_ intermediates (the sorted output references the bucket files) in
-    # addition to the ss_in input.
+    # ss_deg_ intermediates plus the per-bucket base sorter's qs_base_ output
+    # (the sorted result the driver returns *is* the qs_base_ files, via flatten)
+    # in addition to the ss_in input.
     {"name": "external_samplesort", "target": "bin/external_samplesortExample",
      "cols": ["n", "build_s", "sort_s", "inmem_sort_s", "throughput_gb_s"],
      "time_col": "sort_s", "inmem_col": "inmem_sort_s",
      "xlabel": "n (number of keys)",
      "title": "sample sort: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
-     "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*"]},
+     "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*",
+                    "qs_base_*"]},
 
     # external_samplesort_vs_peterExample sweeps n and times BOTH out-of-core
     # sorts on the identical key multiset: ours (ChunkSequenceOps::sample_sort)
@@ -129,7 +131,7 @@ EXAMPLES = [
      "xlabel": "n (number of keys)",
      "title": "sample sort: ours (ChunkSequenceOps) vs Peter's — both out-of-core",
      "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*",
-                    "pss_in*", "pss_out*", "spfx_*"]},
+                    "qs_base_*", "pss_in*", "pss_out*", "spfx_*"]},
 
     # fitmem_kth_smallestExample: same driver shape as kth_smallest, but the
     # single-level "fitmem" variant (one bucketing round, then select the winning

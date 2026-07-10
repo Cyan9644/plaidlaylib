@@ -171,9 +171,9 @@ int main(int argc, char* argv[]) {
               << ',' << f9(gb_s) << '\n';
 
     // Don't leave the input on the drives across sweep points.  (The sort's
-    // ss_id_/ss_bucket_/ss_base_/ss_deg_ recursion intermediates -- which the
-    // final sorted output also references via flatten -- are cleared by
-    // run_benches's per-point glob sweep.)
+    // ss_id_/ss_bucket_/ss_base_/ss_deg_ recursion intermediates plus the
+    // per-bucket base sorter's qs_base_ output -- which the final sorted output
+    // is, via flatten -- are cleared by run_benches's per-point glob sweep.)
     cleanup_prefix(in_prefix);
     return agree ? 0 : 1;
 }
