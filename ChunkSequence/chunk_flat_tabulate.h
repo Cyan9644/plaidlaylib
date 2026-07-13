@@ -34,6 +34,8 @@ struct FlatBatch {
 
 /**
  * Out-of-core analogue of parlay::flatten(parlay::tabulate(num_chunks, f)).
+ * The generative sibling of ChunkFlatMap (chunk_flat_map.h), which maps over a
+ * stored input chunk_seq instead of an index range.
  *
  * Divides [0, n) into virtual chunks of size epct = CHUNK_SIZE / sizeof(R),
  * calling f(start, end) once per chunk in parallel.  f must return a

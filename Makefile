@@ -38,7 +38,8 @@ UTIL_OBJS := $(OBJDIR)/logger.o $(OBJDIR)/command_line.o $(OBJDIR)/file_utils.o
 # ChunkSequence correctness tests (each exits 0 on PASS, non-zero on FAIL).
 TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/filterTest $(BINDIR)/scanTest $(BINDIR)/combinedTest \
-                 $(BINDIR)/delayedTest $(BINDIR)/flatTabulateTest $(BINDIR)/findIfTest \
+                 $(BINDIR)/delayedTest $(BINDIR)/flatTabulateTest \
+                 $(BINDIR)/flatMapTest $(BINDIR)/findIfTest \
                  $(BINDIR)/histogramTest $(BINDIR)/kmpTest $(BINDIR)/rabinKarpTest \
                  $(BINDIR)/scalarTest $(BINDIR)/bigintAddTest
 
@@ -169,6 +170,9 @@ $(BINDIR)/delayedTest: ChunkSequence/tests/delayed_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
 $(BINDIR)/flatTabulateTest: ChunkSequence/tests/flat_tabulate_test.cpp $(UTIL_OBJS)
+	$(LINK)
+
+$(BINDIR)/flatMapTest: ChunkSequence/tests/flat_map_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
 $(BINDIR)/findIfTest: ChunkSequence/tests/find_if_test.cpp $(UTIL_OBJS)
