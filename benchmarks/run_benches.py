@@ -176,6 +176,66 @@ EXAMPLES = [
      "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*",
                     "qs_base_*", "pss_in*", "pss_out*", "spfx_*"]},
 
+    # direct_samplesort_vs_peterExample: the same head-to-head as above, but our
+    # contestant is direct_samplesort.h (ChunkSequenceOps::direct_sample_sort —
+    # the same algorithm written straight against io_uring/O_DIRECT, in Peter's
+    # scatter-gather shape, chunk_seq in/out) rather than the sort built on the
+    # primitives.  Run both sweeps to separate the algorithm from the substrate:
+    # this one is what the chunk_seq model costs when it is NOT paying for the
+    # primitives' generality.  Same CSV columns, so it plots identically.
+    # Intermediates: our dss_in input + the dss<tag>_<b> bucket files (which ARE
+    # the sorted output), plus Peter's pss_in/pss_out and his spfx_ buckets.
+    {"name": "direct_samplesort_vs_peter",
+     "target": "bin/direct_samplesort_vs_peterExample",
+     "cols": ["n", "ext_build_s", "ext_sort_s", "peter_build_s", "peter_sort_s",
+              "ext_gb_s", "peter_gb_s"],
+     "time_col": "ext_sort_s", "inmem_col": "peter_sort_s",
+     "series_labels": ("Peter's sort (out-of-core)", "our direct-I/O sort (out-of-core)"),
+     "no_ram_cliff": True,
+     "elem_bytes": 8, "input_seqs": 1,
+     "xlabel": "input size",
+     "title": "sample sort: our direct-I/O sort vs Peter's — both out-of-core",
+     "data_globs": ["dss_in*", "dss*", "pss_in*", "pss_out*", "spfx_*"]},
+
+    # samplesort_three_wayExample: all THREE out-of-core sorts on the same keys in
+    # one run — Peter's (peter_samplesort/, via peter_shim), ours written straight
+    # against io_uring (direct_samplesort.h) and ours built on the primitives
+    # (external_samplesort.h).  The two pairwise sweeps above measure one gap each
+    # against a separately timed Peter run; this one puts all three side by side,
+    # so "Peter's vs our direct" reads as the cost of the chunk_seq *substrate* and
+    # "our direct vs our primitives" as the cost of the *primitives*.  Every series
+    # is a disk sort (no in-memory baseline, hence no RAM cliff).
+    #
+    # Each sort runs ONCE per point (one input build + one sort each — no repeats:
+    # these are consumer SSDs and every extra round is real write endurance).  What
+    # makes the three comparable despite sharing the drives is the teardown between
+    # them: the previous sort's files are removed and then every mount is synced and
+    # left to settle (SS3_SETTLE_MS, default 2000 ms), because unlink() returns long
+    # before ext4 has freed the blocks and a sort started on top of that background
+    # work runs 15-25% slow.  SS3_FIRST=0|1|2 rotates which sort goes first; it is a
+    # check knob (the times must not move), not a measurement one.
+    #
+    # Below ~512 MiB of input the pivot count drops to <= 3 and Peter's GetPivots
+    # underflows (it takes a garbage pivot, unbalancing his buckets), so his series
+    # is only meaningful from 512 MiB up — read the dev-box sizes with that in
+    # mind, or sweep this example from 512MiB.
+    {"name": "samplesort_three_way",
+     "target": "bin/samplesort_three_wayExample",
+     "cols": ["n", "peter_sort_s", "direct_sort_s", "prim_sort_s", "peter_build_s",
+              "direct_build_s", "prim_build_s", "peter_gb_s", "direct_gb_s",
+              "prim_gb_s"],
+     "time_col": "direct_sort_s", "inmem_col": "peter_sort_s",
+     "series_labels": ("Peter's sort (out-of-core)",
+                       "ours, direct I/O (out-of-core)"),
+     "extra_series": [("prim_sort_s", "ours, primitives (out-of-core)", "^-")],
+     "no_ram_cliff": True,
+     "elem_bytes": 8, "input_seqs": 1,
+     "xlabel": "input size",
+     "title": "sample sort, three out-of-core implementations (best of rotated rounds)",
+     "data_globs": ["dss_in*", "dss*", "ss_in*", "ss_id_*", "ss_bucket_*",
+                    "ss_base_*", "ss_deg_*", "qs_base_*",
+                    "pss_in*", "pss_out*", "spfx_*"]},
+
     # external_random_shuffleExample sweeps n and times THREE shuffles of the same
     # keys: random_shuffle_method (the bucketing shuffle on the high-level
     # abstractions), ChunkSequenceOps::Permutation (the same algorithm on the
@@ -658,13 +718,13 @@ def plot_example(rows, entry, path):
     lines = [
         (base_label, _series(rows, entry["inmem_col"]), "o-"),
         (cmp_label, _series(rows, entry.get("time_col", "time_s")), "s-"),
-    ], entry["xlabel"], entry["title"] + subtitle, xfmt=_bytes_fmt)
     ]
     lines += [(label, _series(rows, col), style)
               for col, label, style in entry.get("extra_series", [])]
     fig, ax = plt.subplots(figsize=(7, 5.5), constrained_layout=True)
+    # x is the input size in bytes (see size_to_n), so it gets the byte formatter.
     _draw_panel(ax, xs, lines, entry["xlabel"], entry["title"] + subtitle,
-                xfmt=_pow2_fmt)
+                xfmt=_bytes_fmt)
     fig.savefig(path, dpi=150)
     plt.close(fig)
     print(f"  wrote {path}", flush=True)
@@ -762,8 +822,6 @@ def main():
                                args.fstrim_glob, clear_enabled, warnings)
             write_csv(os.path.join(outdir, f"{entry['name']}_scale.csv"),
                       ["input_bytes"] + entry["cols"], rows)
-            plot_example(rows, entry, os.path.join(outdir, f"{entry['name']}_scale.png"))
-                      entry["cols"], rows)
             # The CSV is the result; the plot is a convenience.  A plotting
             # failure (e.g. no matplotlib on a dev box) warns and lets the sweep
             # continue to the next example, like every other example problem —

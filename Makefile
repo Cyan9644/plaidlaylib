@@ -50,6 +50,8 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/fitmem_sortExample $(BINDIR)/fitmem_kth_smallestExample \
                     $(BINDIR)/bigint_addExample $(BINDIR)/chunk_cutExample \
                     $(BINDIR)/external_samplesort_vs_peterExample \
+                    $(BINDIR)/direct_samplesort_vs_peterExample \
+                    $(BINDIR)/samplesort_three_wayExample \
                     $(BINDIR)/external_random_shuffleExample
 
 # Peter's external sample sort (the second contestant in the
@@ -246,6 +248,19 @@ $(OBJDIR)/peter_shim.o: $(PETER_DIR)/peter_shim.cpp | deps/parlaylib deps/abseil
 	$(CXX) $(CXXFLAGS) -I$(PETER_DIR) $(INCLUDES) -c $< -o $@
 
 $(BINDIR)/external_samplesort_vs_peterExample: ChunkSequence/examples/external/external_samplesort_vs_peter.cpp $(UTIL_OBJS) $(OBJDIR)/peter_shim.o | deps/parlaylib-examples
+	$(LINK)
+
+# direct_samplesort_vs_peter: same head-to-head, but our contestant is the
+# direct-I/O sort (direct_samplesort.h) rather than the primitives-based one, so
+# the pair of sweeps isolates the substrate from the algorithm.  Same shim.
+$(BINDIR)/direct_samplesort_vs_peterExample: ChunkSequence/examples/external/direct_samplesort_vs_peter.cpp $(UTIL_OBJS) $(OBJDIR)/peter_shim.o | deps/parlaylib-examples
+	$(LINK)
+
+# samplesort_three_way: all three out-of-core sorts (Peter's, our direct-I/O one,
+# our primitives one) in one run on the same keys, with the run order rotated
+# across rounds so no sort is always the one paying for the previous one's
+# deleted files.  Same shim as the pairwise drivers.
+$(BINDIR)/samplesort_three_wayExample: ChunkSequence/examples/external/samplesort_three_way.cpp $(UTIL_OBJS) $(OBJDIR)/peter_shim.o | deps/parlaylib-examples
 	$(LINK)
 
 # ── benchmarks ─────────────────────────────────────────────────────────────────

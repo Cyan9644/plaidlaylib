@@ -100,10 +100,14 @@ double Sort(const std::string& in_prefix, const std::string& out_prefix,
     result_true_sizes.reserve(results.size());
     for (const auto& fi : results) {
         result_files.push_back(fi.file_name);
-        // Sort() runs GetFileInfo on the input (true_size == file_size there);
-        // ProcessBucket carries the bucket's true_size onto the result, but if a
-        // result somehow lacks it, fall back to the on-disk size.
-        result_true_sizes.push_back(fi.true_size ? fi.true_size : fi.file_size);
+        // true_size, never file_size: every bucket file ends with a padding block
+        // (OrderedFileWriter always writes one, to carry the end marker), and an
+        // *empty* bucket -- which his sample can produce, since GetPivots draws a
+        // garbage pivot for <= 3 pivots -- consists of nothing else.  Falling back
+        // to file_size there would read that padding back as 512 garbage keys.
+        // CleanUp fills true_size for every bucket and WorkerOnlyPhase2 carries it
+        // onto the result, so it is always set.
+        result_true_sizes.push_back(fi.true_size);
     }
     return sort_s;
 }
