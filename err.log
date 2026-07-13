@@ -1,0 +1,4 @@
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1783972777.397484 3683947 peter_samplesort.h:48] Found 67108864 elements in input files
+I0000 00:00:1783972781.299467 3683947 unordered_file_writer.h:99] FileWriter worker thread exited. 30 files created.
+I0000 00:00:1783972782.184321 3683947 unordered_file_writer.h:99] FileWriter worker thread exited. 30 files created.

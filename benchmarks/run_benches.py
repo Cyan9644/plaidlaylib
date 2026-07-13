@@ -133,6 +133,27 @@ EXAMPLES = [
      "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*",
                     "qs_base_*", "pss_in*", "pss_out*", "spfx_*"]},
 
+    # external_random_shuffleExample sweeps n and times THREE shuffles of the same
+    # keys: random_shuffle_method (the bucketing shuffle on the high-level
+    # abstractions), ChunkSequenceOps::Permutation (the same algorithm on the
+    # low-level reader/writer, rewriting each bucket in place), and the in-mem
+    # parlay::random_shuffle baseline (stops at the RAM cliff).  The plotted times
+    # are the shuffle passes only (the shared input build is excluded).  Each
+    # method's result *is* its bucket files (rs_out_/perm), so those prefixes are
+    # swept too; the driver additionally snapshot-diffs the drives and fails if
+    # anything at all is left behind.
+    {"name": "external_random_shuffle",
+     "target": "bin/external_random_shuffleExample",
+     "cols": ["n", "build_s", "shuffle_s", "perm_s", "inmem_shuffle_s",
+              "shuffle_gb_s", "perm_gb_s"],
+     "time_col": "shuffle_s", "inmem_col": "inmem_shuffle_s",
+     "series_labels": ("in-mem parlay::random_shuffle (DRAM)",
+                       "random_shuffle_method (out-of-core)"),
+     "extra_series": [("perm_s", "Permutation (out-of-core)", "^-")],
+     "xlabel": "n (number of keys)",
+     "title": "random shuffle: two out-of-core methods vs in-mem parlaylib",
+     "data_globs": ["rs_in*", "rs_bucket_*", "rs_out_*", "rs_base_*", "perm*"]},
+
     # fitmem_kth_smallestExample: same driver shape as kth_smallest, but the
     # single-level "fitmem" variant (one bucketing round, then select the winning
     # bucket in DRAM).  Its intermediates are fk_id_/fk_next_ alongside fk_in.
@@ -542,9 +563,11 @@ def plot_chunk_size(rows, path):
 def plot_example(rows, entry, path):
     """Single-panel log-log plot of an example's runtime vs n.
 
-    Two series, styled like plot_delayed: the in-memory parlaylib baseline
-    (which stops at the RAM cliff — blank CSV fields are dropped) and the
-    out-of-core chunk implementation.
+    Two series by default, styled like plot_delayed: the in-memory parlaylib
+    baseline (which stops at the RAM cliff — blank CSV fields are dropped) and
+    the out-of-core chunk implementation.  An entry with `extra_series` plots
+    additional implementations of the same operation alongside them (e.g.
+    external_random_shuffle's second out-of-core method).
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -559,11 +582,15 @@ def plot_example(rows, entry, path):
         "series_labels", ("in-mem parlaylib (DRAM)", "out-of-core (chunk)"))
     subtitle = "" if entry.get("no_ram_cliff") else \
         "\n(in-mem line stops where the input exceeds the RAM budget)"
-    fig, ax = plt.subplots(figsize=(7, 5.5), constrained_layout=True)
-    _draw_panel(ax, xs, [
+    lines = [
         (base_label, _series(rows, entry["inmem_col"]), "o-"),
         (cmp_label, _series(rows, entry.get("time_col", "time_s")), "s-"),
-    ], entry["xlabel"], entry["title"] + subtitle, xfmt=_pow2_fmt)
+    ]
+    lines += [(label, _series(rows, col), style)
+              for col, label, style in entry.get("extra_series", [])]
+    fig, ax = plt.subplots(figsize=(7, 5.5), constrained_layout=True)
+    _draw_panel(ax, xs, lines, entry["xlabel"], entry["title"] + subtitle,
+                xfmt=_pow2_fmt)
     fig.savefig(path, dpi=150)
     plt.close(fig)
     print(f"  wrote {path}", flush=True)
@@ -660,7 +687,17 @@ def main():
                                args.fstrim_glob, clear_enabled, warnings)
             write_csv(os.path.join(outdir, f"{entry['name']}_scale.csv"),
                       entry["cols"], rows)
-            plot_example(rows, entry, os.path.join(outdir, f"{entry['name']}_scale.png"))
+            # The CSV is the result; the plot is a convenience.  A plotting
+            # failure (e.g. no matplotlib on a dev box) warns and lets the sweep
+            # continue to the next example, like every other example problem —
+            # it must not discard the timings we just spent the I/O to collect.
+            try:
+                plot_example(rows, entry,
+                             os.path.join(outdir, f"{entry['name']}_scale.png"))
+            except Exception as exc:
+                warnings.append(f"{entry['name']}: plotting failed ({exc}); "
+                                "CSV was written")
+                print(f"  !!! plotting failed ({exc}); CSV was written", flush=True)
 
     # ── end-of-run summary — repeated here (and warnings persisted next to the
     # results) so problems can't get lost in the sweep output above.

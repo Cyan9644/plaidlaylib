@@ -34,6 +34,20 @@
 
 namespace ChunkSequenceOps{
 
+inline chunk_seq cut_by_chunk(const chunk_seq& seq, size_t chunk_begin,
+                              size_t chunk_end) {
+    chunk_seq out;
+    if (chunk_begin >= chunk_end || chunk_begin >= seq.chunks.size()) return out;
+    chunk_end = std::min(chunk_end, seq.chunks.size());
+    out.chunks.reserve(chunk_end - chunk_begin);
+    for (size_t i = chunk_begin; i < chunk_end; i++) {
+        chunk c = seq.chunks[i];
+        c.index = out.chunks.size();
+        out.chunks.push_back(c);
+    }
+    return out;
+}
+
 
 //maybe we'll want to make this callable directly on an external sequence in the future
 

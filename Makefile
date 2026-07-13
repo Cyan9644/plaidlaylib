@@ -48,7 +48,8 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/external_samplesortExample $(BINDIR)/external_linefitExample \
                     $(BINDIR)/fitmem_sortExample $(BINDIR)/fitmem_kth_smallestExample \
                     $(BINDIR)/bigint_addExample $(BINDIR)/chunk_cutExample \
-                    $(BINDIR)/external_samplesort_vs_peterExample
+                    $(BINDIR)/external_samplesort_vs_peterExample \
+                    $(BINDIR)/external_random_shuffleExample
 
 # Peter's external sample sort (the second contestant in the
 # external_samplesort_vs_peter comparison) ships its own configs.h /
@@ -217,6 +218,9 @@ $(BINDIR)/external_samplesortExample: ChunkSequence/examples/external/external_s
 	$(LINK)
 
 $(BINDIR)/external_linefitExample: ChunkSequence/examples/external/external_linefit.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(LINK)
+
+$(BINDIR)/external_random_shuffleExample: ChunkSequence/examples/external/external_random_shuffle.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # fitmem variants: single-level (buckets fit in DRAM) sample sort / kth-smallest,

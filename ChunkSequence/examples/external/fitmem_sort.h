@@ -10,7 +10,7 @@
 #include <parlay/random.h>
 #include "ChunkSequence/ExternalPrimitives/materialize.h"
 #include "ChunkSequence/ExternalPrimitives/scan_find.h"
-#include "ChunkSequence/ExternalPrimitives/chunk_count_sort2.h"
+#include "ChunkSequence/ExternalPrimitives/chunk_count_sort.h"
 #include "ChunkSequence/ExternalPrimitives/flatten.h"
 
 

@@ -354,6 +354,89 @@ chunk_seq to_chunk_seq(const Range& seq,
                        [&seq](size_t i) { return seq[i]; }, io_threads);
 }
 
+/**
+ * Sequential tabulate: the same output as tabulate(), built with blocking
+ * O_DIRECT pwrites on the calling thread instead of the io_uring writer pool.
+ *
+ * Meant to be called from *inside* a parlay::parallel_for, where the caller
+ * already supplies the parallelism (e.g. one call per bucket in
+ * random_shuffle / sample_sort).  The eager tabulate would there spin up an
+ * UnorderedFileWriter -- one io_uring ring per drive -- and a nested
+ * parallel_for per call, so B concurrent calls mean B * num_drives rings
+ * (RLIMIT_MEMLOCK pressure) and B nested parallel regions, all to write a
+ * bucket small enough to fit in DRAM.  This version allocates one CHUNK_SIZE
+ * bounce buffer, opens each destination drive file once, and writes its slots
+ * back to back.
+ */
+template<typename T = uint64_t, typename F>
+chunk_seq sequential_tabulate(size_t n, const std::string& result_prefix, F f) {
+    static_assert(CHUNK_SIZE % sizeof(T) == 0,
+        "sizeof(T) must divide CHUNK_SIZE for O_DIRECT alignment");
+    const size_t ept = CHUNK_SIZE / sizeof(T);
+    const size_t num_chunks = (n + ept - 1) / ept;
+    if (num_chunks == 0) return {};
+    const size_t num_drives = GetSSDList().size();
+
+    // Balls-in-bins drive assignment, then group by drive so each drive file is
+    // opened, sized, and filled exactly once.
+    std::vector<size_t> drive_of(num_chunks);
+    {
+        std::mt19937_64 rng(std::random_device{}());
+        std::uniform_int_distribution<size_t> dist(0, num_drives - 1);
+        for (size_t i = 0; i < num_chunks; i++) drive_of[i] = dist(rng);
+    }
+    std::vector<std::vector<size_t>> drive_chunks(num_drives);
+    for (size_t i = 0; i < num_chunks; i++)
+        drive_chunks[drive_of[i]].push_back(i);
+
+    std::vector<chunk> chunks(num_chunks);
+    T* buf = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
+    CHECK(buf != nullptr) << "sequential_tabulate: buffer allocation failed";
+
+    for (size_t d = 0; d < num_drives; d++) {
+        const std::vector<size_t>& mine = drive_chunks[d];
+        if (mine.empty()) continue;
+
+        const std::string filename = GetFileName(result_prefix, d);
+        int fd = open(filename.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0644);
+        SYSCALL(fd);
+        const size_t file_size = mine.size() * CHUNK_SIZE;
+        if (fallocate(fd, 0, 0, (off_t)file_size) != 0)
+            SYSCALL(ftruncate(fd, (off_t)file_size));
+
+        // Slot s of this drive's file holds chunk mine[s], so every begin_addr is
+        // CHUNK_SIZE-aligned exactly as in tabulate.
+        for (size_t s = 0; s < mine.size(); s++) {
+            const size_t i     = mine[s];
+            const size_t start = i * ept;
+            const size_t count = std::min(ept, n - start);
+            for (size_t j = 0; j < count; j++) buf[j] = f(start + j);
+            if (count < ept)
+                memset(buf + count, 0, (ept - count) * sizeof(T));
+            SYSCALL(pwrite(fd, buf, CHUNK_SIZE, (off_t)(s * CHUNK_SIZE)));
+            chunks[i] = {filename, s * CHUNK_SIZE, count * sizeof(T), i};
+        }
+        close(fd);
+    }
+
+    free(buf);
+    return {chunks};
+}
+
+/**
+ * Convert an in-DRAM range to a chunk_seq without the io_uring writer pool: the
+ * to_chunk_seq counterpart of sequential_tabulate, and the inverse of
+ * sequential_materialize.  Use inside a parallel_for; use to_chunk_seq when the
+ * call is the only thing running.
+ */
+template<typename Range>
+chunk_seq sequential_to_chunk_seq(const Range& seq,
+                                  const std::string& result_prefix = "chunkseq") {
+    using T = typename Range::value_type;
+    return sequential_tabulate<T>(seq.size(), result_prefix,
+                                  [&seq](size_t i) { return seq[i]; });
+}
+
 // Total number of *elements* (not chunks) in the sequence.  O(1): every chunk
 // but the last is full.  (Single-element access lives on the struct itself:
 // chunk_seq::operator[] and chunk_seq::push_back.)

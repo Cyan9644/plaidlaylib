@@ -32,26 +32,11 @@
 
 namespace ChunkSequenceOps{
 
-// Lightweight per-phase timer for sample_sort, enabled by setting the
-// environment variable SS_PHASE_TIMING (to anything).  Each mark() prints the
-// wall-clock time since the previous mark to stderr, so a single run yields a
-// phase-by-phase breakdown of where the sort spends its time.  On destruction it
-// additionally prints one machine-readable line to stdout that
-// benchmarks/samplesort_phase_bench.py (and any other harness) can grep:
-//
-//   SSPHASE,<tag>,<phase1>=<s>,<phase2>=<s>,...,total=<s>
-//
-// Only the outermost/first sample_sort call (tag "0") emits the machine line, so
-// a sweep gets exactly one SSPHASE row per input.  Disabled (zero overhead
-// beyond a branch) when the env var is unset, so it is safe to leave compiled
-// into the shipping header.
-
-
 template <typename T, typename Less = std::less<>>
 chunk_seq sample_sort(chunk_seq& seq, Less less1 = {}) {
 static std::atomic<size_t> ss_counter{0};
 const std::string tag = std::to_string(ss_counter++);
-SsPhaseTimer _pt(tag.c_str());
+
 size_t n = 0;
   for(size_t r = 0; r < seq.chunks.size(); r++){
 n+= seq.chunks[r].used;
@@ -65,7 +50,6 @@ size_t max_sample_size = std::max(1UL, std::min(n, filer / O_DIRECT_MULTIPLE));
   size_t num_samples = std::max(std::min(filer / (1UL << 27), max_sample_size), min_sample_size);
 
   num_samples = (size_t{1} << parlay::log2_up(num_samples + 1)) - 1;
-  _pt.mark("size/params");
 
   if (n < num_samples){
     //we're likely going to want a fast quicksort method that takes better advantage of our 
@@ -74,12 +58,10 @@ size_t max_sample_size = std::max(1UL, std::min(n, filer / O_DIRECT_MULTIPLE));
     //but could overlap the I/O with computation.
 
     auto i = ChunkSequenceOps::materialize<T>(seq); //it would be good to make this materialize into a parlay sequence (now done)
-    _pt.mark("base:materialize");
 
     // std::sort(i.begin(), i.end(), less1);
     // i = parlay::sort(i);
     parlay::sort_inplace(i);
-    _pt.mark("base:sort");
     //this is going to be really slow if we just materialize and write back, probably the best thing to do is to pass a parlay sequence
     //at the recurring call based on the size, but this is kind of messy
     //the easiest way to fix the problem is to just make materialize faster by parallelizing it
@@ -110,7 +92,6 @@ unsigned int sample_size = std::max<size_t>(1, num_samples);
 
         pivots[count].second = scan_find<T>(seq, scan_seq, pivots[count].first);
     });
-    _pt.mark("sample:probe");
 
 
     pivots = parlay::sort(pivots, less2);
@@ -123,7 +104,6 @@ unsigned int sample_size = std::max<size_t>(1, num_samples);
 
 auto seconds = parlay::map(pivots, [](const auto& p){ return p.second; });
   parlay::internal::heap_tree ss(seconds);
-  _pt.mark("sample:pivots/heap");
 
 
 // std::vector<chunk_seq> externalSequenceVector(num_buckets);
@@ -145,7 +125,6 @@ auto ids = ChunkSequenceOps::delayed::map(ChunkSequenceOps::delayed::delay<T>(se
 std::vector<chunk_seq> externalSequenceVector(num_buckets);
 ChunkSequenceOps::chunk_count_sort(ids, num_buckets, externalSequenceVector,
                                    "ss_bucket_" + tag);
-_pt.mark("count_sort");
 
 //it should now be the case that externalSequenceVector is a full vector of the individual external sequences
 //in this case we just need a simple flatten to put all the chunk headers into a single list
