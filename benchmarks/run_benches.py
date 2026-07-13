@@ -56,8 +56,37 @@ BINDIR = os.path.join(REPO_ROOT, "bin")
 DEFAULT_N_VALUES = "1M 2M 4M 8M 16M 32M 64M"          # element counts
 DEFAULT_CHUNK_SIZES = "512KiB 1MiB 2MiB 4MiB 8MiB 16MiB"
 DEFAULT_CHUNK_N = "32M"                                # fixed n for chunk sweep
-DEFAULT_EXAMPLE_N_VALUES = "2^24 2^25 2^26 2^27 2^28 2^29 2^30"  # examples sweep (dev/tmpfs)
+DEFAULT_EXAMPLE_SIZES = "128MiB 256MiB 512MiB 1GiB"    # examples sweep (dev/tmpfs); input size, not element count
 DEFAULT_FSTRIM_GLOB = "/mnt/ssd*"
+
+def _configs_chunk_bytes():
+    """The examples' compiled CHUNK_SIZE, read from configs.h so it can't go stale.
+
+    The examples don't pass -DCHUNK_SIZE_BYTES, so they use the `#define
+    CHUNK_SIZE_BYTES` default in configs.h; parse and evaluate that arithmetic
+    expression (e.g. `(1024 * 1024 * 4)` or `(4 << 20)`).  Falls back to 4 MiB if
+    the define can't be found/parsed.
+    """
+    path = os.path.join(REPO_ROOT, "configs.h")
+    try:
+        with open(path) as f:
+            text = f.read()
+        # last matching #define wins (matches the C preprocessor)
+        expr = None
+        for m in re.finditer(r"#define\s+CHUNK_SIZE_BYTES\s+(.+)", text):
+            expr = m.group(1).split("//")[0].split("/*")[0].strip()
+        if expr and re.fullmatch(r"[0-9()*+\-<>x a-fA-F\t]+", expr):
+            return int(eval(expr, {"__builtins__": {}}, {}))   # digits/operators only
+    except (OSError, ValueError, SyntaxError):
+        pass
+    print("  !!! could not read CHUNK_SIZE_BYTES from configs.h; assuming 4 MiB",
+          flush=True)
+    return 4 << 20
+
+
+# Compiled CHUNK_SIZE the examples are built with (from configs.h); the
+# size->count conversion aligns n to this grid.
+EXAMPLE_CHUNK_BYTES = _configs_chunk_bytes()
 
 # ── examples registry ───────────────────────────────────────────────────────
 # Each example is a dual-purpose binary (bin/<name>Example) that prints a
@@ -66,11 +95,20 @@ DEFAULT_FSTRIM_GLOB = "/mnt/ssd*"
 # `data_globs` lists the per-mount globs of files the example leaves on the
 # drives (cleared between sweep points).  Add a new example by appending one
 # entry (and, if it lives in examples/external/, an explicit Makefile rule).
+#
+# The sweep is parameterized by *input size in bytes*, not the binary's element
+# count: `elem_bytes` is the primary on-disk sequence's element size and
+# `input_seqs` how many such input sequences the example reads, so its total
+# input footprint is `elem_bytes*input_seqs` bytes per element of `n`.  A target
+# size S is converted to the binary's argv[1] via size_to_n() (chunk-aligned),
+# so e.g. bigint_add (two 8-byte-limb operands) gets n = S/16 — half a single
+# 8-byte sequence's n, since its input is split across two operands.
 EXAMPLES = [
     {"name": "primes", "target": "bin/primesExample",
      "cols": ["n", "time_s", "inmem_time_s", "count", "throughput_gb_s"],
      "inmem_col": "inmem_time_s",
-     "xlabel": "n (sieve range)",
+     "elem_bytes": 1, "input_seqs": 1,
+     "xlabel": "input size",
      "title": "Prime sieve: out-of-core (ChunkFlatTabulate) vs in-mem parlaylib",
      "data_globs": ["primes[0-9]*"]},
     # kmpExample sweeps n with the pattern length m at its constant built-in
@@ -79,7 +117,8 @@ EXAMPLES = [
      "cols": ["n", "m", "build_s", "search_s", "inmem_search_s", "count",
               "throughput_gb_s"],
      "time_col": "search_s", "inmem_col": "inmem_search_s",
-     "xlabel": "n (text length, chars)",
+     "elem_bytes": 1, "input_seqs": 1,
+     "xlabel": "input size",
      "title": "KMP search: out-of-core (ChunkKmp) vs in-mem parlaylib",
      "data_globs": ["kmp_*"]},
     # rabin_karpExample: same driver shape as kmp (constant m, sweep n),
@@ -88,7 +127,8 @@ EXAMPLES = [
      "cols": ["n", "m", "build_s", "search_s", "inmem_search_s", "count",
               "throughput_gb_s"],
      "time_col": "search_s", "inmem_col": "inmem_search_s",
-     "xlabel": "n (text length, chars)",
+     "elem_bytes": 1, "input_seqs": 1,
+     "xlabel": "input size",
      "title": "Rabin-Karp search: out-of-core (ChunkRabinKarp) vs in-mem parlaylib",
      "data_globs": ["rk_*"]},
     # kth_smallestExample sweeps n with k at the median (n/2); the plotted time
@@ -98,7 +138,8 @@ EXAMPLES = [
      "cols": ["n", "k", "build_s", "select_s", "inmem_select_s", "result",
               "throughput_gb_s"],
      "time_col": "select_s", "inmem_col": "inmem_select_s",
-     "xlabel": "n (number of keys)",
+     "elem_bytes": 8, "input_seqs": 1,
+     "xlabel": "input size",
      "title": "kth-smallest: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["kth_in*", "id_*", "flags_*", "next_*"]},
     # external_samplesortExample sweeps n; the plotted time is the sort pass only
@@ -109,7 +150,8 @@ EXAMPLES = [
     {"name": "external_samplesort", "target": "bin/external_samplesortExample",
      "cols": ["n", "build_s", "sort_s", "inmem_sort_s", "throughput_gb_s"],
      "time_col": "sort_s", "inmem_col": "inmem_sort_s",
-     "xlabel": "n (number of keys)",
+     "elem_bytes": 8, "input_seqs": 1,
+     "xlabel": "input size",
      "title": "sample sort: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*",
                     "qs_base_*"]},
@@ -128,7 +170,8 @@ EXAMPLES = [
      "time_col": "ext_sort_s", "inmem_col": "peter_sort_s",
      "series_labels": ("Peter's sort (out-of-core)", "our sort (out-of-core)"),
      "no_ram_cliff": True,
-     "xlabel": "n (number of keys)",
+     "elem_bytes": 8, "input_seqs": 1,
+     "xlabel": "input size",
      "title": "sample sort: ours (ChunkSequenceOps) vs Peter's — both out-of-core",
      "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*",
                     "qs_base_*", "pss_in*", "pss_out*", "spfx_*"]},
@@ -140,7 +183,8 @@ EXAMPLES = [
      "cols": ["n", "k", "build_s", "select_s", "inmem_select_s", "result",
               "throughput_gb_s"],
      "time_col": "select_s", "inmem_col": "inmem_select_s",
-     "xlabel": "n (number of keys)",
+     "elem_bytes": 8, "input_seqs": 1,
+     "xlabel": "input size",
      "title": "fitmem kth-smallest: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["fk_in*", "fk_id_*", "fk_next_*"]},
 
@@ -151,7 +195,8 @@ EXAMPLES = [
     {"name": "fitmem_sort", "target": "bin/fitmem_sortExample",
      "cols": ["n", "build_s", "sort_s", "inmem_sort_s", "throughput_gb_s"],
      "time_col": "sort_s", "inmem_col": "inmem_sort_s",
-     "xlabel": "n (number of keys)",
+     "elem_bytes": 8, "input_seqs": 1,
+     "xlabel": "input size",
      "title": "fitmem sample sort: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["fs_in*", "fs_id_*", "fs_bucket_*", "fs_base_*", "fs_sorted_*"]},
 
@@ -162,7 +207,8 @@ EXAMPLES = [
      "cols": ["n", "build_s", "fit_s", "inmem_fit_s", "offset", "slope",
               "throughput_gb_s"],
      "time_col": "fit_s", "inmem_col": "inmem_fit_s",
-     "xlabel": "n (number of points)",
+     "elem_bytes": 8, "input_seqs": 2,
+     "xlabel": "input size",
      "title": "line fit: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["lf_x*", "lf_y*"]},
 
@@ -172,7 +218,8 @@ EXAMPLES = [
      "cols": ["n", "build_s", "add_s", "inmem_add_s", "result_limbs",
               "throughput_gb_s"],
      "time_col": "add_s", "inmem_col": "inmem_add_s",
-     "xlabel": "n (64-bit limbs)",
+     "elem_bytes": 8, "input_seqs": 2,
+     "xlabel": "input size",
      "title": "big-integer add: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["bi_a*", "bi_b*", "bi_sum*"]},
 
@@ -191,7 +238,8 @@ EXAMPLES = [
      "cols": ["n", "start", "end", "build_s", "cut_s", "inmem_cut_s",
               "out_elems", "throughput_gb_s"],
      "time_col": "cut_s", "inmem_col": "inmem_cut_s",
-     "xlabel": "n (number of keys)",
+     "elem_bytes": 8, "input_seqs": 1,
+     "xlabel": "input size",
      "title": "cut / slice: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["cut_in*", "cut_out*"]},
 
@@ -213,13 +261,29 @@ def parse_count(s):
 
 
 def parse_bytes(s):
-    """Byte size: binary suffixes KiB/MiB/GiB (or K/M/G = *1024^x), or raw."""
+    """Byte size: binary suffixes KiB/MiB/GiB/TiB (or K/M/G/T = *1024^x), or raw."""
     s = s.strip()
-    m = re.fullmatch(r"(\d+)\s*([kKmMgG]?)(i?[bB]?)", s)
+    m = re.fullmatch(r"(\d+)\s*([kKmMgGtT]?)(i?[bB]?)", s)
     if not m:
         raise ValueError(f"bad byte size {s!r}")
-    mult = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3}[m.group(2).lower()]
+    mult = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3, "t": 1024**4}[m.group(2).lower()]
     return int(m.group(1)) * mult
+
+
+def size_to_n(entry, size_bytes):
+    """Convert a target input size (bytes) to an example's argv[1] element count.
+
+    An example's total on-disk input footprint is `elem_bytes*input_seqs` bytes
+    per element of n (e.g. bigint_add reads two 8-byte-limb operands, so 16 B/n),
+    so n = size / (elem_bytes*input_seqs).  n is rounded down to a whole number of
+    chunks (at least one) to preserve the O_DIRECT chunk-aligned invariant: the
+    engine tolerates a partial final chunk, but the original design keeps sweep
+    points on the ELEMS_PER_CHUNK grid.
+    """
+    per_n = entry["elem_bytes"] * entry["input_seqs"]
+    epc = EXAMPLE_CHUNK_BYTES // entry["elem_bytes"]   # elements per chunk for this seq
+    n = (size_bytes // per_n) // epc * epc
+    return max(epc, n)
 
 
 def _f(s):
@@ -388,8 +452,8 @@ def run_chunk_size(chunk_sizes, n, extra_args, clear_glob, clear_enabled):
 
 
 # ── examples sweep ──────────────────────────────────────────────────────────
-def run_example(entry, n_values, extra_args, clear_glob, clear_enabled, warnings):
-    """Sweep one example over n_values; return parsed rows.
+def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings):
+    """Sweep one example over input `sizes` (bytes); return parsed rows.
 
     Correctness is checked inside the binary: when the in-memory parlaylib
     baseline runs (sizes within its RAM budget) the binary cross-checks the
@@ -409,16 +473,20 @@ def run_example(entry, n_values, extra_args, clear_glob, clear_enabled, warnings
     make(entry["target"])
     binary = os.path.join(BINDIR, os.path.basename(entry["target"]))
     rows = []
-    for n in n_values:
-        print(f"\n=== example {entry['name']}: n={n} ===", flush=True)
+    for size in sizes:
+        n = size_to_n(entry, size)
+        print(f"\n=== example {entry['name']}: size={_bytes_fmt(size, None)} "
+              f"(n={n}) ===", flush=True)
         fields, problem = run_binary(binary, [n] + extra_args, fatal=False)
         if problem:
-            w = (f"example {entry['name']} at n={n}: {problem}"
-                 + ("" if fields else " — point dropped"))
+            w = (f"example {entry['name']} at size={_bytes_fmt(size, None)} (n={n}): "
+                 f"{problem}" + ("" if fields else " — point dropped"))
             print(f"  !!! {w}", flush=True)
             warnings.append(w)
         if fields:
-            rows.append(dict(zip(entry["cols"], fields)))
+            row = dict(zip(entry["cols"], fields))
+            row["input_bytes"] = str(size)
+            rows.append(row)
         clear_bench_data(clear_glob, clear_enabled)   # don't leave output on the drives
     return rows
 
@@ -442,7 +510,7 @@ def _bytes_fmt(val, _):
     """Human-readable power-of-two byte size, e.g. 256 KiB / 1 MiB / 16 MiB."""
     if val <= 0:
         return ""
-    for factor, unit in ((1024**3, "GiB"), (1024**2, "MiB"), (1024, "KiB")):
+    for factor, unit in ((1024**4, "TiB"), (1024**3, "GiB"), (1024**2, "MiB"), (1024, "KiB")):
         if val >= factor:
             q = val / factor
             s = str(int(round(q))) if abs(q - round(q)) < 1e-6 else f"{q:g}"
@@ -540,17 +608,19 @@ def plot_chunk_size(rows, path):
 
 
 def plot_example(rows, entry, path):
-    """Single-panel log-log plot of an example's runtime vs n.
+    """Single-panel log-log plot of an example's runtime vs input size.
 
     Two series, styled like plot_delayed: the in-memory parlaylib baseline
     (which stops at the RAM cliff — blank CSV fields are dropped) and the
-    out-of-core chunk implementation.
+    out-of-core chunk implementation.  The x-axis is the uniform input size in
+    bytes (see size_to_n), so examples with different element sizes are directly
+    comparable.
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    xs = [int(r["n"]) for r in rows]
+    xs = [int(r["input_bytes"]) for r in rows]
     # Default: out-of-core chunk impl vs in-memory parlaylib baseline (which
     # stops at the RAM cliff).  An entry may override the two series labels and
     # suppress the RAM-cliff note when the "baseline" series is itself
@@ -563,7 +633,7 @@ def plot_example(rows, entry, path):
     _draw_panel(ax, xs, [
         (base_label, _series(rows, entry["inmem_col"]), "o-"),
         (cmp_label, _series(rows, entry.get("time_col", "time_s")), "s-"),
-    ], entry["xlabel"], entry["title"] + subtitle, xfmt=_pow2_fmt)
+    ], entry["xlabel"], entry["title"] + subtitle, xfmt=_bytes_fmt)
     fig.savefig(path, dpi=150)
     plt.close(fig)
     print(f"  wrote {path}", flush=True)
@@ -591,9 +661,10 @@ def main():
                     help="chunk-size sweep (space-separated, e.g. '512KiB 4MiB')")
     ap.add_argument("--n", default=os.environ.get("BENCH_CHUNK_N", DEFAULT_CHUNK_N),
                     help="fixed n for the chunk-size sweep (default: 32M)")
-    ap.add_argument("--example-n-values",
-                    default=os.environ.get("BENCH_EXAMPLE_N_VALUES", DEFAULT_EXAMPLE_N_VALUES),
-                    help="examples n sweep (space-separated, e.g. '2^24 2^28 2^30')")
+    ap.add_argument("--example-sizes",
+                    default=os.environ.get("BENCH_EXAMPLE_SIZES", DEFAULT_EXAMPLE_SIZES),
+                    help="examples input-size sweep (space-separated, e.g. '256MiB 1GiB'); "
+                         "converted per example to an element count (see size_to_n)")
     ap.add_argument("--ssd-args", default=os.environ.get("BENCH_SSD_ARGS", ""),
                     help="extra global flags passed to each binary (e.g. '--num_ssd=4')")
     ap.add_argument("--fstrim-glob",
@@ -625,7 +696,7 @@ def main():
     n_values = [parse_count(x) for x in args.n_values.split()]
     chunk_sizes = [parse_bytes(x) for x in args.chunk_sizes.split()]
     chunk_n = parse_count(args.n)
-    example_n_values = [parse_count(x) for x in args.example_n_values.split()]
+    example_sizes = [parse_bytes(x) for x in args.example_sizes.split()]
     fstrim_enabled = not args.no_fstrim
     clear_enabled = not args.no_clean
 
@@ -656,10 +727,10 @@ def main():
     if do_examples:
         for entry in examples_to_run:
             print(f"\n######## example: {entry['name']} ########")
-            rows = run_example(entry, example_n_values, extra,
+            rows = run_example(entry, example_sizes, extra,
                                args.fstrim_glob, clear_enabled, warnings)
             write_csv(os.path.join(outdir, f"{entry['name']}_scale.csv"),
-                      entry["cols"], rows)
+                      ["input_bytes"] + entry["cols"], rows)
             plot_example(rows, entry, os.path.join(outdir, f"{entry['name']}_scale.png"))
 
     # ── end-of-run summary — repeated here (and warnings persisted next to the

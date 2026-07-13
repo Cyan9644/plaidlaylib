@@ -21,12 +21,12 @@ RAM-backed and generate no /proc/diskstats traffic, so the disk panels come out
 empty (the script warns and still records CPU).  Run it on the 30-SSD machine.
 
   usage:
-    python3 benchmarks/io_trace.py <example> [--n 2^30] [--interval 0.1]
+    python3 benchmarks/io_trace.py <example> [--size 1GiB] [--interval 0.1]
         [--mount-glob /mnt/ssd*] [--outdir results] [--ssd-args '...']
         [-- <extra args passed through to the example binary>]
 
-Reuses run_benches.py by import: the EXAMPLES registry, parse_count, make(),
-clear_bench_data(), REPO_ROOT/BINDIR.  Compilation stays in the Makefile.
+Reuses run_benches.py by import: the EXAMPLES registry, parse_bytes, size_to_n,
+make(), clear_bench_data(), REPO_ROOT/BINDIR.  Compilation stays in the Makefile.
 """
 
 import argparse
@@ -327,7 +327,9 @@ def main():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("example", help="example name; choices: "
                     + ", ".join(e["name"] for e in rb.EXAMPLES))
-    ap.add_argument("--n", default="2^26", help="element count (e.g. 2^30, 64M)")
+    ap.add_argument("--size", default="512MiB",
+                    help="input size (e.g. 1GiB, 512MiB); converted per example to "
+                         "an element count (see run_benches.size_to_n)")
     ap.add_argument("--interval", type=float, default=0.1,
                     help="sampling interval in seconds (default 0.1)")
     ap.add_argument("--mount-glob", default="/mnt/ssd*",
@@ -344,7 +346,8 @@ def main():
     if entry is None:
         ap.error(f"unknown example {args.example!r}; choices: "
                  + ", ".join(e["name"] for e in rb.EXAMPLES))
-    n = rb.parse_count(args.n)
+    size = rb.parse_bytes(args.size)
+    n = rb.size_to_n(entry, size)
 
     devices, mapping = resolve_devices(args.mount_glob)
     if devices:
@@ -372,12 +375,13 @@ def main():
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     outdir = os.path.join(rb.REPO_ROOT, args.outdir, stamp,
-                          f"trace_{entry['name']}_n{n}")
+                          f"trace_{entry['name']}_{args.size}")
     os.makedirs(outdir, exist_ok=True)
     print(f"Trace directory: {outdir}", flush=True)
 
     write_trace_csv(os.path.join(outdir, "trace.csv"), ser, devices, t0)
-    title = f"{entry['name']}  n={n}  ({len(devices)} drives, {args.interval}s samples)"
+    title = (f"{entry['name']}  size={args.size} (n={n})  "
+             f"({len(devices)} drives, {args.interval}s samples)")
     plot_trace(ser, markers, devices, t0, os.path.join(outdir, "trace.png"), title)
 
     # tidy the drives, matching run_benches' between-point hygiene

@@ -281,27 +281,30 @@ bench-full:
 	    --n 268435456 \
 	    --chunk-sizes "256KiB 512KiB 1MiB 2MiB 4MiB 8MiB 16MiB"
 
-# Opt-in examples sweep: time each example across a sweep of n.  Kept separate
-# from `bench`/`bench-full` (examples are heterogeneous and some are expensive).
-# `bench-examples` uses small dev-box (tmpfs) defaults.
+# Opt-in examples sweep: time each example across a sweep of input SIZE (each
+# binary's element count is derived per example so all examples move the same
+# bytes; see size_to_n in run_benches.py).  Kept separate from `bench`/`bench-full`
+# (examples are heterogeneous and some are expensive).  `bench-examples` uses
+# small dev-box (tmpfs) defaults (128MiB .. 1GiB).
 bench-examples:
 	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add" --outdir results
 
+# Mid-scale examples sweep: input sizes up to 256 GiB.
 bench-examples-mid:
 	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add" --outdir results \
-	    --example-n-values "2^26 2^28 2^30 2^32 2^34 2^36"
+	    --example-sizes "1GiB 4GiB 16GiB 64GiB 256GiB"
 
 # Full-scale examples sweep tuned for the benchmark machine (500 GiB RAM, 30x 1TB
-# SSDs): sieve range 2^32 .. 2^40.  Multi-TB of I/O — not for a tmpfs dev box.
+# SSDs): input sizes up to 1 TiB.  Multi-TB of I/O — not for a tmpfs dev box.
 bench-examples-full:
 	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add" --outdir results \
-	    --example-n-values "2^28 2^30 2^32 2^34 2^36 2^38 2^40"
+	    --example-sizes "1GiB 4GiB 16GiB 64GiB 256GiB 1TiB"
 
 # Single-run IO/CPU trace of one example (per-SSD read/write throughput + %util +
 # CPU over time; build/op phases marked).  Meaningful on real block devices only.
-#   make trace EXAMPLE=kmp N=2^30            (add ARGS='m ...' for extra positionals)
+#   make trace EXAMPLE=kmp SIZE=1GiB          (add ARGS='m ...' for extra positionals)
 trace:
-	python3 benchmarks/io_trace.py $(EXAMPLE) --n $(N) $(if $(ARGS),-- $(ARGS),)
+	python3 benchmarks/io_trace.py $(EXAMPLE) --size $(SIZE) $(if $(ARGS),-- $(ARGS),)
 
 # ── cleanup ────────────────────────────────────────────────────────────────────
 
