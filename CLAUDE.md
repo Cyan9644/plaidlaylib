@@ -176,13 +176,23 @@ to `warnings.txt` in the results dir, next to the fstrim outcome note).
   of the comparison.  Emits the same CSV columns as kmp; the sweep plots
   `search_s`.
 
-Examples are benchmarked by a **separate opt-in sweep**.  `make bench-examples`
-sweeps each example over `n` with dev-box (tmpfs) sizes and writes
-`<name>_scale.{csv,png}` (both series per plot) into the same timestamped
-`results/` dir as the other benchmarks; `make bench-examples-full` uses
-benchmark-machine sizes (sieve range `2^32 … 2^40`).  Add an example by dropping
-a `.cpp` in `examples/` and appending one entry to the `EXAMPLES` registry in
-`run_benches.py`.  **Name-clash warning**: the upstream parlaylib example
+Examples are benchmarked by a **separate opt-in sweep**.  The sweep is
+parameterized by **input size in bytes** (not the binary's element count `n`), so
+heterogeneous examples move the same number of bytes at each point and their times
+are directly comparable: each `EXAMPLES` entry carries `elem_bytes` (its primary
+on-disk sequence's element size) and `input_seqs` (how many input sequences it
+reads), and `size_to_n()` converts a target size to the binary's argv[1] as
+`n = size / (elem_bytes*input_seqs)`, rounded down to a whole number of
+`CHUNK_SIZE`-chunks (preserving the O_DIRECT chunk-aligned invariant).  So
+`bigint_add` (two 8-byte-limb operands, 16 B/n) gets **half** the `n` of a single
+8-byte sequence at the same size — its input is split across two operands.
+`make bench-examples` sweeps dev-box (tmpfs) sizes (`128MiB … 1GiB`) and writes
+`<name>_scale.{csv,png}` (both series per plot; x-axis is the uniform input size,
+and the CSV carries an `input_bytes` column) into the same timestamped `results/`
+dir as the other benchmarks; `make bench-examples-mid` goes up to 256 GiB and
+`make bench-examples-full` up to 1 TiB (benchmark-machine sizes).  Add an example
+by dropping a `.cpp` in `examples/` and appending one entry to the `EXAMPLES`
+registry in `run_benches.py` (set its `elem_bytes`/`input_seqs`).  **Name-clash warning**: the upstream parlaylib example
 headers define their symbols at global scope with no include guards (e.g.
 `field` in `rabin_karp.h`, `primes(long)` in `primes.h`), so when a new example
 pulls one in, check carefully for clashes against the chunk-side code (our

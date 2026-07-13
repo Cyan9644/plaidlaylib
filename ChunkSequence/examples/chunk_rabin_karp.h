@@ -1,24 +1,17 @@
 #ifndef CHUNK_RABIN_KARP_H
 #define CHUNK_RABIN_KARP_H
 
-#include <algorithm>
-#include <cstdlib>
-#include <cstring>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <type_traits>
 #include <vector>
-#include <fcntl.h>
-#include <unistd.h>
 
 #include "absl/log/check.h"
-#include "parlay/primitives.h"
 #include "parlay/sequence.h"
 
+#include "ChunkSequence/chunk_flat_map.h"
 #include "ChunkSequence/chunk_seq.h"
-#include "ChunkSequence/chunk_seq_reader.h"
-#include "ChunkSequence/dense_pack.h"
-#include "utils/file_utils.h"
 #include "configs.h"
 
 namespace ChunkSequenceOps {
@@ -48,35 +41,6 @@ struct field {
         return field((x & p) + (x >> 31));
     }
     bool operator==(field a) const { return val % p == a.val % p; }
-};
-
-/**
- * A produced batch for ChunkRabinKarp: owns the reader-pool text buffers
- * (still referenced as each chunk's overlap by its left neighbor, so they are
- * freed only at destruction) plus the per-chunk match-position sequences that
- * DensePack packs.  run(b) reads results[b] from the settled Batch, which is
- * move-stable (the outer vector's element storage is heap-allocated).
- */
-template<typename CharT>
-struct RkBatch {
-    std::unique_ptr<ChunkSequenceReader<CharT>> reader;  // keeps the pool alive
-    std::vector<CharT*> bufs;  // one per chunk, index-sorted order
-    std::vector<parlay::sequence<uint64_t>> results;
-
-    RkBatch() = default;
-    RkBatch(RkBatch&&) = default;
-    RkBatch& operator=(RkBatch&&) = default;
-    RkBatch(const RkBatch&) = delete;
-    RkBatch& operator=(const RkBatch&) = delete;
-    ~RkBatch() {
-        if (reader)
-            for (CharT* b : bufs) reader->allocator.Free(b);
-    }
-
-    size_t size() const { return results.size(); }
-    DensePackRun<uint64_t> run(size_t b) const {
-        return {results[b].data(), results[b].size()};
-    }
 };
 
 /**
@@ -126,14 +90,12 @@ inline void RkScanChunk(const CharT* text, long n_b,
  * match-start positions as a tightly packed, index-ordered chunk_seq of
  * uint64_t (in text order).
  *
- * Same chunk structure as ChunkKmp (examples/chunk_kmp.h): each chunk is
- * scanned sequentially by one worker, chunks in parallel, with the m-1 char
- * overlap into chunk k+1 read from the right neighbor's buffer already in
- * DRAM in the same DensePack batch; only at batch seams (1 chunk in 128) is
- * the next chunk's head fetched with one small synchronous O_DIRECT read.
- * Within a chunk the search is the classic rolling-window Rabin-Karp rather
- * than parlaylib's prefix-hash scans, which out-of-core would mean writing an
- * 8x-blowup hash array to disk.
+ * Same chunk structure as ChunkKmp (examples/chunk_kmp.h): a thin ChunkFlatMap
+ * (chunk_flat_map.h) body with a forward halo of m-1, so a match starting in
+ * chunk k can extend up to m-1 chars into chunk k+1 (supplied by the engine as
+ * the next chunk's head).  Within a chunk the search is the classic
+ * rolling-window Rabin-Karp rather than parlaylib's prefix-hash scans, which
+ * out-of-core would mean writing an 8x-blowup hash array to disk.
  *
  * Requires m <= CHUNK_SIZE/sizeof(CharT) (the pattern fits in a chunk, so a
  * match spans at most 2 chunks) and a dense input (every chunk but the last
@@ -146,98 +108,33 @@ template<typename CharT = char, typename Pattern>
 chunk_seq ChunkRabinKarp(const chunk_seq& seq,
                          const std::string& result_prefix,
                          const Pattern& pattern) {
-    const size_t n_in = seq.chunks.size();
     const long m = (long)pattern.size();
     const size_t epct = CHUNK_SIZE / sizeof(CharT);
     CHECK((size_t)m <= epct) << "ChunkRabinKarp: pattern must fit within one chunk";
-    if (m == 0 || n_in == 0) return {};
+    if (m == 0 || seq.chunks.empty()) return {};
 
     // Local pattern copy, hash base x (as in the parlay original), x^(m-1)
-    // for rolling, and the pattern's Horner-orientation hash.
-    std::vector<CharT> pat(m);
-    for (long i = 0; i < m; i++) pat[i] = pattern[i];
+    // for rolling, and the pattern's Horner-orientation hash.  Captured by
+    // shared_ptr since the body outlives this frame — it is threaded through
+    // DensePack across every batch.
+    auto pat = std::make_shared<std::vector<CharT>>(m);
+    for (long i = 0; i < m; i++) (*pat)[i] = pattern[i];
     const detail::field x(500000000);
     detail::field x_m1(1);
     for (long i = 0; i < m - 1; i++) x_m1 = x_m1 * x;
     detail::field pattern_hash(0);
     for (long i = 0; i < m; i++)
         pattern_hash = pattern_hash * x +
-            detail::field((unsigned int)(std::make_unsigned_t<CharT>)pat[i]);
+            detail::field((unsigned int)(std::make_unsigned_t<CharT>)(*pat)[i]);
 
-    // Global text position of each chunk's first element (exclusive prefix sum
-    // of element counts — metadata only, no I/O).
-    std::vector<uint64_t> pos_of(n_in + 1);
-    pos_of[0] = 0;
-    for (size_t i = 0; i < n_in; i++)
-        pos_of[i + 1] = pos_of[i] + seq.chunks[i].used / sizeof(CharT);
-
-    // Bytes of chunk `c` a left neighbor may need as overlap: min(m-1, count).
-    auto head_bytes = [&](const chunk& c) {
-        return std::min((size_t)(m - 1) * sizeof(CharT), c.used);
-    };
-
-    return DensePack<uint64_t>(n_in, result_prefix,
-        [&](size_t base, size_t batch_n) {
-            // Read this batch's contiguous slice [base, base+batch_n) with its
-            // own reader, so completions can only belong to this batch.
-            chunk_seq sub;
-            sub.chunks.assign(seq.chunks.begin() + base,
-                              seq.chunks.begin() + base + batch_n);
-            auto reader = std::make_unique<ChunkSequenceReader<CharT>>();
-            reader->PrepChunks(sub);
-            reader->Start(5, 32, 16);
-
-            struct BC { CharT* buf; size_t n; size_t idx; };
-            std::vector<BC> bc(batch_n);
-            for (size_t i = 0; i < batch_n; i++) {
-                auto [ptr, n, cidx] = reader->Poll();
-                bc[i] = {ptr, n, cidx};
-            }
-            // Restore logical order so bc[b+1] is bc[b]'s right neighbor.
-            std::sort(bc.begin(), bc.end(),
-                      [](const BC& a, const BC& b) { return a.idx < b.idx; });
-
-            // Seam overlap: the last chunk of this batch needs the head of the
-            // next batch's first chunk — one small synchronous O_DIRECT read
-            // (begin_addr is CHUNK_SIZE-aligned).
-            CharT* seam = nullptr;
-            size_t seam_count = 0;
-            if (base + batch_n < n_in && m > 1) {
-                const chunk& next = seq.chunks[base + batch_n];
-                const size_t bytes = head_bytes(next);
-                seam = (CharT*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT,
-                                             AlignUp(bytes));
-                CHECK(seam != nullptr) << "ChunkRabinKarp: seam allocation failed";
-                int fd = open(next.filename.c_str(), O_DIRECT | O_RDONLY);
-                SYSCALL(fd);
-                SYSCALL(pread(fd, seam, AlignUp(bytes), (off_t)next.begin_addr));
-                SYSCALL(close(fd));
-                seam_count = bytes / sizeof(CharT);
-            }
-
-            detail::RkBatch<CharT> batch;
-            batch.reader = std::move(reader);
-            batch.bufs.resize(batch_n);
-            batch.results.resize(batch_n);
-            parlay::parallel_for(0, batch_n, [&](size_t b) {
-                batch.bufs[b] = bc[b].buf;
-                const CharT* overlap;
-                long ov;
-                if (b + 1 < batch_n) {          // right neighbor is in-batch
-                    overlap = bc[b + 1].buf;
-                    ov = (long)std::min((size_t)(m - 1), bc[b + 1].n);
-                } else {                        // batch seam (or last chunk)
-                    overlap = seam;
-                    ov = (long)seam_count;
-                }
-                detail::RkScanChunk<CharT>(bc[b].buf, (long)bc[b].n,
-                                           overlap, ov, pat.data(), m,
-                                           pattern_hash, x, x_m1,
-                                           pos_of[base + b], batch.results[b]);
-            }, /*granularity=*/1);
-
-            free(seam);
-            return batch;
+    return ChunkFlatMap<CharT, uint64_t>(seq, result_prefix, /*halo=*/(size_t)(m - 1),
+        [pat, m, pattern_hash, x, x_m1](const CharT* text, size_t n, uint64_t gpos,
+                                        const CharT* halo, size_t halo_n) {
+            parlay::sequence<uint64_t> out;
+            detail::RkScanChunk<CharT>(text, (long)n, halo, (long)halo_n,
+                                       pat->data(), m, pattern_hash, x, x_m1,
+                                       gpos, out);
+            return out;
         });
 }
 

@@ -48,6 +48,7 @@
 
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/trace_marker.h"
 #include "utils/logger.h"
 #include "ChunkSequence/examples/chunk_kmp.h"
 #include "ChunkSequence/chunk_seq.h"
@@ -111,17 +112,21 @@ int main(int argc, char* argv[]) {
     const std::string out_prefix  = "kmp_out";
 
     std::cout << "Building " << n << "-char text..." << std::flush;
+    trace_mark("build_start");
     auto t0 = Clock::now();
     chunk_seq text = ChunkSequenceOps::tabulate<char>(n, text_prefix, text_at);
     const double build_s = elapsed(t0);
+    trace_mark("build_end");
     std::cout << " done (" << std::fixed << std::setprecision(4) << build_s
               << "s)\n";
 
     std::cout << "Searching for " << m << "-char pattern \"" << pattern
               << "\"..." << std::flush;
+    trace_mark("op_start");
     t0 = Clock::now();
     chunk_seq matches = ChunkSequenceOps::ChunkKmp<char>(text, out_prefix, pattern);
     const double search_s = elapsed(t0);
+    trace_mark("op_end");
     std::cout << " done\n";
 
     size_t count = 0;
