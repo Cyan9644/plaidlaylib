@@ -61,7 +61,7 @@ PETER_DIR := ChunkSequence/examples/external/peter_samplesort
 
 LINK = $(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
-.PHONY: all clean distclean deps test examples bench bench-full bench-examples bench-examples-full
+.PHONY: all clean distclean deps test examples bench bench-full bench-examples bench-examples-full trace
 
 all:
 	$(MAKE) deps
@@ -292,6 +292,12 @@ bench-examples-mid:
 bench-examples-full:
 	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add" --outdir results \
 	    --example-n-values "2^28 2^30 2^32 2^34 2^36 2^38 2^40"
+
+# Single-run IO/CPU trace of one example (per-SSD read/write throughput + %util +
+# CPU over time; build/op phases marked).  Meaningful on real block devices only.
+#   make trace EXAMPLE=kmp N=2^30            (add ARGS='m ...' for extra positionals)
+trace:
+	python3 benchmarks/io_trace.py $(EXAMPLE) --n $(N) $(if $(ARGS),-- $(ARGS),)
 
 # ── cleanup ────────────────────────────────────────────────────────────────────
 

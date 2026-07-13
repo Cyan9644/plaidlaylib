@@ -55,6 +55,7 @@
 
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/trace_marker.h"
 #include "utils/logger.h"
 #include "ChunkSequence/chunk_flat_tabulate.h"
 #include "ChunkSequence/chunk_seq.h"
@@ -164,9 +165,11 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Sieving primes in [0, " << n << ")..." << std::flush;
     const std::string prefix = "primes";
+    trace_mark("op_start");
     auto t0 = Clock::now();
     chunk_seq primes_seq = chunk_primes(n, prefix);
     const double secs = elapsed(t0);
+    trace_mark("op_end");
     std::cout << " done\n";
 
     size_t count = 0, out_bytes = 0;

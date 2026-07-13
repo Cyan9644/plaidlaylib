@@ -34,6 +34,7 @@
 
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/trace_marker.h"
 #include "utils/logger.h"
 #include "ChunkSequence/examples/chunk_bigint_add.h"
 #include "ChunkSequence/chunk_seq.h"
@@ -97,17 +98,21 @@ int main(int argc, char* argv[]) {
     const std::string sum_prefix = "bi_sum";
 
     std::cout << "Building two " << n << "-limb operands..." << std::flush;
+    trace_mark("build_start");
     auto t0 = Clock::now();
     chunk_seq a = ChunkSequenceOps::tabulate<digit>(n, a_prefix, limb_a);
     chunk_seq b = ChunkSequenceOps::tabulate<digit>(n, b_prefix, limb_b);
     const double build_s = elapsed(t0);
+    trace_mark("build_end");
     std::cout << " done (" << std::fixed << std::setprecision(4) << build_s
               << "s)\n";
 
     std::cout << "Adding..." << std::flush;
+    trace_mark("op_start");
     t0 = Clock::now();
     chunk_seq sum = ChunkSequenceOps::ChunkBigIntAdd(a, b, sum_prefix);
     const double add_s = elapsed(t0);
+    trace_mark("op_end");
     std::cout << " done\n";
 
     size_t result_limbs = 0;
