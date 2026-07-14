@@ -108,7 +108,7 @@ EXAMPLES = [
      "cols": ["n", "time_s", "inmem_time_s", "count", "throughput_gb_s"],
      "inmem_col": "inmem_time_s",
      "elem_bytes": 1, "input_seqs": 1,
-     "xlabel": "input size",
+     "xlabel": "input size (bytes)",
      "title": "Prime sieve: out-of-core (ChunkFlatTabulate) vs in-mem parlaylib",
      "data_globs": ["primes[0-9]*"]},
     # kmpExample sweeps n with the pattern length m at its constant built-in
@@ -118,7 +118,7 @@ EXAMPLES = [
               "throughput_gb_s"],
      "time_col": "search_s", "inmem_col": "inmem_search_s",
      "elem_bytes": 1, "input_seqs": 1,
-     "xlabel": "input size",
+     "xlabel": "input size (bytes)",
      "title": "KMP search: out-of-core (ChunkKmp) vs in-mem parlaylib",
      "data_globs": ["kmp_*"]},
     # rabin_karpExample: same driver shape as kmp (constant m, sweep n),
@@ -128,7 +128,7 @@ EXAMPLES = [
               "throughput_gb_s"],
      "time_col": "search_s", "inmem_col": "inmem_search_s",
      "elem_bytes": 1, "input_seqs": 1,
-     "xlabel": "input size",
+     "xlabel": "input size (bytes)",
      "title": "Rabin-Karp search: out-of-core (ChunkRabinKarp) vs in-mem parlaylib",
      "data_globs": ["rk_*"]},
     # kth_smallestExample sweeps n with k at the median (n/2); the plotted time
@@ -139,7 +139,7 @@ EXAMPLES = [
               "throughput_gb_s"],
      "time_col": "select_s", "inmem_col": "inmem_select_s",
      "elem_bytes": 8, "input_seqs": 1,
-     "xlabel": "input size",
+     "xlabel": "input size (bytes)",
      "title": "kth-smallest: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["kth_in*", "id_*", "flags_*", "next_*"]},
     # external_samplesortExample sweeps n; the plotted time is the sort pass only
@@ -151,7 +151,7 @@ EXAMPLES = [
      "cols": ["n", "build_s", "sort_s", "inmem_sort_s", "throughput_gb_s"],
      "time_col": "sort_s", "inmem_col": "inmem_sort_s",
      "elem_bytes": 8, "input_seqs": 1,
-     "xlabel": "input size",
+     "xlabel": "input size (bytes)",
      "title": "sample sort: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*",
                     "qs_base_*"]},
@@ -171,7 +171,7 @@ EXAMPLES = [
      "series_labels": ("Peter's sort (out-of-core)", "our sort (out-of-core)"),
      "no_ram_cliff": True,
      "elem_bytes": 8, "input_seqs": 1,
-     "xlabel": "input size",
+     "xlabel": "input size (bytes)",
      "title": "sample sort: ours (ChunkSequenceOps) vs Peter's — both out-of-core",
      "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*",
                     "qs_base_*", "pss_in*", "pss_out*", "spfx_*"]},
@@ -193,7 +193,7 @@ EXAMPLES = [
      "series_labels": ("Peter's sort (out-of-core)", "our direct-I/O sort (out-of-core)"),
      "no_ram_cliff": True,
      "elem_bytes": 8, "input_seqs": 1,
-     "xlabel": "input size",
+     "xlabel": "input size (bytes)",
      "title": "sample sort: our direct-I/O sort vs Peter's — both out-of-core",
      "data_globs": ["dss_in*", "dss*", "pss_in*", "pss_out*", "spfx_*"]},
 
@@ -233,7 +233,7 @@ EXAMPLES = [
      "extra_series": [("peter_sort_s", "Peter's sort (out-of-core)", "d-"),
                       ("prim_sort_s", "ours, primitives (out-of-core)", "^-")],
      "elem_bytes": 8, "input_seqs": 1,
-     "xlabel": "input size",
+     "xlabel": "input size (bytes)",
      "title": "sample sort: three out-of-core implementations vs in-mem parlaylib",
      "data_globs": ["dss_in*", "dss*", "ss_in*", "ss_id_*", "ss_bucket_*",
                     "ss_base_*", "ss_deg_*", "qs_base_*",
@@ -256,7 +256,7 @@ EXAMPLES = [
      "series_labels": ("in-mem parlay::random_shuffle (DRAM)",
                        "random_shuffle_method (out-of-core)"),
      "extra_series": [("perm_s", "Permutation (out-of-core)", "^-")],
-     "xlabel": "n (number of keys)",
+     "xlabel": "input size (bytes)",
      "title": "random shuffle: two out-of-core methods vs in-mem parlaylib",
      "data_globs": ["rs_in*", "rs_bucket_*", "rs_out_*", "rs_base_*", "perm*"]},
 
@@ -268,7 +268,7 @@ EXAMPLES = [
               "throughput_gb_s"],
      "time_col": "select_s", "inmem_col": "inmem_select_s",
      "elem_bytes": 8, "input_seqs": 1,
-     "xlabel": "input size",
+     "xlabel": "input size (bytes)",
      "title": "fitmem kth-smallest: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["fk_in*", "fk_id_*", "fk_next_*"]},
 
@@ -280,7 +280,7 @@ EXAMPLES = [
      "cols": ["n", "build_s", "sort_s", "inmem_sort_s", "throughput_gb_s"],
      "time_col": "sort_s", "inmem_col": "inmem_sort_s",
      "elem_bytes": 8, "input_seqs": 1,
-     "xlabel": "input size",
+     "xlabel": "input size (bytes)",
      "title": "fitmem sample sort: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["fs_in*", "fs_id_*", "fs_bucket_*", "fs_base_*", "fs_sorted_*"]},
 
@@ -292,7 +292,7 @@ EXAMPLES = [
               "throughput_gb_s"],
      "time_col": "fit_s", "inmem_col": "inmem_fit_s",
      "elem_bytes": 8, "input_seqs": 2,
-     "xlabel": "input size",
+     "xlabel": "input size (bytes)",
      "title": "line fit: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["lf_x*", "lf_y*"]},
 
@@ -303,7 +303,7 @@ EXAMPLES = [
               "throughput_gb_s"],
      "time_col": "add_s", "inmem_col": "inmem_add_s",
      "elem_bytes": 8, "input_seqs": 2,
-     "xlabel": "input size",
+     "xlabel": "input size (bytes)",
      "title": "big-integer add: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["bi_a*", "bi_b*", "bi_sum*"]},
 
@@ -323,7 +323,7 @@ EXAMPLES = [
               "out_elems", "throughput_gb_s"],
      "time_col": "cut_s", "inmem_col": "inmem_cut_s",
      "elem_bytes": 8, "input_seqs": 1,
-     "xlabel": "input size",
+     "xlabel": "input size (bytes)",
      "title": "cut / slice: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["cut_in*", "cut_out*"]},
 
@@ -736,9 +736,10 @@ def plot_example(rows, entry, path):
     lines += [(label, _series(rows, col), style)
               for col, label, style in entry.get("extra_series", [])]
     fig, ax = plt.subplots(figsize=(7, 5.5), constrained_layout=True)
-    # x is the input size in bytes (see size_to_n), so it gets the byte formatter.
+    # x is the input size in bytes (see size_to_n), ticked as 2^k like the other
+    # sweeps' axes rather than as KiB/MiB/GiB.
     _draw_panel(ax, xs, lines, entry["xlabel"], entry["title"] + subtitle,
-                xfmt=_bytes_fmt)
+                xfmt=_pow2_fmt)
     fig.savefig(path, dpi=150)
     plt.close(fig)
     print(f"  wrote {path}", flush=True)
