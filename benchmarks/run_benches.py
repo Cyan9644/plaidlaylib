@@ -342,8 +342,19 @@ def parse_count(s):
 
 
 def parse_bytes(s):
-    """Byte size: binary suffixes KiB/MiB/GiB/TiB (or K/M/G/T = *1024^x), or raw."""
+    """Byte size: `2^k`/`2**k`, binary suffixes KiB/MiB/GiB/TiB (or K/M/G/T =
+    *1024^x), or raw.
+
+    The `2^k` form is bytes like every other form here, *not* an element count —
+    an examples sweep is parameterized by input size (see size_to_n), so for an
+    8-byte-element example `2^23` is the point that sorts 2^20 keys.  The sweep
+    prints both at each point ("size=8 MiB (n=1048576)") so the two can't be
+    confused for long.
+    """
     s = s.strip()
+    m = re.fullmatch(r"2(?:\^|\*\*)(\d+)", s)     # 2^30, 2**30
+    if m:
+        return 2 ** int(m.group(1))
     m = re.fullmatch(r"(\d+)\s*([kKmMgGtT]?)(i?[bB]?)", s)
     if not m:
         raise ValueError(f"bad byte size {s!r}")
@@ -749,13 +760,16 @@ def main():
                     help="delayed-scale n sweep (space-separated, e.g. '1M 8M 64M')")
     ap.add_argument("--chunk-sizes",
                     default=os.environ.get("BENCH_CHUNK_SIZES", DEFAULT_CHUNK_SIZES),
-                    help="chunk-size sweep (space-separated, e.g. '512KiB 4MiB')")
+                    help="chunk-size sweep (space-separated bytes, e.g. '512KiB 4MiB' "
+                         "or '2^19 2^22')")
     ap.add_argument("--n", default=os.environ.get("BENCH_CHUNK_N", DEFAULT_CHUNK_N),
                     help="fixed n for the chunk-size sweep (default: 32M)")
     ap.add_argument("--example-sizes",
                     default=os.environ.get("BENCH_EXAMPLE_SIZES", DEFAULT_EXAMPLE_SIZES),
-                    help="examples input-size sweep (space-separated, e.g. '256MiB 1GiB'); "
-                         "converted per example to an element count (see size_to_n)")
+                    help="examples input-size sweep, in BYTES (space-separated, e.g. "
+                         "'256MiB 1GiB' or '2^28 2^30'); converted per example to its "
+                         "element count (see size_to_n) — for an 8-byte-element example "
+                         "'2^30' is the point that sorts 2^27 keys")
     ap.add_argument("--ssd-args", default=os.environ.get("BENCH_SSD_ARGS", ""),
                     help="extra global flags passed to each binary (e.g. '--num_ssd=4')")
     ap.add_argument("--fstrim-glob",
