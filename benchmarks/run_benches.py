@@ -200,11 +200,14 @@ EXAMPLES = [
     # samplesort_three_wayExample: all THREE out-of-core sorts on the same keys in
     # one run — Peter's (peter_samplesort/, via peter_shim), ours written straight
     # against io_uring (direct_samplesort.h) and ours built on the primitives
-    # (external_samplesort.h).  The two pairwise sweeps above measure one gap each
-    # against a separately timed Peter run; this one puts all three side by side,
-    # so "Peter's vs our direct" reads as the cost of the chunk_seq *substrate* and
-    # "our direct vs our primitives" as the cost of the *primitives*.  Every series
-    # is a disk sort (no in-memory baseline, hence no RAM cliff).
+    # (external_samplesort.h) — plus in-memory parlay::sort as a fourth series.
+    # The two pairwise sweeps above measure one gap each against a separately timed
+    # Peter run; this one puts everything side by side, so "Peter's vs our direct"
+    # reads as the cost of the chunk_seq *substrate*, "our direct vs our
+    # primitives" as the cost of the *primitives*, and the DRAM line as what all of
+    # them are chasing.  The in-mem series stops at the RAM cliff (~24n, gated by
+    # EXAMPLE_INMEM_BUDGET_BYTES); the three disk series continue past it, which is
+    # the point of the project.
     #
     # Each sort runs ONCE per point (one input build + one sort each — no repeats:
     # these are consumer SSDs and every extra round is real write endurance).  What
@@ -221,17 +224,17 @@ EXAMPLES = [
     # mind, or sweep this example from 512MiB.
     {"name": "samplesort_three_way",
      "target": "bin/samplesort_three_wayExample",
-     "cols": ["n", "peter_sort_s", "direct_sort_s", "prim_sort_s", "peter_build_s",
-              "direct_build_s", "prim_build_s", "peter_gb_s", "direct_gb_s",
-              "prim_gb_s"],
-     "time_col": "direct_sort_s", "inmem_col": "peter_sort_s",
-     "series_labels": ("Peter's sort (out-of-core)",
+     "cols": ["n", "peter_sort_s", "direct_sort_s", "prim_sort_s", "inmem_sort_s",
+              "peter_build_s", "direct_build_s", "prim_build_s", "peter_gb_s",
+              "direct_gb_s", "prim_gb_s"],
+     "time_col": "direct_sort_s", "inmem_col": "inmem_sort_s",
+     "series_labels": ("in-mem parlay::sort (DRAM)",
                        "ours, direct I/O (out-of-core)"),
-     "extra_series": [("prim_sort_s", "ours, primitives (out-of-core)", "^-")],
-     "no_ram_cliff": True,
+     "extra_series": [("peter_sort_s", "Peter's sort (out-of-core)", "d-"),
+                      ("prim_sort_s", "ours, primitives (out-of-core)", "^-")],
      "elem_bytes": 8, "input_seqs": 1,
      "xlabel": "input size",
-     "title": "sample sort, three out-of-core implementations (best of rotated rounds)",
+     "title": "sample sort: three out-of-core implementations vs in-mem parlaylib",
      "data_globs": ["dss_in*", "dss*", "ss_in*", "ss_id_*", "ss_bucket_*",
                     "ss_base_*", "ss_deg_*", "qs_base_*",
                     "pss_in*", "pss_out*", "spfx_*"]},

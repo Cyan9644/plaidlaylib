@@ -1,4 +1,5 @@
-// Benchmark: the three out-of-core sample sorts, head-to-head on one key set.
+// Benchmark: the three out-of-core sample sorts, head-to-head on one key set,
+// against in-memory parlay::sort as the yardstick.
 //
 //   1. Peter's        peter_samplesort/ (SampleSort<T> on his FileInfo model,
 //                     reached through peter_shim) — the reference implementation.
@@ -9,6 +10,12 @@
 //                     same algorithm again, but built out of the library's
 //                     primitives (delayed map -> chunk_count_sort ->
 //                     sort_buckets_inplace -> flatten).
+//   4. in-memory      parlay::sort on the same keys in DRAM — the yardstick the
+//                     other three are chasing, and the thing they exist to beat
+//                     once the input no longer fits.  It stops at the RAM cliff
+//                     (~24n; see the budget below), so its line ends partway
+//                     across the sweep while the out-of-core ones keep going —
+//                     which is the headline result of the whole project.
 //
 // The pair of gaps is the point of the benchmark.  (1) vs (2) isolates *the
 // substrate*: same algorithm, same I/O layer, different data model, so the gap is
@@ -53,15 +60,19 @@
 //     BENCH_SETTLE_MS  how long the drives must sit idle after a sync, both after
 //                      an input build and after a sort's files are removed
 //                      (default 2000; see examples/external/bench_drives.h)
+//     EXAMPLE_INMEM_BUDGET_BYTES
+//                      RAM budget for the in-memory sort + cross-check (~24n;
+//                      default: physical RAM)
 //     SS3_FIRST        which sort goes first, 0..2 (default 0): a knob for
 //                      *checking* that the teardown works — rotate it and the
 //                      three times should not move.  It does not change what is
 //                      measured.
 //
 // CSV line:
-//   CSV,<n>,<peter_s>,<direct_s>,<prim_s>,<peter_build_s>,<direct_build_s>,
-//       <prim_build_s>,<peter_gb_s>,<direct_gb_s>,<prim_gb_s>
-//   throughput is input bytes (n*8) over the sort's own time.
+//   CSV,<n>,<peter_s>,<direct_s>,<prim_s>,<inmem_s>,<peter_build_s>,
+//       <direct_build_s>,<prim_build_s>,<peter_gb_s>,<direct_gb_s>,<prim_gb_s>
+//   throughput is input bytes (n*8) over the sort's own time.  <inmem_s> is left
+//   BLANK past the RAM budget, so the plotted DRAM line stops at the cliff.
 //
 // Why a shim: Peter's headers ship their own configs.h / utils/file_utils.h that
 // clash by include guard with the main repo's, so they cannot share a TU with the
@@ -161,13 +172,16 @@ int main(int argc, char* argv[]) {
     size_t first = 0;
     if (const char* e = getenv("SS3_FIRST")) first = std::stoull(e) % 3;
 
-    // RAM budget for the element-wise cross-check: the reference sort (~16n) plus
-    // one sorted output read back at a time (8n).  Past the budget the sorts still
-    // run and are timed; only the contents comparison is skipped.
+    // The in-memory baseline doubles as the cross-check reference, so one budget
+    // covers both: the DRAM key array (8n) + parlay::sort's temporary (8n) + one
+    // out-of-core output materialized at a time to compare against it (8n) — ~24n,
+    // the same gate the other examples use.  Past it, the three disk sorts still
+    // run and are timed; the in-mem series and the contents check are skipped (the
+    // CSV field is left blank, so the plotted DRAM line stops at the RAM cliff).
     const size_t phys = (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
     size_t budget = phys;
     if (const char* e = getenv("EXAMPLE_INMEM_BUDGET_BYTES")) budget = std::stoull(e);
-    const bool check_ok = n <= budget / 32;
+    const bool inmem_ok = n <= budget / 24;
 
     std::cout << std::fixed;
 
@@ -221,16 +235,31 @@ int main(int argc, char* argv[]) {
         return std::vector<uint64_t>(s.begin(), s.end());
     };
 
-    // The sorted reference, built once: every sort's output must equal it.
+    // ── the fourth contestant: the same sort, in DRAM ────────────────────────
+    // parlay::sort on the identical keys, held to the same n — the yardstick the
+    // out-of-core sorts are trying to approach.  It is not on the drives at all,
+    // so it needs no build, no teardown and no place in the rotation; only the
+    // sort itself is timed (the tabulate that generates the keys is not, exactly
+    // as the disk sorts exclude their input builds).
+    //
+    // The sorted result is also the cross-check reference: every out-of-core
+    // output must equal it element for element.  One sort, both jobs.
     parlay::sequence<uint64_t> ref;
-    if (check_ok) {
-        std::cout << "Building the in-memory reference sort..." << std::flush;
+    double inmem_sort_s = 0;
+    if (inmem_ok) {
+        std::cout << "  [DRAM] in-memory parlay::sort: generating keys..." << std::flush;
         ref = parlay::tabulate(n, key_at);
+        std::cout << " sorting..." << std::flush;
+        auto t0 = Clock::now();
         parlay::sort_inplace(ref);
-        std::cout << " done\n";
+        inmem_sort_s = elapsed(t0);
+        std::cout << " " << std::setprecision(3) << inmem_sort_s << "s   ("
+                  << std::setprecision(2) << to_gb(n * sizeof(uint64_t)) / inmem_sort_s
+                  << " GB/s)\n";
     } else {
-        std::cout << "cross-check: skipped (~32n footprint exceeds RAM budget "
-                  << std::setprecision(2) << to_gb(budget) << " GB)\n";
+        std::cout << "  [DRAM] in-memory parlay::sort: skipped (~24n exceeds the RAM "
+                     "budget " << std::setprecision(2) << to_gb(budget)
+                  << " GB) — cross-check skipped with it\n";
     }
 
     // Start from drives clear of every sort's files (including a stale run's), and
@@ -254,7 +283,7 @@ int main(int argc, char* argv[]) {
                   << std::setprecision(2) << to_gb(n * sizeof(uint64_t)) / s.sort_s
                   << " GB/s)\n";
 
-        if (check_ok) {
+        if (inmem_ok) {
             const std::vector<uint64_t> got = s.read_back();
             if (got.size() != ref.size()) {
                 std::cout << "      *** MISMATCH: produced " << got.size()
@@ -292,6 +321,14 @@ int main(int argc, char* argv[]) {
                   << std::setprecision(3) << std::setw(8) << s.sort_s << " s   "
                   << std::setprecision(2) << std::setw(6)
                   << to_gb(n * sizeof(uint64_t)) / s.sort_s << " GB/s\n";
+    if (inmem_ok)
+        std::cout << "  " << std::left << std::setw(36) << "in-memory parlay::sort (DRAM)"
+                  << std::right << std::setprecision(3) << std::setw(8) << inmem_sort_s
+                  << " s   " << std::setprecision(2) << std::setw(6)
+                  << to_gb(n * sizeof(uint64_t)) / inmem_sort_s << " GB/s\n";
+    else
+        std::cout << "  " << std::left << std::setw(36) << "in-memory parlay::sort (DRAM)"
+                  << std::right << std::setw(8) << "-" << "     (past the RAM budget)\n";
     // Both ratios are stated in the same sense — how many times faster our
     // direct-I/O sort is — so > 1 always means the chunk_seq/direct side wins.
     std::cout << std::setprecision(2)
@@ -299,15 +336,21 @@ int main(int argc, char* argv[]) {
               << (peter_s / direct_s) << "x\n"
               << "  cost of the primitives (ours-prims / ours-direct):  "
               << (prim_s / direct_s) << "x\n";
+    if (inmem_ok)
+        std::cout << std::setprecision(2)
+                  << "  cost of going out of core (ours-direct / DRAM):     "
+                  << (direct_s / inmem_sort_s) << "x\n";
 
     // Machine-readable line for benchmarks/run_benches.py.
     auto f9 = [](double v) { std::ostringstream o; o << std::setprecision(9) << v; return o.str(); };
     const double gb = to_gb(n * sizeof(uint64_t));
+    // inmem_sort_s is left BLANK past the RAM budget, so the plotted DRAM line
+    // stops at the cliff instead of dropping to zero (as in the other examples).
     std::cout << "CSV," << n << ',' << f9(peter_s) << ',' << f9(direct_s) << ','
-              << f9(prim_s) << ',' << f9(sorters[0].build_s) << ','
-              << f9(sorters[1].build_s) << ',' << f9(sorters[2].build_s) << ','
-              << f9(gb / peter_s) << ',' << f9(gb / direct_s) << ','
-              << f9(gb / prim_s) << '\n';
+              << f9(prim_s) << ',' << (inmem_ok ? f9(inmem_sort_s) : std::string()) << ','
+              << f9(sorters[0].build_s) << ',' << f9(sorters[1].build_s) << ','
+              << f9(sorters[2].build_s) << ',' << f9(gb / peter_s) << ','
+              << f9(gb / direct_s) << ',' << f9(gb / prim_s) << '\n';
 
     return agree ? 0 : 1;
 }
