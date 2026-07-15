@@ -9,6 +9,9 @@
 #include "ChunkSequence/ExternalPrimitives/materialize.h"
 #include "ChunkSequence/ExternalPrimitives/chunk_cut.h"
 
+
+#define vertex size_t
+#define weight long double
 //the compressed sparse row represents a graph with two arrays: N and F
 //N is the exclusive prefix sum of node degrees, while F is the actual list of adjacency nodes
 //we are assuming that the degree prefix sum can fit in-memory -- the edges are the memory bottleneck
@@ -20,8 +23,10 @@
 //
 struct chunk_csr{
     parlay::sequence<size_t> degree_scan; //this will be the degree scan
-    chunk_seq adjacent;
-    chunk_seq edge_weights;
+    // chunk_seq adjacent_weights;
+    // chunk_seq edge_weights;
+    chunk_seq edges; //this was originally two sequences but I think it's better to 
+
     // void set_scan_adj_matrix(T graph){//let's assume that we're accepting a graph adjacency matrix that implements some interface that gives us access to the degree of each node
     //     //any practical graph is probably stored in a file
     //     for(size_t i : grp)
