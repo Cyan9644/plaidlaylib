@@ -173,9 +173,11 @@ to `warnings.txt` in the results dir, next to the fstrim outcome note).
   it uses a rolling polynomial hash mod the Mersenne prime 2^31−1 (Horner
   orientation, so no modular inverse; hash hits are double-checked) rather than
   parlaylib's prefix-hash scans, which out-of-core would write an 8x hash array
-  to disk.  Baseline: upstream `rabin_karp.h`, which *does* materialize those
-  prefix-hash scans in DRAM (~9n-byte footprint) — that contrast is the point
-  of the comparison.  Emits the same CSV columns as kmp; the sweep plots
+  to disk.  Baseline: the **same rolling-hash algorithm** run in DRAM
+  (`in_mem_rabin_karp` in `rabin_karp.cpp` reuses the shared `detail::RkScanChunk`
+  scan over CHUNK_SIZE-char blocks in parallel), so this is a same-algorithm
+  DRAM-vs-out-of-core comparison with a ~n-byte footprint — not parlaylib's
+  ~9n prefix-hash variant.  Emits the same CSV columns as kmp; the sweep plots
   `search_s`.
 - `convex_hull.cpp` → `bin/convex_hullExample [n]`: out-of-core 2D **upper
   convex hull** via quickhull.  The point cloud is a `chunk_seq` of 32-byte

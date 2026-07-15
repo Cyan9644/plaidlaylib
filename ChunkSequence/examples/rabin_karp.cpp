@@ -13,16 +13,16 @@
 // examples sweep (make bench-examples) times the search across a sweep of n
 // with m held constant.
 //
-// When it fits in RAM the driver also times parlaylib's own in-memory
-// Rabin-Karp (deps/parlaylib-examples/rabin_karp.h) on the same text as a
-// DRAM baseline, and cross-checks the match count and the exact positions
-// (read back element-wise; exits non-zero on a mismatch).  Unlike the chunk
-// version's rolling hash, the upstream algorithm
-// materializes two length-n prefix-hash scans (~8 B per char on top of the
-// text), so its footprint is ~9n bytes.  Budget: half of physical RAM,
-// override via EXAMPLE_INMEM_BUDGET_BYTES; when skipped the CSV field is left
-// blank so the plotted in-mem line stops at the RAM cliff (as in
-// delayed_compare).
+// When it fits in RAM the driver also times an in-memory DRAM baseline on the
+// same text and cross-checks the match count and the exact positions (read back
+// element-wise; exits non-zero on a mismatch).  The baseline uses the *same*
+// rolling-hash algorithm as the chunk version (the shared detail::RkScanChunk
+// scan over CHUNK_SIZE-char blocks in parallel), so this is a same-algorithm
+// DRAM-vs-out-of-core comparison; its footprint is just the ~n-byte text (plus
+// small per-block match lists), not the ~9n of parlaylib's prefix-hash
+// variant.  Budget: half of physical RAM, override via
+// EXAMPLE_INMEM_BUDGET_BYTES; when skipped the CSV field is left blank so the
+// plotted in-mem line stops at the RAM cliff (as in delayed_compare).
 //
 //   usage: rabin_karpExample [global --flags] [n] [m]
 //     n   text length in chars (default 1e6)
@@ -34,6 +34,7 @@
 // Complexity: O(n) work (expected; hash hits are double-checked),
 // O(n / ELEMS_PER_CHUNK) span.
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -47,11 +48,6 @@
 #include "absl/log/check.h"
 
 #include "parlay/primitives.h"
-
-// Upstream parlaylib example (fetched by `make deps`): the in-memory baseline.
-// Its global `field` struct doesn't clash with the chunk version's port, which
-// lives in ChunkSequenceOps::detail.
-#include "parlaylib-examples/rabin_karp.h"
 
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
@@ -99,6 +95,44 @@ static bool contents_equal(const chunk_seq& cs, const Seq& expected) {
 // Deterministic 4-letter text: char i of the text, computable anywhere.
 static char text_at(size_t i) { return (char)('a' + parlay::hash64(i) % 4); }
 
+// In-memory Rabin-Karp baseline using the SAME rolling-hash algorithm as the
+// out-of-core ChunkRabinKarp: reuse the shared detail::RkScanChunk scan, mirror
+// the chunk layout by splitting the DRAM text into CHUNK_SIZE-char blocks, and
+// scan each block in parallel with an m-1 char lookahead into the next block
+// (just the following bytes of the same contiguous buffer).  RkScanChunk reports
+// matches starting in [0, len), so blocks partition the text and each start is
+// scanned exactly once; flatten concatenates the per-block lists in text order.
+static parlay::sequence<uint64_t>
+in_mem_rabin_karp(const parlay::sequence<char>& text,
+                  const parlay::sequence<char>& pattern) {
+    namespace d = ChunkSequenceOps::detail;
+    const long n = (long)text.size(), m = (long)pattern.size();
+    if (m == 0 || n < m) return {};
+
+    // x, x^(m-1), pattern hash: computed exactly as in ChunkRabinKarp.
+    const d::field x(500000000);
+    d::field x_m1(1);
+    for (long i = 0; i < m - 1; i++) x_m1 = x_m1 * x;
+    d::field ph(0);
+    for (long i = 0; i < m; i++)
+        ph = ph * x + d::field((unsigned int)(unsigned char)pattern[i]);
+
+    const long block = (long)(CHUNK_SIZE / sizeof(char));   // mirror one chunk
+    const long nb_blocks = (n + block - 1) / block;
+    auto per_block = parlay::tabulate(nb_blocks, [&](long b) {
+        const long start = b * block;
+        const long len   = std::min(block, n - start);
+        const long ov    = std::min<long>(m - 1, n - (start + len));
+        parlay::sequence<uint64_t> out;
+        d::RkScanChunk<char>(text.data() + start, len,
+                             text.data() + start + len, ov,
+                             pattern.data(), m, ph, x, x_m1,
+                             (uint64_t)start, out);
+        return out;
+    });
+    return parlay::flatten(per_block);
+}
+
 int main(int argc, char* argv[]) {
     ParseGlobalArguments(argc, argv);
     const size_t n = (argc > 1) ? std::stoull(argv[1]) : 1'000'000;
@@ -108,13 +142,13 @@ int main(int argc, char* argv[]) {
     std::string pattern(m, '\0');
     for (size_t i = 0; i < m; i++) pattern[i] = text_at(i);
 
-    // RAM budget for the in-memory parlaylib baseline (as in delayed_compare):
-    // resident set ≈ n-char text + two length-n prefix-hash scans (4 B fields)
-    // ≈ 9n bytes.
+    // RAM budget for the in-memory baseline (as in delayed_compare): the
+    // rolling-hash baseline's resident set is ≈ the n-char text itself (plus
+    // small per-block match lists).
     const size_t phys = (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
     size_t budget = phys / 2;
     if (const char* e = getenv("EXAMPLE_INMEM_BUDGET_BYTES")) budget = std::stoull(e);
-    const bool inmem_ok = n * 9 <= budget;
+    const bool inmem_ok = n <= budget;
 
     const std::string text_prefix = "rk_text";
     const std::string out_prefix  = "rk_out";
@@ -146,17 +180,18 @@ int main(int argc, char* argv[]) {
               << std::setprecision(4) << search_s << "s   "
               << std::setprecision(2) << gb_s << " GB/s (text read)\n";
 
-    // In-memory baseline: parlaylib's rabin_karp on the same text (built in
-    // DRAM outside the timed region), cross-checked by match count.
+    // In-memory baseline: the same rolling-hash algorithm as ChunkRabinKarp,
+    // run in DRAM over the same text (built outside the timed region) and
+    // cross-checked by match count and exact positions.
     bool agree = true;
     double inmem_search_s = 0;
     if (inmem_ok) {
         auto text_mem    = parlay::tabulate(n, text_at);   // parlay::sequence<char>
         auto pattern_mem = parlay::tabulate(m, text_at);
         t0 = Clock::now();
-        auto matches_mem = rabin_karp(text_mem, pattern_mem);
+        auto matches_mem = in_mem_rabin_karp(text_mem, pattern_mem);
         inmem_search_s = elapsed(t0);
-        std::cout << "in-mem parlaylib Rabin-Karp: " << matches_mem.size()
+        std::cout << "in-mem rolling-hash Rabin-Karp: " << matches_mem.size()
                   << " match(es)   " << std::setprecision(4) << inmem_search_s << "s\n";
         if (matches_mem.size() != count) {
             std::cout << "*** MISMATCH: in-mem count " << matches_mem.size()
@@ -168,13 +203,13 @@ int main(int argc, char* argv[]) {
             agree = false;
         }
     } else {
-        std::cout << "in-mem parlaylib Rabin-Karp: skipped (~9n footprint exceeds "
-                  << "RAM budget " << std::setprecision(2) << to_gb(budget) << " GB)\n";
+        std::cout << "in-mem rolling-hash Rabin-Karp: skipped (text exceeds RAM "
+                  << "budget " << std::setprecision(2) << to_gb(budget) << " GB)\n";
     }
 
     // Machine-readable line for benchmarks/run_benches.py (examples sweep).
     // Columns: n,m,build_s,search_s,inmem_search_s,count,throughput_gb_s
-    // (inmem_search_s blank when the footprint exceeds the RAM budget).
+    // (inmem_search_s blank when the text exceeds the RAM budget).
     auto f9 = [](double v) { std::ostringstream o; o << std::setprecision(9) << v; return o.str(); };
     std::cout << "CSV," << n << ',' << m << ',' << f9(build_s) << ','
               << f9(search_s) << ',' << (inmem_ok ? f9(inmem_search_s) : std::string())
