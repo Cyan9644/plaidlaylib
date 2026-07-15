@@ -41,7 +41,8 @@ TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/delayedTest $(BINDIR)/flatTabulateTest \
                  $(BINDIR)/flatMapTest $(BINDIR)/findIfTest \
                  $(BINDIR)/histogramTest $(BINDIR)/kmpTest $(BINDIR)/rabinKarpTest \
-                 $(BINDIR)/scalarTest $(BINDIR)/bigintAddTest
+                 $(BINDIR)/scalarTest $(BINDIR)/bigintAddTest $(BINDIR)/convexHullTest \
+                 $(BINDIR)/partitionTest
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
@@ -53,6 +54,7 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/direct_samplesort_vs_peterExample \
                     $(BINDIR)/samplesort_three_wayExample \
                     $(BINDIR)/external_random_shuffleExample
+                    $(BINDIR)/convex_hullExample
 
 # Peter's external sample sort (the second contestant in the
 # external_samplesort_vs_peter comparison) ships its own configs.h /
@@ -198,6 +200,14 @@ $(BINDIR)/scalarTest: ChunkSequence/tests/scalar_test.cpp $(UTIL_OBJS)
 $(BINDIR)/bigintAddTest: ChunkSequence/tests/bigint_add_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
+$(BINDIR)/partitionTest: ChunkSequence/tests/partition_test.cpp $(UTIL_OBJS)
+	$(LINK)
+
+# convexHullTest includes upstream quickhull.h (its in-DRAM differential
+# baseline), so it needs the order-only deps/parlaylib-examples prereq.
+$(BINDIR)/convexHullTest: ChunkSequence/tests/convex_hull_test.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(LINK)
+
 $(BINDIR)/tempMain: ChunkSequence/examples/temp_main.cpp $(UTIL_OBJS)
 	$(LINK)
 
@@ -306,17 +316,17 @@ bench-full:
 # (examples are heterogeneous and some are expensive).  `bench-examples` uses
 # small dev-box (tmpfs) defaults (128MiB .. 1GiB).
 bench-examples:
-	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add" --outdir results
+	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add,convex_hull" --outdir results
 
 # Mid-scale examples sweep: input sizes up to 256 GiB.
 bench-examples-mid:
-	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add" --outdir results \
+	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add,convex_hull" --outdir results \
 	    --example-sizes "1GiB 4GiB 16GiB 64GiB 256GiB"
 
 # Full-scale examples sweep tuned for the benchmark machine (500 GiB RAM, 30x 1TB
 # SSDs): input sizes up to 1 TiB.  Multi-TB of I/O — not for a tmpfs dev box.
 bench-examples-full:
-	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add" --outdir results \
+	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add,convex_hull" --outdir results \
 	    --example-sizes "1GiB 4GiB 16GiB 64GiB 256GiB 1TiB"
 
 # Single-run IO/CPU trace of one example (per-SSD read/write throughput + %util +

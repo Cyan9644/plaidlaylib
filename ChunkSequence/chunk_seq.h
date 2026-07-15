@@ -77,9 +77,21 @@ struct chunk_seq {
     // fits in memory.  Chunks are read in parallel: element counts are prefix-
     // summed to give each chunk a fixed output slice, so workers scatter into
     // disjoint ranges of the result with no synchronization.
+    //
+    // Two things are hoisted OUT of the per-chunk parallel loop, because doing
+    // them per chunk serializes everything and starves the drives (observed as a
+    // ~5 GB/s, ~5% util, ~1.5% CPU phase — every worker blocked in the kernel):
+    //   * one O_DIRECT-aligned scratch buffer PER WORKER, reused across its
+    //     chunks, instead of aligned_alloc/free per chunk.  A 4 MB alloc goes
+    //     through mmap/munmap, which take the process-wide mmap_sem *write* lock,
+    //     so per-chunk alloc/free fully serializes the workers.
+    //   * one shared read-only fd PER DISTINCT FILE, opened once up front (O_DIRECT
+    //     reads carry an explicit offset, so a single fd is safe to share), instead
+    //     of open()/close() per chunk.
     template<typename T = uint64_t>
     std::vector<T> to_vector() const {
         // Process chunks in logical index order regardless of vector ordering.
+        // TODO: This is not necessary because we have the indexing invariant but probably is fine anyways
         std::vector<const chunk*> ordered;
         ordered.reserve(chunks.size());
         for (const auto& c : chunks) ordered.push_back(&c);
@@ -95,20 +107,38 @@ struct chunk_seq {
         }
 
         std::vector<T> out(offset.back());
+        if (ordered.empty()) return out;
+
+        // Open each distinct file once, shared read-only across all workers.
+        std::map<std::string, int> fds;
+        for (const chunk* c : ordered)
+            if (c->used && fds.find(c->filename) == fds.end()) {
+                int fd = open(c->filename.c_str(), O_DIRECT | O_RDONLY);
+                SYSCALL(fd);
+                fds[c->filename] = fd;
+            }
+
+        // One reusable aligned buffer per worker (lazily allocated on first use).
+        const size_t W = std::max<size_t>(1, parlay::num_workers());
+        std::vector<T*> wbuf(W, nullptr);
+
         parlay::parallel_for(0, ordered.size(), [&](size_t i) {
             const chunk* c = ordered[i];
             if (c->used == 0) return;
-            int fd = open(c->filename.c_str(), O_DIRECT | O_RDONLY);
-            SYSCALL(fd);
+            const size_t w = parlay::worker_id();
+            if (wbuf[w] == nullptr) {
+                wbuf[w] = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
+                CHECK(wbuf[w] != nullptr) << "to_vector: buffer allocation failed";
+            }
             // O_DIRECT needs an aligned buffer and an aligned read length; the
             // trailing padding beyond c->used is read but not copied out.
-            void* buf = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
-            CHECK(buf != nullptr) << "to_vector: buffer allocation failed";
-            SYSCALL(pread(fd, buf, AlignUp(c->used), (off_t)c->begin_addr));
-            memcpy(out.data() + offset[i], buf, c->used);
-            free(buf);
-            close(fd);
+            SYSCALL(pread(fds.at(c->filename), wbuf[w], AlignUp(c->used),
+                          (off_t)c->begin_addr));
+            memcpy(out.data() + offset[i], wbuf[w], c->used);
         }, /*granularity=*/1);
+
+        for (T* b : wbuf) if (b) free(b);
+        for (auto& [name, fd] : fds) close(fd);
 
         return out;
     }

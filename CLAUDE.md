@@ -70,12 +70,14 @@ ChunkSequence/
   chunk_filter.h              ChunkFilter     (thin producer on DensePack)
   chunk_flat_tabulate.h       ChunkFlatTabulate (thin producer on DensePack)
   chunk_find_if.h             ChunkFindIf     (fold on RemoveWorker)
+  chunk_partition.h           ChunkPartition  (single-reader/writer k-way split; per-worker scatter)
   chunk_delayed.h             delayed (fused) recursive-node layer: delay/tabulate/map/scan/zip + reduce/force/filter
   tests/                      correctness tests (→ iotaTest … findIfTest)
   examples/                   demonstration programs (→ primesExample …); dual-purpose
     primes.cpp                out-of-core prime sieve on ChunkFlatTabulate
     chunk_kmp.h  kmp.cpp      out-of-core KMP search (ChunkKmp, a producer on DensePack)
     chunk_rabin_karp.h  rabin_karp.cpp  out-of-core Rabin-Karp search (same shape as KMP)
+    chunk_convex_hull.h  convex_hull.cpp  out-of-core upper convex hull (UpperHull, recursive quickhull on ChunkReduce+ChunkPartition)
 benchmarks/                   perf benchmarks + single-file Python runner/plotter
   delayed_compare.cpp         in-mem delayed vs chunk-eager vs chunk-delayed (sweep n)
   chunk_size_compare.cpp      eager vs delayed across CHUNK_SIZE (-DCHUNK_SIZE_BYTES)
@@ -175,6 +177,36 @@ to `warnings.txt` in the results dir, next to the fstrim outcome note).
   prefix-hash scans in DRAM (~9n-byte footprint) — that contrast is the point
   of the comparison.  Emits the same CSV columns as kmp; the sweep plots
   `search_s`.
+- `convex_hull.cpp` → `bin/convex_hullExample [n]`: out-of-core 2D **upper
+  convex hull** via quickhull.  The point cloud is a `chunk_seq` of 32-byte
+  `hpoint`s (two coords + original index + pad; 32 divides CHUNK_SIZE, so the
+  fat element stays O_DIRECT-aligned — the eager engine is generic in element
+  size, only the *delayed* layer caps at 8 B).  `UpperHull`
+  (`examples/chunk_convex_hull.h`, tested by `convexHullTest`) recurses like
+  parlaylib's `quickhull.h`, but each level's "farthest point from the dividing
+  line" is a `ChunkReduce` (argmax monoid, tie-break by original index to match
+  upstream's `maximum<pair>`), so the working set streams off the SSDs.  Each
+  level's split is a **single** `ChunkPartition` pass (`chunk_partition.h`) routing
+  each point to left/right/drop in one read — not two `ChunkFilter`s — and the base
+  case's farthest-point pick
+  ties by original index, so it is order-independent (works on the partition's
+  completion-ordered output).  A **DRAM base case** finishes any sub-region below
+  a byte budget (`CONVEX_HULL_DRAM_BUDGET_BYTES`, default `min(4 GiB, RAM/8)` — the
+  in-memory quickhull's working set peaks at a small multiple of the region size)
+  with an in-memory quickhull — the "shrink until it fits, then go in-memory"
+  pattern, so only the top levels touch disk.  The budget is kept **small** (a
+  few GiB, `min(4 GiB, RAM/8)`) on purpose: the streaming partition discards
+  interior points at device speed, whereas in-memory quickhull on a huge region
+  is slow (per-level sequence allocation over billions of points), so the
+  out-of-core levels should do the bulk discarding and hand the base case only a
+  small residual.  The in-mem baseline is additionally capped at n < 2^31
+  (upstream indexes with `int`).  Carries the points
+  themselves (not indices into a global array) to avoid random per-element
+  reads.  Baseline: upstream `upper_hull` (`quickhull.h`) in DRAM, cross-checked
+  for an identical hull (same vertex indices, same order).  Emits
+  `CSV,n,build_s,hull_s,inmem_hull_s,count,throughput_gb_s`; the sweep plots
+  `hull_s`.  Finds the upper hull only; the lower hull is symmetric and a full
+  hull is upper ++ lower with shared endpoints dropped.
 
 Examples are benchmarked by a **separate opt-in sweep**.  The sweep is
 parameterized by **input size in bytes** (not the binary's element count `n`), so
@@ -245,6 +277,7 @@ Primitive mapping:
 | `ChunkFindIf`       | `RemoveWorker` (per-worker min matching index; `n` if none) |
 | `ChunkFilter`       | `DensePack` (reader source + predicate compaction) |
 | `ChunkFlatTabulate` | `DensePack` (generator source, `f(start,end) -> sequence<R>`) |
+| `ChunkPartition`    | own single-reader + single-writer pass (`chunk_partition.h`); k-way split with a `PARTITION_DROP` sentinel |
 | `tabulate` / `iota` | own writer pipeline (`chunk_seq.h`) — no reader stage to unify |
 
 ### Dense packing  (`dense_pack.h`)
@@ -257,6 +290,22 @@ carry, prefix sums, parallel scatter, and writer.  A producer returns a movable
 `Batch` exposing `size()` and `run(b) -> DensePackRun<R>`; `run(b)` is read after
 the batch has settled, so survivor pointers stay valid even for producers whose
 storage uses a small-buffer optimization (e.g. `parlay::sequence`).
+
+### k-way split  (`chunk_partition.h`)
+
+`ChunkPartition` splits one `chunk_seq` into `k` output `chunk_seq`s in a **single
+streaming read pass** (`key_fn(elem) -> bucket` or `PARTITION_DROP`) — the k-way
+generalization of `ChunkFilter`, done with **one** long-lived reader and **one**
+writer instead of k filter passes.  Each bucket is dense-except-last and returned
+**separately** (do NOT concatenate — that buries a partial chunk mid-sequence and
+breaks the delayed `zip` grid + `size`); ordering within a bucket is completion
+order, not input order.  The scatter is **per-worker private** (each worker fills
+its own pool-recycled assembly buffer per bucket, `writer.Push` outside all locks),
+mirroring `ChunkReduce`'s fully-private folds so routing hits device read speed; a
+final sequential tail-merge consolidates the per-worker partials to keep each bucket
+dense-except-last.  A *shared*-per-bucket assembly (count_sort style) instead
+serializes on 1–2 bucket locks for a few-bucket split and craters to ~1/10th
+bandwidth (low CPU **and** low disk util together = lock convoy, not an I/O limit).
 
 ## Delayed (fused) sequences  (`chunk_delayed.h`)
 

@@ -36,41 +36,55 @@ public:
     // ptr to data buffer, number of T elements in the buffer, chunk index
     using BufferData = std::tuple<T*, size_t, size_t>;
 
-    // Fixed-size pool of CHUNK_SIZE buffers, reused across reads.
+    // Pool of CHUNK_SIZE buffers reused across reads.  The pool is a PROCESS-WIDE,
+    // per-element-type singleton (all Allocator instances of a given T share it),
+    // not per-reader: primitives like ChunkFilter/ChunkPartition and the deep
+    // quickhull recursion create many short-lived readers, and a per-reader pool
+    // would re-allocate (and fault in) 50*CHUNK_SIZE = 200 MB on every one of them.
+    // The shared pool grows to peak concurrent demand once and is then reused; its
+    // backing is intentionally never freed (process-lifetime, reclaimed at exit) so
+    // buffers still in flight in one reader are never pulled out from under it when
+    // another reader is destroyed.  Alloc/Free are the same lock-guarded free-list
+    // ops as before, just over the shared state.
     struct Allocator {
         static constexpr size_t BUFFER_SIZE = CHUNK_SIZE;
         static constexpr size_t INITIAL_COUNT = 50;
         static constexpr size_t ALLOC_BATCH = 50;
         static constexpr size_t ALLOC_THRESHOLD = 10;
 
-        std::vector<T*> free_list;
-        std::mutex free_list_lock;
-        std::mutex alloc_lock;
-        std::vector<T*> backing;  // one large allocation per batch
+        // Shared pool state (Meyers singletons: constructed on first use, correct
+        // init order, one instance per T across the whole process).
+        static std::vector<T*>& free_list() { static std::vector<T*> v; return v; }
+        static std::mutex& free_list_lock() { static std::mutex m; return m; }
+        static std::mutex& alloc_lock()     { static std::mutex m; return m; }
 
-        Allocator() { AllocateMore(INITIAL_COUNT); }
-
-        ~Allocator() {
-            for (T* p : backing) free(p);
+        Allocator() {
+            // Prime the pool once; the threshold guard makes later readers no-ops.
+            AllocateMore(INITIAL_COUNT);
         }
 
+        // No destructor: the shared backing outlives every reader and is reclaimed
+        // by the OS at process exit (see the class comment above).
+
         void AllocateMore(size_t n) {
-            std::lock_guard<std::mutex> lg(alloc_lock);
-            if (free_list.size() > ALLOC_THRESHOLD) return;
+            std::lock_guard<std::mutex> lg(alloc_lock());
+            {
+                std::lock_guard<std::mutex> fl(free_list_lock());
+                if (free_list().size() > ALLOC_THRESHOLD) return;
+            }
             T* base = (T*)std::aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, BUFFER_SIZE * n);
             CHECK(base != nullptr) << "ChunkSequenceReader: out of memory";
-            backing.push_back(base);
-            std::lock_guard<std::mutex> fl(free_list_lock);
+            std::lock_guard<std::mutex> fl(free_list_lock());
             for (size_t i = 0; i < n; i++)
-                free_list.push_back((T*)((intptr_t)base + i * BUFFER_SIZE));
+                free_list().push_back((T*)((intptr_t)base + i * BUFFER_SIZE));
         }
 
         T* Alloc() {
             while (true) {
-                std::unique_lock<std::mutex> l(free_list_lock);
-                if (!free_list.empty()) {
-                    T* p = free_list.back();
-                    free_list.pop_back();
+                std::unique_lock<std::mutex> l(free_list_lock());
+                if (!free_list().empty()) {
+                    T* p = free_list().back();
+                    free_list().pop_back();
                     return p;
                 }
                 l.unlock();
@@ -79,8 +93,8 @@ public:
         }
 
         void Free(T* p) {
-            std::lock_guard<std::mutex> l(free_list_lock);
-            free_list.push_back(p);
+            std::lock_guard<std::mutex> l(free_list_lock());
+            free_list().push_back(p);
         }
     };
 

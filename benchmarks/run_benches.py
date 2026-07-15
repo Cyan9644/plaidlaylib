@@ -131,6 +131,16 @@ EXAMPLES = [
      "xlabel": "input size (bytes)",
      "title": "Rabin-Karp search: out-of-core (ChunkRabinKarp) vs in-mem parlaylib",
      "data_globs": ["rk_*"]},
+    # convex_hullExample sweeps n (32-byte points); the plotted time is the hull
+    # pass only (point-cloud build excluded).  Its recursion leaves ch_scratch*
+    # split intermediates in addition to the ch_in input.
+    {"name": "convex_hull", "target": "bin/convex_hullExample",
+     "cols": ["n", "build_s", "hull_s", "inmem_hull_s", "count", "throughput_gb_s"],
+     "time_col": "hull_s", "inmem_col": "inmem_hull_s",
+     "elem_bytes": 32, "input_seqs": 1,
+     "xlabel": "input size",
+     "title": "Upper convex hull: out-of-core (quickhull) vs in-mem parlaylib",
+     "data_globs": ["ch_in*", "ch_scratch*"]},
     # kth_smallestExample sweeps n with k at the median (n/2); the plotted time
     # is the selection pass only (input build excluded).  Its recursion leaves
     # id_/flags_/next_ intermediates in addition to the kth_in input.
