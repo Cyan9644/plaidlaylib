@@ -1,4 +1,71 @@
 WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
-I0000 00:00:1783972777.397484 3683947 peter_samplesort.h:48] Found 67108864 elements in input files
-I0000 00:00:1783972781.299467 3683947 unordered_file_writer.h:99] FileWriter worker thread exited. 30 files created.
-I0000 00:00:1783972782.184321 3683947 unordered_file_writer.h:99] FileWriter worker thread exited. 30 files created.
+E0000 00:00:1784212609.150722 2300208 chunk_seq.h:302] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.150899 2300208 chunk_seq.h:306] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.150915 2300208 chunk_seq.h:307] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.151253 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151320 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151337 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151350 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151362 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151374 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151386 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151397 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151408 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151420 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151431 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151445 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151458 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151470 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151481 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151493 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151583 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151616 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151633 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151646 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151658 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151675 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151687 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151699 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151966 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151984 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.151997 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.152010 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.152021 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.152032 2300207 unordered_file_writer.h:192] System call returned -1 (Operation not permitted) with errno 13 (Permission denied).
+E0000 00:00:1784212609.168314 2300239 unordered_file_writer.h:231] System call returned -9 (Bad file descriptor) with errno 0 (Success).
+E0000 00:00:1784212609.175726 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.175816 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176018 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176258 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176291 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176298 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176303 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176308 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176313 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176318 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176322 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176327 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176332 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176337 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176342 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176348 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176355 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176360 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176366 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176372 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176391 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176397 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176402 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176408 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176413 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176417 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176423 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176428 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176434 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176439 2300207 unordered_file_writer.h:196] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+I0000 00:00:1784212609.176446 2300207 unordered_file_writer.h:99] FileWriter worker thread exited. 30 files created.
+E0000 00:00:1784212609.176502 2300207 chunk_cut.h:86] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176584 2300207 chunk_cut.h:96] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+E0000 00:00:1784212609.176641 2300207 chunk_cut.h:132] System call returned -1 (Operation not permitted) with errno 9 (Bad file descriptor).
+terminate called after throwing an instance of 'std::bad_alloc'
+  what():  std::bad_alloc

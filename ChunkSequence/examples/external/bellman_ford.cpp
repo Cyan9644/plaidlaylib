@@ -1,16 +1,25 @@
 // bellman_fordExample — out-of-core Bellman-Ford vs the in-memory parlaylib
-// reference, on the same symmetric RMAT graph.
+// reference, swept over sparse/balanced/dense RMAT graphs at the same n.
 //
 // external_bellman_ford (external_bellman_ford.h) is a port of the "pull"
 // variant of parlaylib's bellman_ford (examples/in_memory/graph/bellman_ford.h,
 // byte-identical to deps/parlaylib-examples/bellman_ford.h): each round,
 // relax every vertex's distance from its in-neighbors' chunk_csr row.  This
-// benchmark builds the graph, runs both algorithms from the same start vertex,
-// and cross-checks the resulting distances; it exits non-zero on a mismatch.
+// benchmark builds three graphs from the same vertex count n but different
+// average degree (sparse/balanced/dense), runs both algorithms from the same
+// start vertex on each, and cross-checks the resulting distances; it exits
+// non-zero if any case mismatches or fails to converge.
+//
+// "Dense" here means high average degree relative to n (m scales with n),
+// not a near-complete graph: RMAT concentrates degree into a few hub
+// vertices rather than spreading it evenly, so even the dense case stays a
+// skewed power-law graph, just a much denser one. That is consistent with
+// every other case using the same generator (rmat_symmetric_graph) and lets
+// the sweep isolate the effect of edge count alone.
 //
 // Graph construction is NOT out-of-core: there is no streaming graph-ingestion
 // path yet (a general one is planned separately), so this generates + weights
-// the RMAT graph entirely in DRAM (graph_utils' rmat_symmetric_graph +
+// each RMAT graph entirely in DRAM (graph_utils' rmat_symmetric_graph +
 // add_weights) and then does a one-off flatten into chunk_csr row order,
 // written out with ChunkSequenceOps::tabulate.  So only the relaxation phase
 // is "external"; the graph itself must fit DRAM to be built and to run the
@@ -26,14 +35,16 @@
 // baseline even on small graphs; this benchmark exists to measure exactly
 // that gap, not to hide it.  Scale n up cautiously via argv.
 //
-//   usage: bellman_fordExample [global --flags] [n] [avg_degree]
-//     n            requested vertex count, rounded up to a power of two by
-//                  the RMAT generator (default 200)
-//     avg_degree   passed as m = avg_degree * n to the RMAT generator,
-//                  matching parlaylib's own bellman_ford.cpp driver
-//                  (default 8)
+//   usage: bellman_fordExample [global --flags] [n] [balanced_avg_degree]
+//     n                    requested vertex count, rounded up to a power of
+//                          two by the RMAT generator (default 200); shared by
+//                          all three cases
+//     balanced_avg_degree  avg_degree for the "balanced" case only (default
+//                          8, matching parlaylib's own bellman_ford.cpp
+//                          driver); the "sparse" case always uses avg_degree
+//                          2, and "dense" always uses n/2
 //
-// CSV line: CSV,n,m,build_s,op_s,inmem_op_s,reachable,throughput_gb_s
+// One CSV line per case: CSV,case,n,m,build_s,op_s,inmem_op_s,reachable,throughput_gb_s
 //   throughput = edge bytes (m * sizeof(weighted_edge)) / op_s.
 
 #include <chrono>
@@ -89,16 +100,19 @@ static bool unreached(long double d) { return d > 1e15L; }
 
 using vertex_utils = graph_utils<size_t>;
 
-int main(int argc, char* argv[]) {
-    ParseGlobalArguments(argc, argv);
-    const size_t n_req = (argc > 1) ? std::stoull(argv[1]) : 200;
-    const size_t avg_degree = (argc > 2) ? std::stoull(argv[2]) : 8;
+// Builds one RMAT graph (n_req vertices, avg_degree * n_req edges before
+// rounding/symmetrizing), runs external_bellman_ford and the in-memory
+// baseline from the same start vertex, cross-checks them, prints a summary
+// and a CSV line, and cleans up the edge files it wrote. Returns true iff
+// both sides converged and agreed.
+static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) {
+    const std::string edge_prefix = "bf_edges_" + label;
 
-    const std::string edge_prefix = "bf_edges";
-
+    std::cout << "\n=== case: " << label << " (avg_degree " << avg_degree
+              << ") ===\n";
     std::cout << "Generating " << n_req << "-vertex RMAT graph (avg degree "
               << avg_degree << ")..." << std::flush;
-    trace_mark("build_start");
+    trace_mark(("build_start_" + label).c_str());
     auto t0 = Clock::now();
 
     // Symmetric (undirected) weighted graph in DRAM -- also its own transpose,
@@ -130,18 +144,18 @@ int main(int argc, char* argv[]) {
         m, edge_prefix, [&](size_t i) { return flat[i]; });
 
     const double build_s = elapsed(t0);
-    trace_mark("build_end");
+    trace_mark(("build_end_" + label).c_str());
     std::cout << " done (" << n << " vertices, " << m << " edges, "
               << std::fixed << std::setprecision(4) << build_s << "s)\n";
 
     const size_t start = 0;
 
     std::cout << "Running out-of-core Bellman-Ford..." << std::flush;
-    trace_mark("op_start");
+    trace_mark(("op_start_" + label).c_str());
     t0 = Clock::now();
     parlay::sequence<long double> d_ext = external_bellman_ford(graph, start);
     const double op_s = elapsed(t0);
-    trace_mark("op_end");
+    trace_mark(("op_end_" + label).c_str());
     std::cout << " done\n";
 
     // external_bellman_ford returns an empty sequence (rather than an
@@ -194,12 +208,37 @@ int main(int argc, char* argv[]) {
     }
 
     // Machine-readable line for benchmarks/run_benches.py.
-    // Columns: n,m,build_s,op_s,inmem_op_s,reachable,throughput_gb_s
+    // Columns: case,n,m,build_s,op_s,inmem_op_s,reachable,throughput_gb_s
     auto f9 = [](double v) { std::ostringstream o; o << std::setprecision(9) << v; return o.str(); };
-    std::cout << "CSV," << n << ',' << m << ',' << f9(build_s) << ','
-              << f9(op_s) << ',' << f9(inmem_op_s) << ',' << reachable << ','
-              << f9(gb_s) << '\n';
+    std::cout << "CSV," << label << ',' << n << ',' << m << ',' << f9(build_s)
+              << ',' << f9(op_s) << ',' << f9(inmem_op_s) << ',' << reachable
+              << ',' << f9(gb_s) << '\n';
 
     cleanup_prefix(edge_prefix);
-    return agree ? 0 : 1;
+    return agree;
+}
+
+int main(int argc, char* argv[]) {
+    ParseGlobalArguments(argc, argv);
+    const size_t n_req = (argc > 1) ? std::stoull(argv[1]) : 200;
+    const size_t balanced_avg_degree = (argc > 2) ? std::stoull(argv[2]) : 8;
+
+    // Sparse/balanced/dense span avg_degree from a bare-spanning-tree-ish 2,
+    // through the parlaylib driver's own default of 8, up to n/2 (m ~ n^2/2)
+    // -- "dense" is only a jump in edge count, not a different generator; see
+    // the file header for why RMAT stays skewed even at that end.
+    const size_t dense_avg_degree = std::max<size_t>(1, n_req / 2);
+
+    struct GraphCase { std::string label; size_t avg_degree; };
+    const GraphCase cases[] = {
+        {"sparse", 2},
+        {"balanced", balanced_avg_degree},
+        {"dense", dense_avg_degree},
+    };
+
+    bool all_agree = true;
+    for (const auto& c : cases)
+        all_agree &= run_case(c.label, n_req, c.avg_degree);
+
+    return all_agree ? 0 : 1;
 }
