@@ -54,7 +54,8 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/direct_samplesort_vs_peterExample \
                     $(BINDIR)/samplesort_three_wayExample \
                     $(BINDIR)/external_random_shuffleExample \
-                    $(BINDIR)/convex_hullExample
+                    $(BINDIR)/convex_hullExample \
+                    $(BINDIR)/bellman_fordExample
 
 # Peter's external sample sort (the second contestant in the
 # external_samplesort_vs_peter comparison) ships its own configs.h /
@@ -249,6 +250,17 @@ $(BINDIR)/fitmem_kth_smallestExample: ChunkSequence/examples/external/fitmem_kth
 
 $(BINDIR)/chunk_cutExample: ChunkSequence/examples/external/chunk_cut.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
+
+# bellman_ford: out-of-core external_bellman_ford vs the in-memory reference
+# (examples/in_memory/graph/), same examples/external/ location as its
+# siblings. Unlike them it needs an extra -I: bellman_ford.h's own
+# `#include "helper/ligra_light.h"` is unprefixed (copied verbatim from
+# deps/parlaylib-examples/bellman_ford.h, which resolves it via quoted-include
+# fallback to its own containing directory), so compiling the local copy
+# directly needs deps/parlaylib-examples on the search path explicitly.
+$(BINDIR)/bellman_fordExample: ChunkSequence/examples/external/bellman_ford.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(CXX) $(CXXFLAGS) -Ideps/parlaylib-examples $(INCLUDES) $^ -o $@ \
+	    $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
 # external_samplesort_vs_peter: our sample sort vs Peter's, head-to-head.  The
 # driver TU uses the main includes; Peter's sort is linked in via peter_shim.o,

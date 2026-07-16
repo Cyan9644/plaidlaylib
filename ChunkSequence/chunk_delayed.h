@@ -212,6 +212,92 @@ struct leaf_source {
     }
 };
 
+// Walks a re-windowed slice of a source: the first `lo_remaining` elements come
+// from `lo` (already offset into the source's physical chunk), then the rest
+// from `hi` (the start of the next physical chunk).  `hi` is never dereferenced
+// when a chunk's slice lands fully inside one physical chunk (lo_remaining never
+// hits 0 before the caller stops iterating).
+template<class T>
+struct cut_iter {
+    const T* lo;
+    size_t lo_remaining;
+    const T* hi;
+    T operator*() const { return lo_remaining ? *lo : *hi; }
+    cut_iter& operator++() {
+        if (lo_remaining) { ++lo; --lo_remaining; } else { ++hi; }
+        return *this;
+    }
+};
+
+// Leaf over an arbitrary [start_index, end_index) slice of a source chunk_seq
+// (from `cut`), re-indexed to its own CHUNK_SIZE/sizeof(T)-element grid (`epc`
+// below) starting at 0.  Because the slice's grid origin is offset from the
+// source's own physical chunk boundaries by `start_index % epc`, every output
+// logical chunk lands at the same offset into a physical chunk and so spans at
+// most two physical reads (the tail of one, the head of the next) -- never
+// more, since one output chunk holds <= epc elements and physical chunks
+// (besides the source's last) are exactly epc elements.
+template<class T>
+struct cut_source {
+    using value_type = T;
+    const chunk_seq* src;
+    size_t start_index;                           // offset into src, in elements
+    size_t len;                                    // slice length
+
+    // Elements a full physical CHUNK_SIZE chunk holds for this T -- NOT the
+    // global (uint64_t-sized) ELEMS_PER_CHUNK, which only matches physical
+    // layout when sizeof(T) == 8.  For any other element size (e.g. the
+    // 32-byte weighted_edge), using ELEMS_PER_CHUNK here picks the wrong
+    // physical chunk / offset once the cut range passes the true per-chunk
+    // element count and reads out of bounds.
+    static constexpr size_t epc = CHUNK_SIZE / sizeof(T);
+
+    size_t length()     const { return len; }
+    size_t num_chunks() const { return (len + epc - 1) / epc; }
+    size_t chunk_len(size_t i) const {
+        const size_t base = i * epc;
+        return base >= len ? 0 : std::min(epc, len - base);
+    }
+
+    // Physical layout of output chunk i: up to two (chunk-index, take-count)
+    // segments.  phys_hi == (size_t)-1 means the chunk fits in one physical read.
+    struct Seg { size_t phys_lo, offset_lo, take_lo, phys_hi, take_hi; };
+    Seg segments(size_t i) const {
+        Seg s{};
+        const size_t cl = chunk_len(i);
+        s.phys_hi = (size_t)-1;
+        if (cl == 0) return s;
+        const size_t g0 = start_index + i * epc;
+        s.phys_lo   = g0 / epc;
+        s.offset_lo = g0 % epc;
+        const size_t avail_lo = src->chunks[s.phys_lo].used / sizeof(T) - s.offset_lo;
+        s.take_lo = std::min(cl, avail_lo);
+        const size_t rem = cl - s.take_lo;
+        if (rem > 0) { s.phys_hi = s.phys_lo + 1; s.take_hi = rem; }
+        return s;
+    }
+
+    template<class Planner>
+    void plan(size_t i, Planner& p) const {
+        if (i >= num_chunks()) return;
+        Seg s = segments(i);
+        // Keyed by the physical chunk's own address (not `src`), since one
+        // output chunk can need two distinct physical reads from the same
+        // source -- src-level dedup (as leaf_source uses) would collapse them.
+        p.need(reinterpret_cast<const chunk_seq*>(&src->chunks[s.phys_lo]), src->chunks[s.phys_lo]);
+        if (s.phys_hi != (size_t)-1)
+            p.need(reinterpret_cast<const chunk_seq*>(&src->chunks[s.phys_hi]), src->chunks[s.phys_hi]);
+    }
+    template<class Resolver>
+    cut_iter<T> build(size_t i, Resolver& r) const {
+        if (i >= num_chunks()) return {nullptr, 0, nullptr};
+        Seg s = segments(i);
+        const T* lo = reinterpret_cast<const T*>(r.next()) + s.offset_lo;
+        const T* hi = (s.phys_hi != (size_t)-1) ? reinterpret_cast<const T*>(r.next()) : nullptr;
+        return {lo, s.take_lo, hi};
+    }
+};
+
 // Leaf that generates element i as f(i), with no source files (from `tabulate`).
 template<class F>
 struct leaf_index {
@@ -318,6 +404,26 @@ auto delay(const chunk_seq& seq) {
     const size_t len = nc == 0 ? 0
         : (nc - 1) * ELEMS_PER_CHUNK + seq.chunks[nc - 1].used / sizeof(T);
     return leaf_source<T>{&seq, len};
+}
+
+// A delayed [start_index, end_index) slice of an on-SSD chunk_seq, re-indexed
+// to start at 0.  Unlike `delay`, which is an identity view (chunk i of the
+// view IS chunk i of the source), this re-windows the source, so consuming it
+// (e.g. via `reduce`, `force`, or ExternalPrimitives' delayed-source
+// `materialize`) never writes the slice back to disk the way
+// sequential_cut_no_compression does.
+template<class T = uint64_t>
+auto cut(const chunk_seq& seq, size_t start_index, size_t end_index) {
+    CHECK(start_index <= end_index) << "cut: start_index " << start_index
+        << " > end_index " << end_index;
+    const size_t nc = seq.chunks.size();
+    // Physical chunks (besides the last) hold CHUNK_SIZE/sizeof(T) elements of
+    // T, not the global (uint64_t-sized) ELEMS_PER_CHUNK -- see cut_source::epc.
+    const size_t total = nc == 0 ? 0
+        : (nc - 1) * (CHUNK_SIZE / sizeof(T)) + seq.chunks[nc - 1].used / sizeof(T);
+    CHECK(end_index <= total) << "cut: end_index " << end_index
+        << " exceeds source length " << total;
+    return cut_source<T>{&seq, start_index, end_index - start_index};
 }
 
 // A delayed sequence whose element i is f(i), with no source files.

@@ -115,9 +115,13 @@ parlay::sequence<T> sequential_materialize(const chunk_seq& seq) {
 // one streaming read pass of its sources and lands the elements directly in the
 // result, so the only I/O is the sources' reads.
 //
-// The delayed grid puts logical chunk ci at element ci * ELEMS_PER_CHUNK, so each
-// chunk's worker scatters into its own slice of `out` with no offset table and no
-// synchronization (for_each_chunk's body must be chunk-disjoint -- it is).
+// Most nodes size logical chunk i at ELEMS_PER_CHUNK (uint64_t-based), but that
+// is a per-node convention, not a universal one -- e.g. cut_source<T> grids on
+// CHUNK_SIZE/sizeof(T) so a re-windowed slice of a non-8-byte element type (a
+// weighted_edge cut, say) still spans physical reads correctly.  So the offset
+// of chunk ci in `out` is computed from a prefix sum of chunk_len(), not
+// assumed to be ci * ELEMS_PER_CHUNK -- that assumption previously overflowed
+// `out` (and its neighbors) for any node whose grid disagreed with it.
 //
 // SFINAE'd on D::value_type (which chunk_seq does not have) so a chunk_seq still
 // selects the eager overload above.  Unlike force/filter there is no <=8B element
@@ -126,13 +130,39 @@ parlay::sequence<T> sequential_materialize(const chunk_seq& seq) {
 template<class D, class = typename D::value_type>
 parlay::sequence<typename D::value_type> materialize(const D& d) {
     using R = typename D::value_type;
-    parlay::sequence<R> out(d.length());
+    const size_t nc = d.num_chunks();
+    std::vector<size_t> offset(nc + 1, 0);
+    for (size_t i = 0; i < nc; i++) offset[i + 1] = offset[i] + d.chunk_len(i);
+
+    parlay::sequence<R> out(offset[nc]);
     delayed::for_each_chunk(d, [&](size_t ci, size_t n, auto it) {
-        R* dst = out.data() + ci * ELEMS_PER_CHUNK;
+        R* dst = out.data() + offset[ci];
         for (size_t k = 0; k < n; k++) { dst[k] = *it; ++it; }
     });
     return out;
 }
+
+namespace delayed {
+
+// Re-exposed under `delayed::` so callers that build a delayed chain (e.g.
+// `delayed::cut`) can materialize it without stepping back out to the
+// enclosing namespace.  Both overloads just forward to the definitions above:
+// the existing generic materialize(D) already SFINAEs on D::value_type, so it
+// accepts any fused delayed node (including cut_source) as-is; the chunk_seq
+// overload exists only because a plain chunk_seq has no ::value_type and so
+// can't reach that overload via qualified `delayed::materialize` lookup (which
+// skips ADL into the enclosing namespace).
+template<typename T>
+parlay::sequence<T> materialize(const chunk_seq& seq, size_t reader_threads = 10) {
+    return ChunkSequenceOps::materialize<T>(seq, reader_threads);
+}
+
+template<class D, class = typename D::value_type>
+parlay::sequence<typename D::value_type> materialize(const D& d) {
+    return ChunkSequenceOps::materialize(d);
+}
+
+} // namespace delayed
 
 } // namespace ChunkSequenceOps
 

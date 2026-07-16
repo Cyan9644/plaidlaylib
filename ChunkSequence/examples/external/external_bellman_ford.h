@@ -5,17 +5,7 @@
 #include <parlay/sequence.h>
 #include <parlay/io.h>
 
-#include "helper/ligra_light.h"
-
-
-#include <limits>
-#include <optional>
-
-#include <parlay/primitives.h>
-#include <parlay/sequence.h>
-#include <parlay/io.h>
-
-#include "helper/ligra_light.h"
+#include "ChunkSequence/ExternalGraph/external_compressed_sparse_row.h"
 
 
  //using weighted_vertices = parlay::sequence<std::pair<vertex,wtype>>;
@@ -34,49 +24,117 @@
 
 
 
-//let's take a look at how bellman-ford actually works
+// //let's take a look at how bellman-ford actually works
 
 
 
-//the basic process of bellman ford is to relax all edges number of vertices times
-//our check is actually based on the edges of the graph rather than the vertices
-//so we check for each edge whether d[other vertex] + d[other_vertex, target_vertex] < d[target_vertex]
-//potentially n-1 iterations since the graph could just be a line, so you'd need to relax to the end point
+// //the basic process of bellman ford is to relax all edges number of vertices times
+// //our check is actually based on the edges of the graph rather than the vertices
+// //so we check for each edge whether d[other vertex] + d[other_vertex, target_vertex] < d[target_vertex]
+// //potentially n-1 iterations since the graph could just be a line, so you'd need to relax to the end point
 
 
-//ok, so let's think about how we want to do this in csr.
-//first let's make a parlay implementation that works with csr
+// //ok, so let's think about how we want to do this in csr.
+// //first let's make a parlay implementation that works with csr
 
 
-//the class csr_graph doesn't actually exist, it's just to show how this might be implemneted in parlay
-parlay::sequence<weight> csr_bellman_ford_paired(csr_graph graph, vertex start){
+// //the class csr_graph doesn't actually exist, it's just to show how this might be implemneted in parlay
+// parlay::sequence<weight> csr_bellman_ford_paired(csr_graph graph, vertex start){
+
+// auto N = graph.degree_scan;
+// parlay::sequence<std::pair<size_t, weight>> F = graph.edges;
+
+// size_t n = graph.num_vertices;
+// size_t max_size = (size_t)-1;
+// parlay::sequence<long double> d(n, max_size);
+
+// d[start] = 0;
+// auto iterate = parlay::iota(n);
+// for(int i = 0; i < n; i++){
+
+
+// auto pass = parlay::map(iterate, [&](size_t v){ //iterate over the csr_graph by its vertex "adjacency list," which here is really just a size_t
+//   //since there's no physical adjacency list
+
+// //yeah this should probably be a pair in the external sequence proper if we need to cut like this
+
+// auto adjacent = parlay::cut(F, N[v], N[v+1]); //get the adjacency list for this vertex
+// // auto corresponding_edge_weights = parlay::cut(k, N[v], N[v+1]);
+// return parlay::reduce(parlay::delayed_tabulate(adjacent.size(), [&](size_t e){
+
+//   return d[adjacent[e].first] + adjacent[e].second;
+
+// }), parlay::minimum<long double>());
+
+// });
+
+// pass[start] = 0;
+
+
+// if(pass == d){
+//   return d;
+// }
+// d= std::move(pass);
+// }
+
+// return parlay::sequence<weight>();
+
+
+// }
+
+
+
+//ok, now that we have a semi-working parlay method, let's think about how we can actually port this to external memory, starting with this same outline:
+
+//1st optimization is to remove the iota call, since we don't want to instantiate it on disk.
+//so instead of chunk_map, we'll use chunk_tabulate
+
+//one thing that's also important is that we have a write-free algorithm -- because our (and most) csr is inherently read-only,
+//we should use a delayed cut to avoid instantiating the subsequences on disk
+
+parlay::sequence<weight> external_bellman_ford(chunk_csr& graph, vertex start){
 
 auto N = graph.degree_scan;
-parlay::sequence<std::pair<size_t, weight>> F = graph.edges;
+//you can't materialize the edge list, which is the whole point
+// parlay::sequence<std::pair<size_t, weight>> F =ChunkSequenceOps::materialize<std::pair<size_t, weight>>(graph.edges);
 
-size_t n = graph.num_vertices;
-size_t max_size = (size_t)-1;
+chunk_seq& F = graph.edges; //one point of note here is that chunk_sequence doesn't accept a particular type.
+//we actually want these edges to be pairs of size_t, weight to indicate their destination and weighting
+
+size_t n = graph.degree_scan.size() - 1;
+// size_t max_size = (size_t)-1;
+auto max_size = std::numeric_limits<long double>::max();
 parlay::sequence<long double> d(n, max_size);
 
 d[start] = 0;
-auto iterate = parlay::iota(n);
-for(int i = 0; i < n; i++){
+// auto iterate = parlay::iota(n);
+for(size_t i = 0; i < n; i++){
 
 
-auto pass = parlay::map(iterate, [&](size_t v){ //iterate over the csr_graph by its vertex "adjacency list," which here is really just a size_t
+auto pass = parlay::tabulate(n, [&](size_t v){ //iterate over the csr_graph by its vertex "adjacency list," which here is really just a size_t
   //since there's no physical adjacency list
 
 //yeah this should probably be a pair in the external sequence proper if we need to cut like this
 
-auto adjacent = parlay::cut(F, N[v], N[v+1]); //get the adjacency list for this vertex
+//ChunkSequenceOps::delayed::materialize should instantiate the delayed sequence
+//one key point is that we need to have a sequential materialize here since we're already calling it in tabulate
+//it might also help to use sequential versions of the other methods here
+
+//this is not actually a complete delay operation, it just prevents the cut from writing back intermediates
+auto adjacent = ChunkSequenceOps::delayed::materialize(ChunkSequenceOps::delayed::cut<weighted_edge>(F, N[v], N[v+1])); //get the adjacency list for this vertex //get the adjacency list for this vertex
 // auto corresponding_edge_weights = parlay::cut(k, N[v], N[v+1]);
 return parlay::reduce(parlay::delayed_tabulate(adjacent.size(), [&](size_t e){
 
-  return d[adjacent[e].first] + adjacent[e].second;
+  return d[adjacent[e].connecting_vertex] + adjacent[e].edge_weight;
 
 }), parlay::minimum<long double>());
 
 });
+
+//ChunkSequeneOps::tabulate returns a chunk_sequence disk that lives on disk, sadly
+//however, our assumption is that the EDGES cannot live in memory, not that the vertices cannot;
+//this means we
+//  actually need a version of tabulate that returns the result in-memory, which is why we use parlay tabulate instead of chunk_tabulate
 
 pass[start] = 0;
 
@@ -94,50 +152,65 @@ return parlay::sequence<weight>();
 
 
 
-//the class csr_graph doesn't actually exist, it's just to show how this might be implemneted in parlay
-parlay::sequence<weight> csr_bellman_ford_disjoint(csr_graph graph, vertex start){
-
-auto N = graph.degree_scan;
-auto F = graph.adjacent;
-auto k = graph.edge_weights;
-
-size_t n = graph.num_vertices;
-size_t max_size = (size_t)-1;
-parlay::sequence<long double> d(n, max_size);
-
-d[start] = 0;
-auto iterate = parlay::iota(n);
-for(int i = 0; i < n; i++){
 
 
-auto pass = parlay::map(iterate, [&](size_t v){ //iterate over the csr_graph by its vertex "adjacency list," which here is really just a size_t
-  //since there's no physical adjacency list
-
-//yeah this should probably be a pair in the external sequence proper if we need to cut like this
-
-auto adjacent = parlay::cut(F, N[v], N[v+1]); //get the adjacency list for this vertex
-auto corresponding_edge_weights = parlay::cut(k, N[v], N[v+1]);
-return parlay::reduce(parlay::delayed_tabulate(adjacent.size(), [&](size_t e){
-
-  return d[adjacent[e]] + corresponding_edge_weights[e];
-
-}), parlay::minimum<long double>());
-
-});
-
-pass[start] = 0;
 
 
-if(pass == d){
-  return d;
-}
-d= std::move(pass);
-}
-
-return parlay::sequence<weight>();
 
 
-}
+
+
+
+
+
+
+
+
+
+// //the class csr_graph doesn't actually exist, it's just to show how this might be implemneted in parlay
+// parlay::sequence<weight> csr_bellman_ford_disjoint(csr_graph graph, vertex start){
+
+// auto N = graph.degree_scan;
+// auto F = graph.adjacent;
+// auto k = graph.edge_weights;
+
+// size_t n = graph.num_vertices;
+// size_t max_size = (size_t)-1;
+// parlay::sequence<long double> d(n, max_size);
+
+// d[start] = 0;
+// auto iterate = parlay::iota(n);
+// for(int i = 0; i < n; i++){
+
+
+// auto pass = parlay::map(iterate, [&](size_t v){ //iterate over the csr_graph by its vertex "adjacency list," which here is really just a size_t
+//   //since there's no physical adjacency list
+
+// //yeah this should probably be a pair in the external sequence proper if we need to cut like this
+
+// auto adjacent = parlay::cut(F, N[v], N[v+1]); //get the adjacency list for this vertex
+// auto corresponding_edge_weights = parlay::cut(k, N[v], N[v+1]);
+// return parlay::reduce(parlay::delayed_tabulate(adjacent.size(), [&](size_t e){
+
+//   return d[adjacent[e]] + corresponding_edge_weights[e];
+
+// }), parlay::minimum<long double>());
+
+// });
+
+// pass[start] = 0;
+
+
+// if(pass == d){
+//   return d;
+// }
+// d= std::move(pass);
+// }
+
+// return parlay::sequence<weight>();
+
+
+// }
 
 
 

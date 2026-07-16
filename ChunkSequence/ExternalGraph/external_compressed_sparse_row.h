@@ -12,6 +12,12 @@
 
 #define vertex size_t
 #define weight long double
+
+struct weighted_edge {
+    vertex connecting_vertex;
+    weight edge_weight;
+};
+
 //the compressed sparse row represents a graph with two arrays: N and F
 //N is the exclusive prefix sum of node degrees, while F is the actual list of adjacency nodes
 //we are assuming that the degree prefix sum can fit in-memory -- the edges are the memory bottleneck
@@ -38,15 +44,12 @@ struct chunk_csr{
     }
 
 
-    //merge the two adjacencies and edge weights, degree_scan will need to be calculated again 
+    //merge the two adjacencies, degree_scan will need to be calculated again
     void merge(chunk_csr& other_chunk_csr){
         std::vector<chunk_seq> vec(2);
-        vec[0] = this->adjacent;
-        vec[1] = other_chunk_csr.adjacent;
-        this->adjacent = ChunkSequenceOps::flatten(vec);
-        vec[0] = this->edge_weights;
-        vec[1] = other_chunk_csr.edge_weights;
-        this->edge_weights = ChunkSequenceOps::flatten(vec);
+        vec[0] = this->edges;
+        vec[1] = other_chunk_csr.edges;
+        this->edges = ChunkSequenceOps::flatten(vec);
         size_t offset = this->degree_scan[this->degree_scan.size()-1];
         parlay::parallel_for(0, other_chunk_csr.degree_scan.size(), [&](long i){
 
@@ -59,24 +62,21 @@ struct chunk_csr{
     }
 
 
-    //this method should accept a vertex ID n and return a parlay sequence of the vertices connected to n
-    parlay::sequence<size_t> get_adjacent(size_t n){
+    //this method should accept a vertex ID n and return a parlay sequence of the (destination, weight) edges of n
+    parlay::sequence<weighted_edge> get_adjacent(size_t n){
 
-        size_t degrees = this->degree_scan[n+1] - this->degree_scan[n];
-        return ChunkSequenceOps::materialize<size_t>(ChunkSequenceOps::sequential_cut_no_compression<size_t>(this->adjacent, this->degree_scan[n], degrees));
+        return ChunkSequenceOps::materialize<weighted_edge>(ChunkSequenceOps::sequential_cut_no_compression<weighted_edge>(this->edges, this->degree_scan[n], this->degree_scan[n+1]));
     }
 
-    //method to return a delayed external sequence of adjacent 
+    //method to return a delayed external sequence of adjacent. yeah, right.
     chunk_seq delay_get_adjacent(size_t n){
-        size_t degrees = this->degree_scan[n+1] - this->degree_scan[n];
-        return ChunkSequenceOps::sequential_cut_no_compression<size_t>(this->adjacent, this->degree_scan[n], degrees);
+        return ChunkSequenceOps::sequential_cut_no_compression<weighted_edge>(this->edges, this->degree_scan[n], this->degree_scan[n+1]);
     }
 
     bool edge_exist(size_t n, size_t edge_id){
-        size_t degrees = this->degree_scan[n+1] - this->degree_scan[n];
-        parlay::sequence<size_t> inter = ChunkSequenceOps::materialize<size_t>(ChunkSequenceOps::sequential_cut_no_compression<size_t>(this->adjacent, this->degree_scan[n], degrees));
-        auto iterator = parlay::find_if(inter, [&](size_t id){
-            return id == edge_id;
+        parlay::sequence<weighted_edge> inter = ChunkSequenceOps::materialize<weighted_edge>(ChunkSequenceOps::sequential_cut_no_compression<weighted_edge>(this->edges, this->degree_scan[n], this->degree_scan[n+1]));
+        auto iterator = parlay::find_if(inter, [&](const weighted_edge& e){
+            return e.connecting_vertex == edge_id;
         });
         if(iterator != inter.end()){
             return true;
