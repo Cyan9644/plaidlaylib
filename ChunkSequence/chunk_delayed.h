@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <random>
 #include <string>
@@ -68,12 +69,14 @@
 // shared source (e.g. A,B in both zip(A,B) and a scan of zip(A,B)) are deduped,
 // so C=f(A,B) reuses A,B's buffers instead of re-reading them.
 //
-// Two drivers execute a tree.  for_each_chunk streams: one read pass whose
+// Three drivers execute a tree.  for_each_chunk streams: one read pass whose
 // dispatcher releases each chunk to a parlay worker the instant that chunk's own
 // reads land, so reads and compute overlap (used by reduce/scan/force).
 // for_each_window collects a FILTER_BATCH_SIZE window before computing, needed
-// by filter's sequential cross-chunk carry.  Everything is templated (no
-// std::function) so the fused chain inlines.
+// by filter's sequential cross-chunk carry.  sequential_for_each_chunk reads via
+// blocking pread on the calling thread instead of a ChunkSequenceReader, for
+// small ranges consumed from inside an already-parallel outer loop.  Everything
+// is templated (no std::function) so the fused chain inlines.
 //
 // LIFETIME: a leaf_source holds a pointer to its chunk_seq; every source in the
 // tree must outlive every terminal call.  force on a sequence whose value_type
@@ -458,13 +461,18 @@ auto zip(DA a, DB b, Pad pad) {
 
 // ── drivers ──────────────────────────────────────────────────────────────────
 //
-// Both drivers plan each logical chunk with a Planner (deduping shared reads),
-// issue the reads through the async ChunkSequenceReader, and — once a chunk's
-// buffers are resident — build its fused iterator with a Resolver.  They differ
-// only in *scheduling*: for_each_window collects a whole window before computing
-// (needed by filter's sequential carry); for_each_chunk streams — it releases a
-// chunk to a worker the instant that chunk's own reads land, so reads and
-// compute overlap continuously with no window barrier.
+// for_each_window and for_each_chunk both plan each logical chunk with a
+// Planner (deduping shared reads), issue the reads through the async
+// ChunkSequenceReader, and — once a chunk's buffers are resident — build its
+// fused iterator with a Resolver.  They differ only in *scheduling*:
+// for_each_window collects a whole window before computing (needed by
+// filter's sequential carry); for_each_chunk streams — it releases a chunk to
+// a worker the instant that chunk's own reads land, so reads and compute
+// overlap continuously with no window barrier.  sequential_for_each_chunk
+// (below, after for_each_chunk) plans and builds each chunk the same way but
+// reads via blocking pread on the calling thread instead of a
+// ChunkSequenceReader — no reader/thread/io_uring setup at all — for small
+// ranges consumed from inside an already-parallel outer loop.
 
 // Windowed: collect a FILTER_BATCH_SIZE window, then hand it to `wbody`, which
 // may build any chunk via build_chunk(local_b).  Buffers are freed after wbody
@@ -606,6 +614,54 @@ void for_each_chunk(const D& d, Body&& body, size_t reader_threads = 10) {
     }, 1);
 
     dispatcher.join();
+}
+
+// Sequential streaming: one blocking, O_DIRECT pread per physical chunk, on
+// the calling thread -- no ChunkSequenceReader, no io_uring rings, no
+// dispatcher thread.  For use when D covers only a handful of logical chunks
+// (e.g. one vertex's adjacency slice via delayed::cut) from *inside* an
+// already-parallel outer loop: the async drivers above pay reader_threads
+// io_uring rings + a dispatcher thread per call, a cost a few-hundred-byte
+// payload never amortizes when paid once per outer-loop iteration.  Modeled
+// on ExternalPrimitives/materialize.h's sequential_materialize(chunk_seq)
+// (same blocking-pread + local fd_cache style, no fd reuse across calls), but
+// generalized to any delayed node D via the existing generic Planner/Resolver
+// interface -- not specific to cut_source.  Unlike for_each_chunk there is no
+// upfront across-chunk planning; each logical chunk is planned, read, and
+// consumed one at a time, which is fine for the small-range case this is for.
+template<class D, class Body>
+void sequential_for_each_chunk(const D& d, Body&& body) {
+    const size_t nc = d.num_chunks();
+    if (nc == 0) return;
+
+    std::map<std::string, int> fd_cache;
+    for (size_t ci = 0; ci < nc; ci++) {
+        Planner pl;
+        d.plan(ci, pl);
+        const size_t nr = pl.unique_reads.size();
+
+        std::vector<char*> bufs(nr, nullptr);
+        for (size_t s = 0; s < nr; s++) {
+            const chunk& c = pl.unique_reads[s];
+            char* buf = (char*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
+            CHECK(buf != nullptr) << "sequential_for_each_chunk: allocation failed";
+            bufs[s] = buf;
+            if (c.used == 0) continue;
+            auto [it, inserted] = fd_cache.emplace(c.filename, -1);
+            if (inserted) {
+                it->second = open(c.filename.c_str(), O_RDONLY | O_DIRECT);
+                SYSCALL(it->second);
+            }
+            SYSCALL(pread(it->second, buf, AlignUp(c.used), (off_t)c.begin_addr));
+        }
+
+        Resolver r{&bufs, &pl.leaf_slots, 0};
+        auto it = d.build(ci, r);
+        body(ci, d.chunk_len(ci), it);        // buffers freed only AFTER body runs --
+        for (char* p : bufs) free(p);         // build()'s iterator may hold raw pointers in
+    }
+
+    for (auto& [name, fd] : fd_cache) close(fd);
 }
 
 // ── terminals ────────────────────────────────────────────────────────────────

@@ -121,7 +121,7 @@ auto pass = parlay::tabulate(n, [&](size_t v){ //iterate over the csr_graph by i
 //it might also help to use sequential versions of the other methods here
 
 //this is not actually a complete delay operation, it just prevents the cut from writing back intermediates
-auto adjacent = ChunkSequenceOps::delayed::materialize(ChunkSequenceOps::delayed::cut<weighted_edge>(F, N[v], N[v+1])); //get the adjacency list for this vertex //get the adjacency list for this vertex
+auto adjacent = ChunkSequenceOps::delayed::sequential_materialize(ChunkSequenceOps::delayed::cut<weighted_edge>(F, N[v], N[v+1])); //get the adjacency list for this vertex
 // auto corresponding_edge_weights = parlay::cut(k, N[v], N[v+1]);
 return parlay::reduce(parlay::delayed_tabulate(adjacent.size(), [&](size_t e){
 

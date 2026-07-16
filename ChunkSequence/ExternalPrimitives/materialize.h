@@ -142,6 +142,29 @@ parlay::sequence<typename D::value_type> materialize(const D& d) {
     return out;
 }
 
+// Sequential delayed-source materialize: same result as materialize(d), but
+// driven by delayed::sequential_for_each_chunk (blocking, calling-thread
+// O_DIRECT preads) instead of delayed::for_each_chunk (its own
+// ChunkSequenceReader + dispatcher thread).  Use this, not materialize(d),
+// from *inside* an already-parallel outer loop over many small delayed
+// ranges -- e.g. Bellman-Ford's per-vertex delayed::cut of its edge
+// chunk_seq -- for the same reason sequential_materialize(chunk_seq) above
+// exists.
+template<class D, class = typename D::value_type>
+parlay::sequence<typename D::value_type> sequential_materialize(const D& d) {
+    using R = typename D::value_type;
+    const size_t nc = d.num_chunks();
+    std::vector<size_t> offset(nc + 1, 0);
+    for (size_t i = 0; i < nc; i++) offset[i + 1] = offset[i] + d.chunk_len(i);
+
+    parlay::sequence<R> out(offset[nc]);
+    delayed::sequential_for_each_chunk(d, [&](size_t ci, size_t n, auto it) {
+        R* dst = out.data() + offset[ci];
+        for (size_t k = 0; k < n; k++) { dst[k] = *it; ++it; }
+    });
+    return out;
+}
+
 namespace delayed {
 
 // Re-exposed under `delayed::` so callers that build a delayed chain (e.g.
@@ -160,6 +183,11 @@ parlay::sequence<T> materialize(const chunk_seq& seq, size_t reader_threads = 10
 template<class D, class = typename D::value_type>
 parlay::sequence<typename D::value_type> materialize(const D& d) {
     return ChunkSequenceOps::materialize(d);
+}
+
+template<class D, class = typename D::value_type>
+parlay::sequence<typename D::value_type> sequential_materialize(const D& d) {
+    return ChunkSequenceOps::sequential_materialize(d);
 }
 
 } // namespace delayed
