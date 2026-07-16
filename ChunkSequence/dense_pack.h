@@ -131,12 +131,21 @@ chunk_seq DensePack(size_t num_virtual,
         const size_t new_carry_cnt = total % epct;
 
         // 3. Allocate output buffers: num_out full chunks + 1 overflow for carry.
+        //    We do NOT zero the whole buffer: every buffer's [0, total) is fully
+        //    covered by the carry memcpy + prefix-sum-tiled scatter below, and the
+        //    overflow buffer is only read back up to new_carry_cnt.  The only bytes
+        //    that can reach disk unwritten are the tail past the epct packed
+        //    elements on a full-chunk O_DIRECT write when sizeof(R) does not divide
+        //    CHUNK_SIZE, so zero just that (a no-op when packed_bytes == CHUNK_SIZE,
+        //    i.e. for every current element type).
+        const size_t packed_bytes = epct * sizeof(R);
         const size_t num_alloc = num_out + (new_carry_cnt > 0 ? 1 : 0);
         std::vector<R*> obuf(num_alloc, nullptr);
         for (size_t k = 0; k < num_alloc; k++) {
             obuf[k] = (R*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
             CHECK(obuf[k] != nullptr) << "DensePack: buffer allocation failed";
-            memset(obuf[k], 0, CHUNK_SIZE);
+            if (packed_bytes < CHUNK_SIZE)
+                memset((char*)obuf[k] + packed_bytes, 0, CHUNK_SIZE - packed_bytes);
         }
         if (!carry.empty() && num_alloc > 0)
             memcpy(obuf[0], carry.data(), carry.size() * sizeof(R));
@@ -319,11 +328,15 @@ chunk_seq DensePackStream(const chunk_seq& seq,
     std::uniform_int_distribution<size_t> drive_dist(0, num_drives - 1);
 
     std::thread packer([&] {
+        // A full chunk is memcpy'd end-to-end before it is pushed, so we skip the
+        // per-chunk zeroing and only zero-pad the tail bytes that actually reach
+        // disk: the packed-elements tail on a full O_DIRECT write (a no-op when
+        // sizeof(R) divides CHUNK_SIZE) and the trailing partial chunk's remainder.
+        const size_t packed_bytes = epct * sizeof(R);
         R* cur = nullptr; size_t cur_n = 0;
         auto new_cur = [&] {
             cur = (R*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
             CHECK(cur != nullptr) << "DensePackStream: output buffer allocation failed";
-            memset(cur, 0, CHUNK_SIZE);                 // zero-pad the eventual tail
             cur_n = 0;
         };
         new_cur();
@@ -341,6 +354,8 @@ chunk_seq DensePackStream(const chunk_seq& seq,
                 memcpy(cur + cur_n, src, can * sizeof(R));
                 cur_n += can; src += can; rem -= can;
                 if (cur_n == epct) {                     // full output chunk
+                    if (packed_bytes < CHUNK_SIZE)
+                        memset((char*)cur + packed_bytes, 0, CHUNK_SIZE - packed_bytes);
                     const size_t d    = drive_dist(rng);
                     const size_t slot = next_slot[d]++;
                     writer.Push(std::shared_ptr<R>(cur, free), epct, d, slot * CHUNK_SIZE);
@@ -352,6 +367,7 @@ chunk_seq DensePackStream(const chunk_seq& seq,
             results[next] = parlay::sequence<R>();       // release run storage early
         }
         if (cur_n > 0) {                                 // final partial chunk
+            memset((char*)cur + cur_n * sizeof(R), 0, CHUNK_SIZE - cur_n * sizeof(R));
             const size_t d    = drive_dist(rng);
             const size_t slot = next_slot[d]++;
             writer.Push(std::shared_ptr<R>(cur, free), epct, d, slot * CHUNK_SIZE);

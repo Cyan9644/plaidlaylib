@@ -135,14 +135,22 @@ chunk_seq chunk_primes(size_t n, const std::string& result_prefix) {
 
     return ChunkSequenceOps::ChunkFlatTabulate<uint64_t>(n + 1, result_prefix,
         [&](size_t start, size_t end) {
-            std::vector<bool> flags(end - start, true);
+            // Byte flags, not std::vector<bool>: the bit-packed form pays a
+            // mask/shift on every strided mark and every survivor read, which
+            // shows up on the CPU-bound profile; a byte per candidate is ~512 KB
+            // per live chunk (fine) and turns those into plain stores/loads.
+            std::vector<uint8_t> flags(end - start, 1);
             for (long p : small) {
                 size_t first = std::max((size_t)(2 * p),
                                         (((start - 1) / p) + 1) * p);
                 for (size_t k = first; k < end; k += (size_t)p)
-                    flags[k - start] = false;
+                    flags[k - start] = 0;
             }
             parlay::sequence<uint64_t> out;
+            // Reserve by the prime-density estimate ~ (end-start)/ln(end) to cut
+            // reallocation churn in the serial survivor scan below.
+            const double lnb = std::log((double)std::max<size_t>(end, 3));
+            out.reserve((size_t)((double)(end - start) / lnb) + 16);
             size_t lo = (start < 2) ? 2 : start;
             for (size_t i = lo; i < end; i++)
                 if (flags[i - start]) out.push_back((uint64_t)i);

@@ -293,6 +293,22 @@ carry, prefix sums, parallel scatter, and writer.  A producer returns a movable
 the batch has settled, so survivor pointers stay valid even for producers whose
 storage uses a small-buffer optimization (e.g. `parlay::sequence`).
 
+**No full-buffer zeroing** (relies on `sizeof(R) | CHUNK_SIZE`): output buffers
+are *not* memset to zero before use.  Each batch fully overwrites every buffer's
+`[0, total)` — the carry prefix by memcpy, the rest by the prefix-sum-tiled
+scatter — so full chunks (pushed at a full `CHUNK_SIZE`) and the overflow buffer
+(read back only up to the carry count, then freed) never expose uninitialized
+memory.  The only bytes that could reach disk unwritten are the tail past the
+`epct = CHUNK_SIZE/sizeof(R)` packed elements on a full O_DIRECT write, so only
+that tail is zeroed — **and it is empty exactly when `sizeof(R)` divides
+`CHUNK_SIZE`** (the same divisibility that keeps chunks O_DIRECT-aligned; true for
+all current element types — 8 B, 32 B `hpoint`), making the zero-fill a no-op in
+the common case.  The trailing partial chunk always zero-pads its remainder since
+it too is written as a full `CHUNK_SIZE` block.  `DensePackStream` (the streaming
+sibling) follows the same rule.  If a future `R` does *not* divide `CHUNK_SIZE`,
+correctness is preserved by the per-buffer tail zero, but revisit this before
+relying on it.
+
 ### k-way split  (`chunk_partition.h`)
 
 `ChunkPartition` splits one `chunk_seq` into `k` output `chunk_seq`s in a **single
