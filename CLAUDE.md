@@ -67,6 +67,7 @@ ChunkSequence/
   chunk_map.h                 ChunkMap        (thin body on ExternalTransform)
   chunk_reduce.h              ChunkReduce     (fold on RemoveWorker)
   chunk_scan.h                ChunkScan       (pass1 RemoveWorker + pass2 ExternalTransform)
+  chunk_segmented_reduce.h    ChunkSegmentedReduce (RemoveWorker; generalizes ChunkScan's boundary-merge to arbitrary contiguous segment bounds)
   chunk_filter.h              ChunkFilter     (thin producer on DensePack)
   chunk_flat_tabulate.h       ChunkFlatTabulate (thin producer on DensePack)
   chunk_find_if.h             ChunkFindIf     (fold on RemoveWorker)
@@ -276,11 +277,20 @@ Primitive mapping:
 | `ChunkMap`          | `ExternalTransform` (FANOUT emits when `sizeof(R) > sizeof(T)`) |
 | `ChunkReduce`       | `RemoveWorker` + `parlay::reduce` |
 | `ChunkScan`         | pass 1 `RemoveWorker` → per-chunk sums; sequential block prefix; pass 2 `ExternalTransform` seeded per chunk. Returns `{seq, total}` |
+| `ChunkSegmentedReduce` | `RemoveWorker`, one pass; per-chunk segments classified fully-owned (direct write) vs boundary (chunk_idx-keyed, sequential O(n_chunks) merge) — same shape as `ChunkScan`'s pass-1 boundary handling, generalized from one running total to arbitrary contiguous segment bounds. Needed whenever the monoid isn't invertible (e.g. `min`), since `ChunkScan` prefix-differencing only recovers per-segment reduces for invertible monoids like sum. |
 | `ChunkFindIf`       | `RemoveWorker` (per-worker min matching index; `n` if none) |
 | `ChunkFilter`       | `DensePack` (reader source + predicate compaction) |
 | `ChunkFlatTabulate` | `DensePack` (generator source, `f(start,end) -> sequence<R>`) |
 | `ChunkPartition`    | own single-reader + single-writer pass (`chunk_partition.h`); k-way split with a `PARTITION_DROP` sentinel |
 | `tabulate` / `iota` | own writer pipeline (`chunk_seq.h`) — no reader stage to unify |
+
+`ChunkSequenceOps::ChunkSegmentedReduce` is also exposed per-vertex on CSR
+graphs (`ChunkSequence/ExternalGraph/external_compressed_sparse_row.h`) as
+`chunk_csr::segmented_reduce_over_edges<R>(elem_to_val, monoid)`, using
+`degree_scan` as the segment bounds — one streaming pass reducing every
+vertex's in-edge range at once (see `external_bellman_ford_fast` in
+`examples/external/external_bellman_ford.h`). ExternalGraph/ExternalPrimitives
+aren't otherwise documented here yet.
 
 ### Dense packing  (`dense_pack.h`)
 

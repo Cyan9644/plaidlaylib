@@ -14,6 +14,7 @@
 #include "ChunkSequence/ExternalPrimitives/flatten.h"
 #include "ChunkSequence/ExternalPrimitives/materialize.h"
 #include "ChunkSequence/ExternalPrimitives/chunk_cut.h"
+#include "ChunkSequence/chunk_segmented_reduce.h"
 #include "utils/file_utils.h"
 
 
@@ -106,7 +107,14 @@ struct chunk_csr{
     size_t degree_of(size_t node_id){
         return (this->degree_scan[node_id+1] - this->degree_scan[node_id]);
     }
-    
+
+    template<typename R, typename ElemFn, typename Monoid>
+    parlay::sequence<R> segmented_reduce_over_edges(ElemFn elem_to_val, Monoid monoid,
+                                                     size_t reader_threads = 10){
+        return ChunkSequenceOps::ChunkSegmentedReduce<weighted_edge, R>(
+            this->edges, this->degree_scan, elem_to_val, monoid, reader_threads);
+    }
+
     //temp method, maybe not the logic we want to use
     void from_file(const std::string& filename, const std::string& result_prefix = "csr_edges"){
 

@@ -93,6 +93,8 @@
 //one thing that's also important is that we have a write-free algorithm -- because our (and most) csr is inherently read-only,
 //we should use a delayed cut to avoid instantiating the subsequences on disk
 
+
+//this function accepts a transposed graph
 parlay::sequence<weight> external_bellman_ford(chunk_csr& graph, vertex start){
 
 auto N = graph.degree_scan;
@@ -109,13 +111,6 @@ parlay::sequence<long double> d(n, max_size);
 
 d[start] = 0;
 
-// One reusable read context per parlay worker, allocated ONCE for the whole
-// algorithm's lifetime (outside the rounds loop, not per round/vertex) so the
-// edge file's fd + CHUNK_SIZE buffers are opened/allocated once and reused
-// for every vertex of every round instead of once per delayed-cut call (see
-// SequentialReadContext in chunk_delayed.h for why that matters). Zero
-// synchronization needed: a parlay task runs uninterrupted on one worker,
-// the same per-worker-slot idiom chunk_partition.h / chunk_count_sort.h use.
 std::vector<ChunkSequenceOps::delayed::SequentialReadContext> ctxs(
     std::max<size_t>(1, parlay::num_workers()));
 
@@ -163,25 +158,11 @@ return parlay::sequence<weight>();
 
 }
 
-
-// **************************************************************
-// Fast variant: identical algorithm/convergence check as
-// external_bellman_ford above, but relaxes all vertices for a round with a
-// single streaming, io_uring-parallel pass over the edge chunk_seq
-// (ChunkSegmentedReduce) rather than one blocking pread per vertex.
-// external_bellman_ford (above) no longer pays reader-setup cost per vertex
-// either -- it shares a SequentialReadContext (fd cache + buffer pool) across
-// all vertices/rounds via one context per parlay worker -- but each vertex
-// there is still a single blocking pread on whichever worker picks it up, so
-// this variant's real advantage is genuine per-round I/O parallelism (queue
-// depth across reader_threads io_uring rings) rather than avoiding reader
-// setup. Which wins depends on the graph: many small blocking preads spread
-// across workers vs. one wide streaming pass with deep read pipelining.
-// **************************************************************
+//the performance gain in the fast_external_bellman_ford is that it doesn't issue individual preads per vertex
+//instead we just do a long pass over the full edge sequence and adds the cost (if lower than existing) to the running minimum for the "to"
+//part of the edge (the vertex it's going to)
+//this is considerably better in all cases but especially the dense case, where edges in a single chunk are likely to belong to one specific vertex
 parlay::sequence<weight> external_bellman_ford_fast(chunk_csr& graph, vertex start){
-
-auto N = graph.degree_scan;
-chunk_seq& F = graph.edges;
 
 size_t n = graph.degree_scan.size() - 1;
 auto max_size = std::numeric_limits<long double>::max();
@@ -196,8 +177,7 @@ struct MinDistMonoid {
 
 for(size_t i = 0; i < n; i++){
 
-auto pass = ChunkSequenceOps::ChunkSegmentedReduce<weighted_edge, long double>(
-    F, N,
+auto pass = graph.segmented_reduce_over_edges<long double>(
     [&](const weighted_edge& e) { return d[e.connecting_vertex] + e.edge_weight; },
     MinDistMonoid{});
 
