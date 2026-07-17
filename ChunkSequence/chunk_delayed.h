@@ -201,9 +201,17 @@ struct leaf_source {
     const chunk_seq* src;
     size_t len;                                   // total element count
 
+    // Elements a full physical CHUNK_SIZE chunk holds for this T -- see
+    // cut_source::epc; using the global (uint64_t-sized) ELEMS_PER_CHUNK here
+    // instead only matches physical layout when sizeof(T) == 8.
+    static constexpr size_t epc = CHUNK_SIZE / sizeof(T);
+
     size_t length()     const { return len; }
-    size_t num_chunks() const { return grid_num_chunks(len); }
-    size_t chunk_len(size_t i) const { return grid_chunk_len(len, i); }
+    size_t num_chunks() const { return (len + epc - 1) / epc; }
+    size_t chunk_len(size_t i) const {
+        const size_t base = i * epc;
+        return base >= len ? 0 : std::min(epc, len - base);
+    }
 
     template<class Planner>
     void plan(size_t i, Planner& p) const {
@@ -406,8 +414,9 @@ template<class D> size_t size(const D& d) { return d.length(); }
 template<class T = uint64_t>
 auto delay(const chunk_seq& seq) {
     const size_t nc = seq.chunks.size();
+    constexpr size_t epc = CHUNK_SIZE / sizeof(T);
     const size_t len = nc == 0 ? 0
-        : (nc - 1) * ELEMS_PER_CHUNK + seq.chunks[nc - 1].used / sizeof(T);
+        : (nc - 1) * epc + seq.chunks[nc - 1].used / sizeof(T);
     return leaf_source<T>{&seq, len};
 }
 
@@ -784,6 +793,83 @@ auto scan(const D& d, Monoid m) {
     const R total = run;
 
     return std::pair{scan_node<D, Monoid>{d, m, offsets}, total};
+}
+
+// segmented_reduce: `bounds` (size num_segments+1, exclusive prefix over D's own
+// element indices, bounds[0]==0, bounds.back()==d.length()) partitions D into
+// contiguous segments; returns one R per segment, monoid-reduced over every
+// element in that segment.  One streaming pass (for_each_chunk) regardless of
+// how many segments there are or how many chunks a segment spans: each chunk
+// classifies every segment it touches as fully owned (no other chunk can touch
+// it -> written directly) or boundary (touches the chunk's first or last
+// element -> stashed per chunk index for an O(n_chunks) sequential merge
+// afterward, chaining through segments spanning many consecutive chunks).
+// Same mechanism as ChunkSegmentedReduce, generalized from a raw chunk_seq<T>
+// to any composed delayed node (so a preceding map/zip/etc. fuses into this
+// one pass instead of paying a separate read).
+template<class D, class Monoid>
+parlay::sequence<typename D::value_type>
+segmented_reduce(const D& d, const parlay::sequence<size_t>& bounds, Monoid m,
+                  size_t reader_threads = 10) {
+    using R = typename D::value_type;
+    const size_t nc = d.num_chunks();
+    const size_t num_segments = bounds.size() - 1;
+
+    std::vector<size_t> chunk_start(nc + 1, 0);       // global element offset of chunk i
+    for (size_t i = 0; i < nc; i++) chunk_start[i + 1] = chunk_start[i] + d.chunk_len(i);
+
+    parlay::sequence<R> out(num_segments, m.identity);
+    std::vector<std::vector<std::pair<size_t, R>>> boundary(nc);
+
+    for_each_chunk(d, [&](size_t ci, size_t n, auto it) {
+        if (n == 0) return;
+        const size_t global_start = chunk_start[ci];
+        const size_t global_end = global_start + n;
+
+        const size_t v_lo = (size_t)(std::upper_bound(bounds.begin(), bounds.end(), global_start) - bounds.begin()) - 1;
+        const size_t v_hi = (size_t)(std::upper_bound(bounds.begin(), bounds.end(), global_end - 1) - bounds.begin()) - 1;
+
+        auto finalize = [&](size_t v, R val) {
+            const bool is_boundary =
+                (v == v_lo && bounds[v_lo] < global_start) ||
+                (v == v_hi && bounds[v_hi + 1] > global_end);
+            if (is_boundary) boundary[ci].push_back({v, val});
+            else out[v] = val;
+        };
+
+        size_t cur_v = v_lo;
+        R cur_val = m.identity;
+        for (size_t i = 0; i < n; i++) {
+            const size_t g = global_start + i;
+            while (g >= bounds[cur_v + 1]) {
+                finalize(cur_v, cur_val);
+                cur_v++;
+                cur_val = m.identity;
+            }
+            cur_val = m(cur_val, *it);
+            ++it;
+        }
+        finalize(cur_v, cur_val);
+    }, reader_threads);
+
+    bool have_open = false;
+    size_t open_v = 0;
+    R open_val = m.identity;
+    for (size_t c = 0; c < nc; c++) {
+        for (auto& [v, val] : boundary[c]) {
+            if (have_open && v == open_v) {
+                open_val = m(open_val, val);
+            } else {
+                if (have_open) out[open_v] = open_val;
+                open_v = v;
+                open_val = val;
+                have_open = true;
+            }
+        }
+    }
+    if (have_open) out[open_v] = open_val;
+
+    return out;
 }
 
 // force: materialize a delayed sequence to a real chunk_seq on SSD (one file per

@@ -13,25 +13,11 @@
 
 namespace ChunkSequenceOps {
 
-/**
- * Segmented reduce over a chunk_seq: `bounds` (size num_segments+1, exclusive
- * prefix, bounds[0]==0, bounds.back()==size<T>(seq)) partitions the sequence
- * into contiguous segments; returns one R per segment, monoid-reduced over
- * elem_to_val(element) across every element in that segment.
- *
- * One streaming read pass over `seq` (via RemoveWorker), regardless of how
- * many segments there are or how many chunks a single segment spans: each
- * worker classifies every segment touched by its chunk as either fully owned
- * (no other chunk can touch it -> write directly, no lock) or boundary
- * (touches this chunk's first or last element -> recorded per chunk_idx for a
- * final O(n_chunks) sequential merge, which chains through segments spanning
- * many consecutive whole chunks).
- *
- * @tparam T       Input element type.
- * @tparam R       Output/accumulator type.
- * @tparam ElemFn  T -> R.
- * @tparam Monoid  Type providing identity and operator()(R, R) -> R.
- */
+
+
+    //ChunkSegmentedReduce is somewhat hacky in that we would much prefer a more general streaming pass method 
+
+
 template<typename T, typename R, typename ElemFn, typename Monoid>
 parlay::sequence<R> ChunkSegmentedReduce(const chunk_seq& seq,
                                          const parlay::sequence<size_t>& bounds,

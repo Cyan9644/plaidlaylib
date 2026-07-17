@@ -6,7 +6,7 @@
 #include <parlay/io.h>
 
 #include "ChunkSequence/ExternalGraph/external_compressed_sparse_row.h"
-#include "ChunkSequence/chunk_segmented_reduce.h"
+#include "ChunkSequence/chunk_delayed.h"
 
 
  //using weighted_vertices = parlay::sequence<std::pair<vertex,wtype>>;
@@ -162,6 +162,20 @@ return parlay::sequence<weight>();
 //instead we just do a long pass over the full edge sequence and adds the cost (if lower than existing) to the running minimum for the "to"
 //part of the edge (the vertex it's going to)
 //this is considerably better in all cases but especially the dense case, where edges in a single chunk are likely to belong to one specific vertex
+
+//Quick point on how this actually works: looking up each edge to find where it fits in the degree scan is not efficient
+//so we locate the vertex the chunk's first and last element fall in
+//in a dense case these are probably equivalent, but supposing that they're different, we know that any vertex's edges between
+//those are ALL of that vertex's edges since the edge list is sorted by vertex ID -- this means that for that vertex,
+//all updates have been found and we can compute the distance directly.
+//for the vertices on either end of the chunk, we don't know whether we have all of their contributions yet
+//we CAN directly check whether we've moved into the territory of a specific vertex with the degree scan, though,
+//so if we do so for an end vertex we need to stash the partial edge data for those vertices
+//this boundary stash is sorted by index, so at the very end of the algorithm, we just need to combine them and then calculate the final distances for that pass based on the combined data
+//we may wonder whether this boundary stash can actually fit in memory, but it definitely should be able to:
+//there are at most 2 vertices that spill over per chunk, so the size of the total boundary array is at most ~2 * #chunks
+//which means that it's O(#chunks) which is smaller than the edge sequence size by a factor of elements per chunk, which is ~large
+//maybe like 32000 times
 parlay::sequence<weight> external_bellman_ford_fast(chunk_csr& graph, vertex start){
 
 size_t n = graph.degree_scan.size() - 1;
@@ -177,9 +191,10 @@ struct MinDistMonoid {
 
 for(size_t i = 0; i < n; i++){
 
-auto pass = graph.segmented_reduce_over_edges<long double>(
-    [&](const weighted_edge& e) { return d[e.connecting_vertex] + e.edge_weight; },
-    MinDistMonoid{});
+auto per_edge = ChunkSequenceOps::delayed::map(
+    ChunkSequenceOps::delayed::delay<weighted_edge>(graph.edges),
+    [&](weighted_edge e) { return d[e.connecting_vertex] + e.edge_weight; });
+auto pass = ChunkSequenceOps::delayed::segmented_reduce(per_edge, graph.degree_scan, MinDistMonoid{});
 
 pass[start] = 0;
 
