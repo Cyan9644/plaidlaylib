@@ -4,11 +4,15 @@
 // external_bellman_ford (external_bellman_ford.h) is a port of the "pull"
 // variant of parlaylib's bellman_ford (examples/in_memory/graph/bellman_ford.h,
 // byte-identical to deps/parlaylib-examples/bellman_ford.h): each round,
-// relax every vertex's distance from its in-neighbors' chunk_csr row.  This
-// benchmark builds three graphs from the same vertex count n but different
-// average degree (sparse/balanced/dense), runs both algorithms from the same
-// start vertex on each, and cross-checks the resulting distances; it exits
-// non-zero if any case mismatches or fails to converge.
+// relax every vertex's distance from its in-neighbors' chunk_csr row.
+// external_bellman_ford_fast (same header) is a drop-in alternative that does
+// the same thing with one streaming pass per round instead of a per-vertex
+// reader setup — see the header for why. This benchmark builds three graphs
+// from the same vertex count n but different average degree
+// (sparse/balanced/dense), runs both out-of-core variants and the in-memory
+// algorithm from the same start vertex on each, and cross-checks the
+// resulting distances; it exits non-zero if any case mismatches or fails to
+// converge.
 //
 // "Dense" here means high average degree relative to n (m scales with n),
 // not a near-complete graph: RMAT concentrates degree into a few hub
@@ -32,8 +36,10 @@
 // ChunkSequenceReader — 10 io_uring rings by default — on every call), so
 // its cost scales as O(rounds * n) reader setups, not O(rounds * m) bytes
 // read.  That is expected to make it dramatically slower than the in-memory
-// baseline even on small graphs; this benchmark exists to measure exactly
-// that gap, not to hide it.  Scale n up cautiously via argv.
+// baseline, and dramatically slower than external_bellman_ford_fast (which
+// does one reader setup per round), even on small graphs; this benchmark
+// exists to measure exactly that gap, not to hide it.  Scale n up
+// cautiously via argv for the slow variant.
 //
 //   usage: bellman_fordExample [global --flags] [n] [balanced_avg_degree]
 //     n                    requested vertex count, rounded up to a power of
@@ -44,8 +50,10 @@
 //                          driver); the "sparse" case always uses avg_degree
 //                          2, and "dense" always uses n/2
 //
-// One CSV line per case: CSV,case,n,m,build_s,op_s,inmem_op_s,reachable,throughput_gb_s
-//   throughput = edge bytes (m * sizeof(weighted_edge)) / op_s.
+// One CSV line per case:
+//   CSV,case,n,m,build_s,op_s,inmem_op_s,reachable,throughput_gb_s,fast_op_s,fast_reachable,fast_throughput_gb_s
+//   throughput = edge bytes (m * sizeof(weighted_edge)) / op_s (fast_* are
+//   the same fields for external_bellman_ford_fast).
 
 #include <chrono>
 #include <cstdint>
@@ -175,47 +183,86 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
         std::cout << "*** out-of-core Bellman-Ford did not converge within "
                   << n << " rounds ***\n";
 
+    // external_bellman_ford_fast: same algorithm, one streaming pass over the
+    // edges per round (ChunkSegmentedReduce) instead of a per-vertex reader
+    // setup -- see external_bellman_ford.h for why that's expected to be
+    // dramatically faster.
+    std::cout << "Running out-of-core Bellman-Ford (fast)..." << std::flush;
+    trace_mark(("fast_op_start_" + label).c_str());
+    t0 = Clock::now();
+    parlay::sequence<long double> d_fast = external_bellman_ford_fast(graph, start);
+    const double fast_op_s = elapsed(t0);
+    trace_mark(("fast_op_end_" + label).c_str());
+    std::cout << " done\n";
+
+    const bool fast_converged = d_fast.size() == n;
+    size_t fast_reachable = 0;
+    if (fast_converged)
+        fast_reachable = parlay::reduce(parlay::map(d_fast, [](long double dv) -> size_t {
+            return unreached(dv) ? 0 : 1;
+        }));
+
+    const double fast_gb_s = to_gb(m * sizeof(weighted_edge)) / fast_op_s;
+    std::cout << fast_reachable << "/" << n << " vertices reachable   "
+              << std::setprecision(4) << fast_op_s << "s   "
+              << std::setprecision(2) << fast_gb_s << " GB/s (edges read)\n";
+    if (!fast_converged)
+        std::cout << "*** out-of-core Bellman-Ford (fast) did not converge within "
+                  << n << " rounds ***\n";
+
     std::cout << "Running in-memory bellman_ford..." << std::flush;
     t0 = Clock::now();
     auto d_mem_opt = bellman_ford<long double>(start, WG);
     const double inmem_op_s = elapsed(t0);
     std::cout << " done (" << std::setprecision(4) << inmem_op_s << "s)\n";
 
-    bool agree = ext_converged && d_mem_opt.has_value();
-    if (agree) {
-        const auto& d_mem = *d_mem_opt;
-        if (d_mem.size() != d_ext.size()) {
-            std::cout << "*** MISMATCH: in-mem " << d_mem.size()
-                      << " distances != out-of-core " << d_ext.size() << " ***\n";
-            agree = false;
-        } else {
-            for (size_t i = 0; i < n; i++) {
-                bool ext_u = unreached(d_ext[i]), mem_u = unreached(d_mem[i]);
-                if (ext_u != mem_u || (!ext_u && d_mem[i] != d_ext[i])) {
-                    std::cout << "*** MISMATCH at vertex " << i << ": in-mem "
-                              << (double)d_mem[i] << " != out-of-core "
-                              << (double)d_ext[i] << " ***\n";
-                    agree = false;
-                    break;
+    // Cross-check one out-of-core result against the in-memory baseline
+    // (unreached-aware: the two sides use different "unreached" sentinels).
+    auto compare_to_mem = [&](const std::string& name,
+                              const parlay::sequence<long double>& d_out,
+                              bool out_converged) -> bool {
+        bool ok = out_converged && d_mem_opt.has_value();
+        if (ok) {
+            const auto& d_mem = *d_mem_opt;
+            if (d_mem.size() != d_out.size()) {
+                std::cout << "*** MISMATCH (" << name << "): in-mem " << d_mem.size()
+                          << " distances != out-of-core " << d_out.size() << " ***\n";
+                ok = false;
+            } else {
+                for (size_t i = 0; i < n; i++) {
+                    bool out_u = unreached(d_out[i]), mem_u = unreached(d_mem[i]);
+                    if (out_u != mem_u || (!out_u && d_mem[i] != d_out[i])) {
+                        std::cout << "*** MISMATCH (" << name << ") at vertex " << i
+                                  << ": in-mem " << (double)d_mem[i] << " != out-of-core "
+                                  << (double)d_out[i] << " ***\n";
+                        ok = false;
+                        break;
+                    }
                 }
             }
+        } else if (!d_mem_opt.has_value()) {
+            std::cout << "in-mem bellman_ford: did not converge within " << n
+                      << " rounds; skipped comparison\n";
+        } else {
+            std::cout << name << " result skipped comparison (no convergence)\n";
         }
-    } else if (!d_mem_opt.has_value()) {
-        std::cout << "in-mem bellman_ford: did not converge within " << n
-                  << " rounds; skipped comparison\n";
-    } else {
-        std::cout << "out-of-core result skipped comparison (no convergence)\n";
-    }
+        return ok;
+    };
+
+    const bool agree = compare_to_mem("out-of-core", d_ext, ext_converged);
+    const bool fast_agree = compare_to_mem("out-of-core (fast)", d_fast, fast_converged);
 
     // Machine-readable line for benchmarks/run_benches.py.
-    // Columns: case,n,m,build_s,op_s,inmem_op_s,reachable,throughput_gb_s
+    // Columns: case,n,m,build_s,op_s,inmem_op_s,reachable,throughput_gb_s,
+    //          fast_op_s,fast_reachable,fast_throughput_gb_s
     auto f9 = [](double v) { std::ostringstream o; o << std::setprecision(9) << v; return o.str(); };
     std::cout << "CSV," << label << ',' << n << ',' << m << ',' << f9(build_s)
               << ',' << f9(op_s) << ',' << f9(inmem_op_s) << ',' << reachable
-              << ',' << f9(gb_s) << '\n';
+              << ',' << f9(gb_s) << ',' << f9(fast_op_s) << ',' << fast_reachable
+              << ',' << f9(fast_gb_s) << '\n';
 
     cleanup_prefix(edge_prefix);
-    return agree;
+    return agree && fast_agree;
 }
 
 int main(int argc, char* argv[]) {

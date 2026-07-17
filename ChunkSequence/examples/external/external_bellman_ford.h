@@ -6,6 +6,7 @@
 #include <parlay/io.h>
 
 #include "ChunkSequence/ExternalGraph/external_compressed_sparse_row.h"
+#include "ChunkSequence/chunk_segmented_reduce.h"
 
 
  //using weighted_vertices = parlay::sequence<std::pair<vertex,wtype>>;
@@ -107,6 +108,17 @@ auto max_size = std::numeric_limits<long double>::max();
 parlay::sequence<long double> d(n, max_size);
 
 d[start] = 0;
+
+// One reusable read context per parlay worker, allocated ONCE for the whole
+// algorithm's lifetime (outside the rounds loop, not per round/vertex) so the
+// edge file's fd + CHUNK_SIZE buffers are opened/allocated once and reused
+// for every vertex of every round instead of once per delayed-cut call (see
+// SequentialReadContext in chunk_delayed.h for why that matters). Zero
+// synchronization needed: a parlay task runs uninterrupted on one worker,
+// the same per-worker-slot idiom chunk_partition.h / chunk_count_sort.h use.
+std::vector<ChunkSequenceOps::delayed::SequentialReadContext> ctxs(
+    std::max<size_t>(1, parlay::num_workers()));
+
 // auto iterate = parlay::iota(n);
 for(size_t i = 0; i < n; i++){
 
@@ -121,7 +133,8 @@ auto pass = parlay::tabulate(n, [&](size_t v){ //iterate over the csr_graph by i
 //it might also help to use sequential versions of the other methods here
 
 //this is not actually a complete delay operation, it just prevents the cut from writing back intermediates
-auto adjacent = ChunkSequenceOps::delayed::sequential_materialize(ChunkSequenceOps::delayed::cut<weighted_edge>(F, N[v], N[v+1])); //get the adjacency list for this vertex
+auto& ctx = ctxs[parlay::worker_id()];
+auto adjacent = ChunkSequenceOps::delayed::sequential_materialize(ChunkSequenceOps::delayed::cut<weighted_edge>(F, N[v], N[v+1]), ctx); //get the adjacency list for this vertex
 // auto corresponding_edge_weights = parlay::cut(k, N[v], N[v+1]);
 return parlay::reduce(parlay::delayed_tabulate(adjacent.size(), [&](size_t e){
 
@@ -147,6 +160,56 @@ d= std::move(pass);
 
 return parlay::sequence<weight>();
 
+
+}
+
+
+// **************************************************************
+// Fast variant: identical algorithm/convergence check as
+// external_bellman_ford above, but relaxes all vertices for a round with a
+// single streaming, io_uring-parallel pass over the edge chunk_seq
+// (ChunkSegmentedReduce) rather than one blocking pread per vertex.
+// external_bellman_ford (above) no longer pays reader-setup cost per vertex
+// either -- it shares a SequentialReadContext (fd cache + buffer pool) across
+// all vertices/rounds via one context per parlay worker -- but each vertex
+// there is still a single blocking pread on whichever worker picks it up, so
+// this variant's real advantage is genuine per-round I/O parallelism (queue
+// depth across reader_threads io_uring rings) rather than avoiding reader
+// setup. Which wins depends on the graph: many small blocking preads spread
+// across workers vs. one wide streaming pass with deep read pipelining.
+// **************************************************************
+parlay::sequence<weight> external_bellman_ford_fast(chunk_csr& graph, vertex start){
+
+auto N = graph.degree_scan;
+chunk_seq& F = graph.edges;
+
+size_t n = graph.degree_scan.size() - 1;
+auto max_size = std::numeric_limits<long double>::max();
+parlay::sequence<long double> d(n, max_size);
+
+d[start] = 0;
+
+struct MinDistMonoid {
+    long double identity = std::numeric_limits<long double>::max();
+    long double operator()(long double a, long double b) const { return std::min(a, b); }
+};
+
+for(size_t i = 0; i < n; i++){
+
+auto pass = ChunkSequenceOps::ChunkSegmentedReduce<weighted_edge, long double>(
+    F, N,
+    [&](const weighted_edge& e) { return d[e.connecting_vertex] + e.edge_weight; },
+    MinDistMonoid{});
+
+pass[start] = 0;
+
+if(pass == d){
+  return d;
+}
+d = std::move(pass);
+}
+
+return parlay::sequence<weight>();
 
 }
 

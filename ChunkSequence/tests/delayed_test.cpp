@@ -27,6 +27,7 @@
 #include "utils/file_utils.h"
 #include "ChunkSequence/chunk_seq.h"
 #include "ChunkSequence/chunk_delayed.h"
+#include "ChunkSequence/ExternalPrimitives/materialize.h"
 
 namespace cd = ChunkSequenceOps::delayed;
 
@@ -549,6 +550,64 @@ static void run_multibatch() {
     cleanup_prefix("iota"); cleanup_prefix("dl_mb");
 }
 
+// ── sequential_for_each_chunk / sequential_materialize with a reused
+// SequentialReadContext (shared fd cache + buffer pool across calls) ─────────
+// Covers the Bellman-Ford-motivated path: a delayed::cut slice straddling a
+// physical chunk boundary (segments() needing two physical reads), read
+// through the same SequentialReadContext multiple times and across two
+// different source chunk_seqs, proving the fd cache / buffer pool are safe to
+// reuse (results don't change or corrupt on the 2nd+ call).
+static void run_sequential_context() {
+    const size_t n = 2 * ELEMS_PER_CHUNK + 3;
+    std::cout << "  sequential context  n=" << n << "\n";
+
+    chunk_seq A = ChunkSequenceOps::iota(n);
+    chunk_seq B = ChunkSequenceOps::tabulate<uint64_t>(
+        n, "seqctxB", [](size_t i) { return (uint64_t)1000 + i; });
+
+    // Straddles the boundary between physical chunk 0 and chunk 1.
+    const size_t lo = ELEMS_PER_CHUNK - 5, hi = ELEMS_PER_CHUNK + 5;
+    std::vector<uint64_t> expected_a(hi - lo), expected_b(hi - lo);
+    for (size_t i = lo; i < hi; i++) {
+        expected_a[i - lo] = (uint64_t)i;
+        expected_b[i - lo] = 1000 + (uint64_t)i;
+    }
+
+    auto check = [](const std::string& name, const parlay::sequence<uint64_t>& got,
+                    const std::vector<uint64_t>& want) {
+        bool ok = got.size() == want.size() &&
+                  std::equal(got.begin(), got.end(), want.begin());
+        report(name, ok);
+    };
+
+    // No-context overload (now a thin wrapper) still behaves as before.
+    check("sequential_materialize (no ctx) boundary cut",
+          cd::sequential_materialize(cd::cut<uint64_t>(A, lo, hi)), expected_a);
+
+    // One context reused across several calls and across two distinct sources.
+    cd::SequentialReadContext ctx;
+    for (int rep = 0; rep < 2; rep++) {
+        check("sequential_materialize (shared ctx) A rep " + std::to_string(rep),
+              cd::sequential_materialize(cd::cut<uint64_t>(A, lo, hi), ctx), expected_a);
+        check("sequential_materialize (shared ctx) B rep " + std::to_string(rep),
+              cd::sequential_materialize(cd::cut<uint64_t>(B, lo, hi), ctx), expected_b);
+    }
+
+    // sequential_for_each_chunk(ctx) directly, not just via sequential_materialize.
+    {
+        std::vector<uint64_t> got;
+        cd::sequential_for_each_chunk(cd::cut<uint64_t>(A, lo, hi), ctx,
+            [&](size_t, size_t cnt, auto it) {
+                for (size_t k = 0; k < cnt; k++) { got.push_back(*it); ++it; }
+            });
+        report("sequential_for_each_chunk (shared ctx)",
+              got.size() == expected_a.size() &&
+              std::equal(got.begin(), got.end(), expected_a.begin()));
+    }
+
+    cleanup_prefix("iota"); cleanup_prefix("seqctxB");
+}
+
 // ── main ─────────────────────────────────────────────────────────────────────
 int main(int argc, char* argv[]) {
     ParseGlobalArguments(argc, argv);
@@ -567,6 +626,7 @@ int main(int argc, char* argv[]) {
     run_zip_multibatch();
     run_zip_compose();
     run_bigint_add();
+    run_sequential_context();
 
     std::cout << "\n" << g_pass << " passed, " << g_fail << " failed.  "
               << (g_fail == 0 ? "ALL PASS" : "SOME FAILED") << "\n";

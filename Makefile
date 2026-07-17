@@ -42,7 +42,7 @@ TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/flatMapTest $(BINDIR)/findIfTest \
                  $(BINDIR)/histogramTest $(BINDIR)/kmpTest $(BINDIR)/rabinKarpTest \
                  $(BINDIR)/scalarTest $(BINDIR)/bigintAddTest $(BINDIR)/convexHullTest \
-                 $(BINDIR)/partitionTest
+                 $(BINDIR)/partitionTest $(BINDIR)/segmentedReduceTest
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
@@ -202,6 +202,9 @@ $(BINDIR)/bigintAddTest: ChunkSequence/tests/bigint_add_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
 $(BINDIR)/partitionTest: ChunkSequence/tests/partition_test.cpp $(UTIL_OBJS)
+	$(LINK)
+
+$(BINDIR)/segmentedReduceTest: ChunkSequence/tests/segmented_reduce_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
 # convexHullTest includes upstream quickhull.h (its in-DRAM differential

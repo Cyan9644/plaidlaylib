@@ -616,6 +616,36 @@ void for_each_chunk(const D& d, Body&& body, size_t reader_threads = 10) {
     dispatcher.join();
 }
 
+// Reusable read state for sequential_for_each_chunk / sequential_materialize: a
+// caller-owned fd cache + a pool of persistent CHUNK_SIZE O_DIRECT buffers, so
+// opens and CHUNK_SIZE allocations happen once across MANY calls instead of
+// once per call.  Meant to be constructed once (e.g. one per parlay::worker_id()
+// slot, held for an algorithm's whole lifetime -- see chunk_partition.h's /
+// chunk_count_sort.h's per-worker-slot idiom, valid because a parlay task runs
+// uninterrupted on one worker) and threaded through every
+// sequential_for_each_chunk / sequential_materialize call that would otherwise
+// pay open()+aligned_alloc() per call (e.g. Bellman-Ford's per-vertex
+// delayed::cut, called O(rounds*n) times).
+//
+// The buffer pool grows on demand -- slot s covers "unique read slot s" across
+// calls -- and never shrinks; a cut_source needs at most 2 slots (one physical
+// chunk, or a chunk-boundary-straddling two), but nothing here hardcodes that,
+// so a wider-fanout node just grows the pool further.  Non-copyable (owns fds +
+// raw buffers).
+struct SequentialReadContext {
+    std::map<std::string, int> fd_cache;   // filename -> open fd, reused across calls
+    std::vector<char*>         buf_pool;   // persistent CHUNK_SIZE aligned buffers, grow-on-demand
+
+    SequentialReadContext() = default;
+    SequentialReadContext(const SequentialReadContext&) = delete;
+    SequentialReadContext& operator=(const SequentialReadContext&) = delete;
+
+    ~SequentialReadContext() {
+        for (char* p : buf_pool) free(p);
+        for (auto& [name, fd] : fd_cache) close(fd);
+    }
+};
+
 // Sequential streaming: one blocking, O_DIRECT pread per physical chunk, on
 // the calling thread -- no ChunkSequenceReader, no io_uring rings, no
 // dispatcher thread.  For use when D covers only a handful of logical chunks
@@ -623,31 +653,41 @@ void for_each_chunk(const D& d, Body&& body, size_t reader_threads = 10) {
 // already-parallel outer loop: the async drivers above pay reader_threads
 // io_uring rings + a dispatcher thread per call, a cost a few-hundred-byte
 // payload never amortizes when paid once per outer-loop iteration.  Modeled
-// on ExternalPrimitives/materialize.h's sequential_materialize(chunk_seq)
-// (same blocking-pread + local fd_cache style, no fd reuse across calls), but
+// on ExternalPrimitives/materialize.h's sequential_materialize(chunk_seq), but
 // generalized to any delayed node D via the existing generic Planner/Resolver
 // interface -- not specific to cut_source.  Unlike for_each_chunk there is no
 // upfront across-chunk planning; each logical chunk is planned, read, and
 // consumed one at a time, which is fine for the small-range case this is for.
+//
+// The SequentialReadContext overload reuses the caller-supplied fd cache and
+// buffer pool across calls instead of opening/allocating fresh state every
+// time -- fd/buffer lifetime is then caller-controlled (freed when ctx is
+// destroyed, not at the end of this call).  The no-context overload keeps the
+// original one-shot cost profile (its own private context, torn down here).
 template<class D, class Body>
-void sequential_for_each_chunk(const D& d, Body&& body) {
+void sequential_for_each_chunk(const D& d, SequentialReadContext& ctx, Body&& body) {
     const size_t nc = d.num_chunks();
     if (nc == 0) return;
 
-    std::map<std::string, int> fd_cache;
     for (size_t ci = 0; ci < nc; ci++) {
         Planner pl;
         d.plan(ci, pl);
         const size_t nr = pl.unique_reads.size();
 
-        std::vector<char*> bufs(nr, nullptr);
+        if (ctx.buf_pool.size() < nr) {                 // grow-on-demand, never shrink
+            const size_t old = ctx.buf_pool.size();
+            ctx.buf_pool.resize(nr, nullptr);
+            for (size_t s = old; s < nr; s++) {
+                ctx.buf_pool[s] = (char*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
+                CHECK(ctx.buf_pool[s] != nullptr) << "sequential_for_each_chunk: allocation failed";
+            }
+        }
+
         for (size_t s = 0; s < nr; s++) {
             const chunk& c = pl.unique_reads[s];
-            char* buf = (char*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
-            CHECK(buf != nullptr) << "sequential_for_each_chunk: allocation failed";
-            bufs[s] = buf;
+            char* buf = ctx.buf_pool[s];
             if (c.used == 0) continue;
-            auto [it, inserted] = fd_cache.emplace(c.filename, -1);
+            auto [it, inserted] = ctx.fd_cache.emplace(c.filename, -1);
             if (inserted) {
                 it->second = open(c.filename.c_str(), O_RDONLY | O_DIRECT);
                 SYSCALL(it->second);
@@ -655,13 +695,16 @@ void sequential_for_each_chunk(const D& d, Body&& body) {
             SYSCALL(pread(it->second, buf, AlignUp(c.used), (off_t)c.begin_addr));
         }
 
-        Resolver r{&bufs, &pl.leaf_slots, 0};
+        Resolver r{&ctx.buf_pool, &pl.leaf_slots, 0};
         auto it = d.build(ci, r);
-        body(ci, d.chunk_len(ci), it);        // buffers freed only AFTER body runs --
-        for (char* p : bufs) free(p);         // build()'s iterator may hold raw pointers in
-    }
+        body(ci, d.chunk_len(ci), it);   // buffers are ctx-owned: reused by the next
+    }                                     // chunk/call, not freed here.
+}
 
-    for (auto& [name, fd] : fd_cache) close(fd);
+template<class D, class Body>
+void sequential_for_each_chunk(const D& d, Body&& body) {
+    SequentialReadContext ctx;
+    sequential_for_each_chunk(d, ctx, std::forward<Body>(body));
 }
 
 // ── terminals ────────────────────────────────────────────────────────────────

@@ -152,13 +152,27 @@ parlay::sequence<typename D::value_type> materialize(const D& d) {
 // exists.
 template<class D, class = typename D::value_type>
 parlay::sequence<typename D::value_type> sequential_materialize(const D& d) {
+    delayed::SequentialReadContext ctx;
+    return sequential_materialize(d, ctx);
+}
+
+// Context overload: reuses a caller-supplied SequentialReadContext (fd cache +
+// buffer pool) across many calls instead of opening/allocating fresh state
+// every time.  For a caller like Bellman-Ford that does one small
+// delayed::cut materialize per vertex per round from inside an already
+// parallel outer loop, one context per parlay::worker_id() (see
+// external_bellman_ford.h) amortizes the opens/allocations across the whole
+// algorithm instead of paying them O(rounds*n) times.
+template<class D, class = typename D::value_type>
+parlay::sequence<typename D::value_type>
+sequential_materialize(const D& d, delayed::SequentialReadContext& ctx) {
     using R = typename D::value_type;
     const size_t nc = d.num_chunks();
     std::vector<size_t> offset(nc + 1, 0);
     for (size_t i = 0; i < nc; i++) offset[i + 1] = offset[i] + d.chunk_len(i);
 
     parlay::sequence<R> out(offset[nc]);
-    delayed::sequential_for_each_chunk(d, [&](size_t ci, size_t n, auto it) {
+    delayed::sequential_for_each_chunk(d, ctx, [&](size_t ci, size_t n, auto it) {
         R* dst = out.data() + offset[ci];
         for (size_t k = 0; k < n; k++) { dst[k] = *it; ++it; }
     });
@@ -188,6 +202,12 @@ parlay::sequence<typename D::value_type> materialize(const D& d) {
 template<class D, class = typename D::value_type>
 parlay::sequence<typename D::value_type> sequential_materialize(const D& d) {
     return ChunkSequenceOps::sequential_materialize(d);
+}
+
+template<class D, class = typename D::value_type>
+parlay::sequence<typename D::value_type>
+sequential_materialize(const D& d, SequentialReadContext& ctx) {
+    return ChunkSequenceOps::sequential_materialize(d, ctx);
 }
 
 } // namespace delayed
