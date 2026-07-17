@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <list>
 #include <map>
 #include <memory>
 #include <random>
@@ -11,6 +12,7 @@
 #include <thread>
 #include <tuple>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 #include <fcntl.h>
@@ -632,17 +634,53 @@ void for_each_chunk(const D& d, Body&& body, size_t reader_threads = 10) {
 // chunk, or a chunk-boundary-straddling two), but nothing here hardcodes that,
 // so a wider-fanout node just grows the pool further.  Non-copyable (owns fds +
 // raw buffers).
+//
+// fd_cache is bounded (LRU, MAX_CACHED_FDS entries) rather than growing forever:
+// an algorithm like Bellman-Ford holds one context per parlay worker for its
+// whole run and touches one fd per unique *physical chunk file* across
+// O(rounds*n) calls, so an unbounded per-worker cache can accumulate enough
+// open fds (across all workers) to blow past the process's RLIMIT_NOFILE --
+// observed as open() failing with EMFILE. Rounds revisit the same vertices, so
+// LRU still captures most of the reuse an unbounded cache would.
 struct SequentialReadContext {
-    std::map<std::string, int> fd_cache;   // filename -> open fd, reused across calls
-    std::vector<char*>         buf_pool;   // persistent CHUNK_SIZE aligned buffers, grow-on-demand
+    static constexpr size_t MAX_CACHED_FDS = 256;
+
+    std::list<std::string> lru;   // front = most recently used
+    std::unordered_map<std::string, std::pair<int, std::list<std::string>::iterator>> fd_cache;
+    std::vector<char*> buf_pool;  // persistent CHUNK_SIZE aligned buffers, grow-on-demand
 
     SequentialReadContext() = default;
     SequentialReadContext(const SequentialReadContext&) = delete;
     SequentialReadContext& operator=(const SequentialReadContext&) = delete;
 
+    // Returns an open fd for `filename`, opening (and evicting the LRU entry if
+    // the cache is full) on a miss. Unlike the old direct fd_cache.emplace, a
+    // failed open() is fatal rather than being silently cached as -1 and fed to
+    // a later pread -- that used to fail with EBADF on every subsequent access
+    // to the same filename, silently leaving the caller's buffer untouched.
+    int get_fd(const std::string& filename) {
+        auto it = fd_cache.find(filename);
+        if (it != fd_cache.end()) {
+            lru.splice(lru.begin(), lru, it->second.second);
+            return it->second.first;
+        }
+        if (fd_cache.size() >= MAX_CACHED_FDS) {
+            const std::string& victim = lru.back();
+            close(fd_cache.at(victim).first);
+            fd_cache.erase(victim);
+            lru.pop_back();
+        }
+        int fd = open(filename.c_str(), O_RDONLY | O_DIRECT);
+        CHECK(fd >= 0) << "SequentialReadContext: open failed for " << filename
+                        << ": " << std::strerror(errno);
+        lru.push_front(filename);
+        fd_cache.emplace(filename, std::make_pair(fd, lru.begin()));
+        return fd;
+    }
+
     ~SequentialReadContext() {
         for (char* p : buf_pool) free(p);
-        for (auto& [name, fd] : fd_cache) close(fd);
+        for (auto& [name, entry] : fd_cache) close(entry.first);
     }
 };
 
@@ -687,12 +725,8 @@ void sequential_for_each_chunk(const D& d, SequentialReadContext& ctx, Body&& bo
             const chunk& c = pl.unique_reads[s];
             char* buf = ctx.buf_pool[s];
             if (c.used == 0) continue;
-            auto [it, inserted] = ctx.fd_cache.emplace(c.filename, -1);
-            if (inserted) {
-                it->second = open(c.filename.c_str(), O_RDONLY | O_DIRECT);
-                SYSCALL(it->second);
-            }
-            SYSCALL(pread(it->second, buf, AlignUp(c.used), (off_t)c.begin_addr));
+            int fd = ctx.get_fd(c.filename);
+            SYSCALL(pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
         }
 
         Resolver r{&ctx.buf_pool, &pl.leaf_slots, 0};
