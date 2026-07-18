@@ -1,20 +1,39 @@
 #!/usr/bin/env python3
-"""Single-run IO/CPU profiler for the examples — time-series, not a sweep.
+"""IO/CPU profiler for the examples — one detailed time-series trace per size,
+plus (when swept) a combined summary CSV/PNG across sizes.
 
 Where run_benches.py sweeps `n` and records one aggregate number per point,
-this runs ONE example at ONE `n` and samples what the machine is actually doing
-over the course of the run: per-SSD read/write throughput + device utilization
-(from /proc/diskstats) and CPU (from /proc/stat), every `--interval` seconds.
-The example is launched with PLAID_TRACE=1 so it emits `TRACE,<phase>,<mono>`
-markers (see utils/trace_marker.h); those land on the same CLOCK_MONOTONIC
-timeline the sampler uses, so the build vs. timed-op phases are drawn as
-labelled bands on the plot.
+this runs an example at one or more `n` and samples what the machine is
+actually doing over the course of each run: per-SSD read/write throughput and
+device utilization (from /proc/diskstats) and CPU (from /proc/stat), every
+`--interval` seconds. The example is launched with PLAID_TRACE=1 so it emits
+`TRACE,<phase>,<mono>` markers (see utils/trace_marker.h); those land on the
+same CLOCK_MONOTONIC timeline the sampler uses, so build/op phases (and,
+for multi-algorithm drivers like samplesort_three_way, each algorithm's own
+phases — see MARKER_KINDS below) are drawn as labelled bands.
 
 It answers, for a given algorithm:
   * IO-bound vs CPU-bound — device %util pinned near 100 with CPU headroom is
     IO-bound; the inverse is CPU-bound.
   * read/write asymmetry — aggregate read MB/s vs write MB/s over time.
   * per-drive access pattern — a device x time heatmap of read+write MB/s.
+
+`--size` accepts space-separated tokens (like samplesort_phase_bench.py's
+`--n-values`) to sweep several sizes in one command. Each size still gets its
+own full time-series trace (trace.csv/trace.png, unchanged from a single-size
+run); on top of that, a sweep of >1 size also writes one combined summary CSV
+(io_sweep.csv: one row per size, with per-phase duration/util/CPU/throughput
+columns derived by pairing each `..._start_<label>`/`..._end_<label>` marker)
+plus io_sweep.png so trends across n can be read the same way as the other
+benchmark CSVs, without re-parsing every point's raw trace.
+
+For the single largest size in the run (always, sweep or not), if its markers
+carry 2+ distinct labels (e.g. samplesort_three_way's peter/direct/primitives),
+each label's own build_start..op_end window is additionally sliced out and
+plotted/saved standalone (trace_<label>.png/.csv, same 3-panel layout as the
+combined trace.png) — the per-algorithm breakdown, generated once rather than
+at every sweep point since it's mainly useful at the scale you actually care
+about.
 
 MEANINGFUL ONLY ON REAL BLOCK DEVICES.  On the tmpfs dev box the "SSDs" are
 RAM-backed and generate no /proc/diskstats traffic, so the disk panels come out
@@ -24,6 +43,9 @@ empty (the script warns and still records CPU).  Run it on the 30-SSD machine.
     python3 benchmarks/io_trace.py <example> [--size 1GiB] [--interval 0.1]
         [--mount-glob /mnt/ssd*] [--outdir results] [--ssd-args '...']
         [-- <extra args passed through to the example binary>]
+
+    python3 benchmarks/io_trace.py samplesort_three_way \\
+        --size "2^30 2^32 2^34 2^36 2^38"
 
 Reuses run_benches.py by import: the EXAMPLES registry, parse_bytes, size_to_n,
 make(), clear_bench_data(), REPO_ROOT/BINDIR.  Compilation stays in the Makefile.
@@ -216,6 +238,85 @@ def compute_series(samples, devices):
     return ser
 
 
+# ── marker pairing (per-algorithm phase windows, for the sweep summary) ─────
+# Recognized start/end prefixes, matching utils/trace_marker.h's callers
+# (bellman_ford.cpp, samplesort_three_way.cpp): "<kind>_start_<label>" /
+# "<kind>_end_<label>" for kind in {build, op, fast_op}. Longest-first so
+# "fast_op_start_" isn't mistaken for a plain "op_..." prefix.
+MARKER_KINDS = ["fast_op", "build", "op"]
+
+
+def split_marker(label):
+    """'op_start_primitives' -> ('op', 'start', 'primitives'); else None."""
+    for kind in sorted(MARKER_KINDS, key=len, reverse=True):
+        for edge in ("start", "end"):
+            prefix = f"{kind}_{edge}_"
+            if label.startswith(prefix):
+                return kind, edge, label[len(prefix):]
+    return None
+
+
+def pair_windows(markers):
+    """{label: {kind: (start_mono, end_mono)}} from a flat marker list.
+
+    Unmatched starts (no corresponding end — e.g. the binary crashed mid-phase)
+    are dropped rather than guessed at.
+    """
+    pending = {}
+    windows = {}
+    for marker_label, mono in markers:
+        parsed = split_marker(marker_label)
+        if parsed is None:
+            continue
+        kind, edge, label = parsed
+        key = (label, kind)
+        if edge == "start":
+            pending[key] = mono
+        elif key in pending:
+            windows.setdefault(label, {})[kind] = (pending.pop(key), mono)
+    return windows
+
+
+def window_series_stats(ser, t0, start_mono, end_mono):
+    """Average agg_read/agg_write/mean_util/cpu over samples inside a window."""
+    lo, hi = start_mono - t0, end_mono - t0
+    idxs = [i for i, t in enumerate(ser["t"]) if lo <= (t - t0) <= hi]
+    dur = max(0.0, end_mono - start_mono)
+    if not idxs:
+        return {"dur_s": dur, "avg_util_pct": 0.0, "avg_cpu_pct": 0.0,
+                "avg_read_mbps": 0.0, "avg_write_mbps": 0.0}
+    n = len(idxs)
+    return {
+        "dur_s": dur,
+        "avg_util_pct": sum(ser["mean_util"][i] for i in idxs) / n,
+        "avg_cpu_pct": sum(ser["cpu"][i] for i in idxs) / n,
+        "avg_read_mbps": sum(ser["agg_read"][i] for i in idxs) / n,
+        "avg_write_mbps": sum(ser["agg_write"][i] for i in idxs) / n,
+    }
+
+
+def slice_ser(ser, devices, lo_mono, hi_mono):
+    """Restrict a compute_series() result to samples within [lo_mono, hi_mono].
+
+    Same shape as compute_series' output, so it can be fed straight back into
+    write_trace_csv/plot_trace — used to carve one algorithm's own window out
+    of a multi-algorithm run (e.g. samplesort_three_way's three sorts) and
+    plot/save it exactly like a standalone single-algorithm trace.
+    """
+    idxs = [i for i, t in enumerate(ser["t"]) if lo_mono <= t <= hi_mono]
+    return {
+        "t": [ser["t"][i] for i in idxs],
+        "agg_read": [ser["agg_read"][i] for i in idxs],
+        "agg_write": [ser["agg_write"][i] for i in idxs],
+        "mean_util": [ser["mean_util"][i] for i in idxs],
+        "cpu": [ser["cpu"][i] for i in idxs],
+        "iowait": [ser["iowait"][i] for i in idxs],
+        "dev_read": {d: [ser["dev_read"][d][i] for i in idxs] for d in devices},
+        "dev_write": {d: [ser["dev_write"][d][i] for i in idxs] for d in devices},
+        "dev_util": {d: [ser["dev_util"][d][i] for i in idxs] for d in devices},
+    }
+
+
 # ── output ──────────────────────────────────────────────────────────────────
 def write_trace_csv(path, ser, devices, t0):
     header = ["time_s", "agg_read_mbps", "agg_write_mbps", "mean_util_pct",
@@ -315,6 +416,91 @@ def plot_trace(ser, markers, devices, t0, path, title):
     print(f"  wrote {path}", flush=True)
 
 
+def write_sweep_csv(path, rows):
+    """One row per size; columns are the union of every row's <label>_<kind>_*
+    window-stat keys (missing ones blank), so a size that didn't reach a later
+    phase still produces a well-formed row instead of breaking the header.
+    """
+    metric_cols = []
+    seen = set()
+    for row in rows:
+        for col in row:
+            if col in ("size", "size_bytes", "n") or col in seen:
+                continue
+            seen.add(col)
+            metric_cols.append(col)
+    def fmt(v):
+        return f"{v:.4f}" if isinstance(v, float) else ("" if v is None else str(v))
+
+    header = ["size", "size_bytes", "n"] + metric_cols
+    with open(path, "w") as f:
+        f.write(",".join(header) + "\n")
+        for row in rows:
+            f.write(",".join(fmt(row.get(c)) for c in header) + "\n")
+    print(f"  wrote {path}", flush=True)
+
+
+def plot_sweep(rows, path, title):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    ns = [row["n"] for row in rows]
+    # Discover which (label, kind) windows actually appear anywhere in the
+    # sweep, e.g. [("peter","op"), ("direct","op"), ("primitives","op"), ...].
+    combos = []
+    for row in rows:
+        for col in row:
+            if col.endswith("_dur_s"):
+                combo = col[: -len("_dur_s")]
+                if combo not in combos:
+                    combos.append(combo)
+    if not combos:
+        print("  (no paired start/end markers found; skipping sweep PNG)", flush=True)
+        return
+
+    def series(row_key):
+        # A size that never reached this phase (e.g. the binary crashed
+        # earlier) has no such key; plot a gap there rather than crashing.
+        return [row.get(row_key) if row.get(row_key) is not None else float("nan")
+                for row in rows]
+
+    fig, (ax_dur, ax_bn, ax_bw) = plt.subplots(3, 1, figsize=(11, 12), constrained_layout=True)
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    for i, combo in enumerate(combos):
+        c = colors[i % len(colors)]
+        durs = series(f"{combo}_dur_s")
+        ax_dur.plot(ns, durs, "o-", color=c, label=combo)
+        util = series(f"{combo}_avg_util_pct")
+        cpu = series(f"{combo}_avg_cpu_pct")
+        ax_bn.plot(ns, util, "o-", color=c, label=f"{combo} util%")
+        ax_bn.plot(ns, cpu, "o--", color=c, label=f"{combo} cpu%")
+        rd = series(f"{combo}_avg_read_mbps")
+        wr = series(f"{combo}_avg_write_mbps")
+        thr = [r + w for r, w in zip(rd, wr)]
+        ax_bw.plot(ns, thr, "o-", color=c, label=combo)
+
+    ax_dur.set_xscale("log"); ax_dur.set_ylabel("duration (s)")
+    ax_dur.set_title("Phase duration vs n"); ax_dur.grid(True, linestyle=":", linewidth=0.5)
+    ax_dur.legend(fontsize=8)
+
+    ax_bn.set_xscale("log"); ax_bn.set_ylabel("percent"); ax_bn.set_ylim(0, 105)
+    ax_bn.set_title("Mean drive %util (solid) vs CPU% (dashed) during each phase")
+    ax_bn.grid(True, linestyle=":", linewidth=0.5)
+    ax_bn.legend(fontsize=7, ncol=2)
+
+    ax_bw.set_xscale("log"); ax_bw.set_yscale("log")
+    ax_bw.set_ylabel("aggregate read+write MB/s"); ax_bw.set_xlabel("n (elements)")
+    ax_bw.set_title("Mean throughput during each phase")
+    ax_bw.grid(True, linestyle=":", linewidth=0.5)
+    ax_bw.legend(fontsize=8)
+
+    fig.suptitle(title)
+    fig.savefig(path, dpi=140)
+    plt.close(fig)
+    print(f"  wrote {path}", flush=True)
+
+
 # ── main ────────────────────────────────────────────────────────────────────
 def main():
     argv = sys.argv[1:]
@@ -328,8 +514,9 @@ def main():
     ap.add_argument("example", help="example name; choices: "
                     + ", ".join(e["name"] for e in rb.EXAMPLES))
     ap.add_argument("--size", default="512MiB",
-                    help="input size (e.g. 1GiB, 512MiB); converted per example to "
-                         "an element count (see run_benches.size_to_n)")
+                    help="one size, or a space-separated list to sweep (e.g. "
+                         "'2^30 2^32 2^34'); each converted per example to an "
+                         "element count (see run_benches.size_to_n)")
     ap.add_argument("--interval", type=float, default=0.1,
                     help="sampling interval in seconds (default 0.1)")
     ap.add_argument("--mount-glob", default="/mnt/ssd*",
@@ -346,8 +533,10 @@ def main():
     if entry is None:
         ap.error(f"unknown example {args.example!r}; choices: "
                  + ", ".join(e["name"] for e in rb.EXAMPLES))
-    size = rb.parse_bytes(args.size)
-    n = rb.size_to_n(entry, size)
+
+    size_tokens = args.size.split()
+    if not size_tokens:
+        ap.error("--size must not be empty")
 
     devices, mapping = resolve_devices(args.mount_glob)
     if devices:
@@ -360,35 +549,109 @@ def main():
 
     rb.make(entry["target"])
     binary = os.path.join(rb.BINDIR, os.path.basename(entry["target"]))
-
-    # ParseGlobalArguments consumes only *leading* --flags, then positionals
-    # shift down; so order must be [--flags] [n] [example-specific positionals].
     flags = args.ssd_args.split() if args.ssd_args else []
-    bin_args = flags + [n] + passthrough
 
-    samples, markers, _ = run_traced(binary, bin_args, devices, args.interval)
-    if len(samples) < 2:
-        sys.exit("too few samples (run too short for --interval); nothing to plot")
-
-    ser = compute_series(samples, devices)
-    t0 = samples[0][0]
-
+    # One stamp for the whole sweep, so every point's trace dir and the sweep
+    # summary land together under the same results/<stamp>/ directory.
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    outdir = os.path.join(rb.REPO_ROOT, args.outdir, stamp,
-                          f"trace_{entry['name']}_{args.size}")
-    os.makedirs(outdir, exist_ok=True)
-    print(f"Trace directory: {outdir}", flush=True)
+    sweep_dir = os.path.join(rb.REPO_ROOT, args.outdir, stamp)
+    sweep_rows = []
+    # Raw (ser, markers, t0, outdir, n, size_str) for the largest-n point seen
+    # so far; per-algorithm breakdown plots are generated for this one only
+    # after the loop — doing it at every point would be a lot of extra work
+    # for a big sweep, and the largest point is the one where per-algorithm
+    # IO/CPU behavior is most informative anyway.
+    largest = None
 
-    write_trace_csv(os.path.join(outdir, "trace.csv"), ser, devices, t0)
-    title = (f"{entry['name']}  size={args.size} (n={n})  "
-             f"({len(devices)} drives, {args.interval}s samples)")
-    plot_trace(ser, markers, devices, t0, os.path.join(outdir, "trace.png"), title)
+    for point_idx, size_str in enumerate(size_tokens):
+        size_bytes = rb.parse_bytes(size_str)
+        n = rb.size_to_n(entry, size_bytes)
+        print(f"\n--- {args.example}  size={size_str} (n={n}) "
+              f"[{point_idx + 1}/{len(size_tokens)}] ---", flush=True)
 
-    # tidy the drives, matching run_benches' between-point hygiene
-    rb.clear_bench_data(args.mount_glob, not args.no_clean)
+        # ParseGlobalArguments consumes only *leading* --flags, then positionals
+        # shift down; so order must be [--flags] [n] [example-specific positionals].
+        bin_args = flags + [n] + passthrough
 
-    ph = ", ".join(f"{lbl}@{mono - t0:.2f}s" for lbl, mono in markers) or "none"
-    print(f"\nDone. Phases: {ph}\nResults in {outdir}", flush=True)
+        samples, markers, _ = run_traced(binary, bin_args, devices, args.interval)
+        if len(samples) < 2:
+            print(f"  !!! too few samples for size={size_str} (run too short for "
+                  "--interval); skipping this point", flush=True)
+            continue
+
+        ser = compute_series(samples, devices)
+        t0 = samples[0][0]
+
+        # point_idx suffix avoids collisions when the same size appears twice
+        # in one sweep (e.g. --size "2^30 2^30" to check run-to-run variance).
+        outdir = os.path.join(sweep_dir, f"trace_{entry['name']}_{size_str}_{point_idx}")
+        os.makedirs(outdir, exist_ok=True)
+        print(f"Trace directory: {outdir}", flush=True)
+
+        write_trace_csv(os.path.join(outdir, "trace.csv"), ser, devices, t0)
+        title = (f"{entry['name']}  size={size_str} (n={n})  "
+                 f"({len(devices)} drives, {args.interval}s samples)")
+        plot_trace(ser, markers, devices, t0, os.path.join(outdir, "trace.png"), title)
+
+        # tidy the drives before the next point, matching run_benches' hygiene
+        rb.clear_bench_data(args.mount_glob, not args.no_clean)
+
+        ph = ", ".join(f"{lbl}@{mono - t0:.2f}s" for lbl, mono in markers) or "none"
+        print(f"Done. Phases: {ph}\nResults in {outdir}", flush=True)
+
+        if largest is None or n > largest["n"]:
+            largest = {"ser": ser, "markers": markers, "t0": t0, "outdir": outdir,
+                      "n": n, "size_str": size_str}
+
+        # Raw values (not pre-formatted): plot_sweep needs floats to plot;
+        # write_sweep_csv formats at write time.
+        row = {"size": size_str, "size_bytes": size_bytes, "n": n}
+        for label, kinds in pair_windows(markers).items():
+            for kind, (start_mono, end_mono) in kinds.items():
+                stats = window_series_stats(ser, t0, start_mono, end_mono)
+                for stat_name, val in stats.items():
+                    row[f"{label}_{kind}_{stat_name}"] = val
+        sweep_rows.append(row)
+
+    # Per-algorithm breakdown (same 3-panel style as the combined trace.png:
+    # aggregate throughput / drive %util vs CPU / per-drive heatmap) for the
+    # largest point only, one set of plots per label found in its markers
+    # (e.g. peter/direct/primitives for samplesort_three_way). Each is that
+    # algorithm's own build_start..op_end window sliced out and plotted
+    # exactly as if it had been traced alone.
+    if largest is not None:
+        windows = pair_windows(largest["markers"])
+        if len(windows) >= 2:
+            print(f"\nPer-algorithm breakdown for the largest point "
+                  f"(size={largest['size_str']}, n={largest['n']}):", flush=True)
+            for label, kinds in windows.items():
+                lo = min(w[0] for w in kinds.values())
+                hi = max(w[1] for w in kinds.values())
+                sub_ser = slice_ser(largest["ser"], devices, lo, hi)
+                if len(sub_ser["t"]) < 2:
+                    print(f"  {label}: too few samples in its window, skipping",
+                          flush=True)
+                    continue
+                sub_markers = [(lbl, m) for lbl, m in largest["markers"] if lo <= m <= hi]
+                write_trace_csv(os.path.join(largest["outdir"], f"trace_{label}.csv"),
+                                sub_ser, devices, lo)
+                sub_title = (f"{args.example} / {label}  size={largest['size_str']} "
+                            f"(n={largest['n']})  ({len(devices)} drives, "
+                            f"{args.interval}s samples)")
+                plot_trace(sub_ser, sub_markers, devices, lo,
+                          os.path.join(largest["outdir"], f"trace_{label}.png"), sub_title)
+        elif windows:
+            print(f"\n(only one labeled phase ({next(iter(windows))}) found; "
+                  "nothing to split into a per-algorithm breakdown)", flush=True)
+
+    if len(size_tokens) > 1:
+        if not sweep_rows:
+            sys.exit("every size in the sweep failed; no summary written")
+        os.makedirs(sweep_dir, exist_ok=True)
+        write_sweep_csv(os.path.join(sweep_dir, "io_sweep.csv"), sweep_rows)
+        plot_sweep(sweep_rows, os.path.join(sweep_dir, "io_sweep.png"),
+                  f"{args.example}: IO/CPU sweep across {len(sweep_rows)} sizes")
+        print(f"\nSweep done. Summary in {sweep_dir}", flush=True)
 
 
 if __name__ == "__main__":
