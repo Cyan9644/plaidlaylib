@@ -556,6 +556,11 @@ def main():
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     sweep_dir = os.path.join(rb.REPO_ROOT, args.outdir, stamp)
     sweep_rows = []
+    # Rows for the example's own performance comparison (the CSV,... line it
+    # already prints — n vs. each implementation's time/throughput; this is
+    # what run_benches.py's normal sweep would plot). io_trace.py runs the
+    # binary anyway, so this is free — no separate run_benches.py pass needed.
+    perf_rows = []
     # Raw (ser, markers, t0, outdir, n, size_str) for the largest-n point seen
     # so far; per-algorithm breakdown plots are generated for this one only
     # after the loop — doing it at every point would be a lot of extra work
@@ -573,11 +578,25 @@ def main():
         # shift down; so order must be [--flags] [n] [example-specific positionals].
         bin_args = flags + [n] + passthrough
 
-        samples, markers, _ = run_traced(binary, bin_args, devices, args.interval)
+        samples, markers, stdout = run_traced(binary, bin_args, devices, args.interval)
         if len(samples) < 2:
             print(f"  !!! too few samples for size={size_str} (run too short for "
                   "--interval); skipping this point", flush=True)
             continue
+
+        # Same CSV,... parsing run_benches.run_binary uses, so this row is a
+        # drop-in match for rb.write_csv/rb.plot_example's expected shape.
+        csv_fields = None
+        for line in stdout.splitlines():
+            if line.startswith("CSV,"):
+                csv_fields = line[len("CSV,"):].split(",")
+        if csv_fields is not None and len(csv_fields) == len(entry["cols"]):
+            perf_row = dict(zip(entry["cols"], csv_fields))
+            perf_row["input_bytes"] = str(size_bytes)
+            perf_rows.append(perf_row)
+        else:
+            print(f"  !!! no (or malformed) CSV, line for size={size_str}; "
+                  "excluded from the performance comparison", flush=True)
 
         ser = compute_series(samples, devices)
         t0 = samples[0][0]
@@ -643,6 +662,21 @@ def main():
         elif windows:
             print(f"\n(only one labeled phase ({next(iter(windows))}) found; "
                   "nothing to split into a per-algorithm breakdown)", flush=True)
+
+    # The example's own headline comparison (n vs. each implementation's time/
+    # throughput — what run_benches.py's normal sweep would produce), reusing
+    # its write_csv/plot_example directly so this matches every other
+    # *_scale.csv/.png in the repo exactly, not a separate reimplementation.
+    if len(size_tokens) > 1 and perf_rows:
+        os.makedirs(sweep_dir, exist_ok=True)
+        rb.write_csv(os.path.join(sweep_dir, f"{entry['name']}_scale.csv"),
+                    ["input_bytes"] + entry["cols"], perf_rows)
+        try:
+            rb.plot_example(perf_rows, entry,
+                            os.path.join(sweep_dir, f"{entry['name']}_scale.png"))
+        except Exception as exc:
+            print(f"  !!! {entry['name']}_scale.png plotting failed ({exc}); "
+                  "CSV was written", flush=True)
 
     if len(size_tokens) > 1:
         if not sweep_rows:
