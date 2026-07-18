@@ -43,7 +43,12 @@ constexpr size_t kBucketPipelineStaggerUs = 5000;
 // its own read-then-compute-then-write latency serially — the same
 // technique as direct_samplesort.h's WorkerOnlyPhase2 / Peter's
 // ScatterGather, generalized here to a bucket spanning several chunks (one
-// io_uring batch of `nc` SQEs per bucket instead of a single-file op).
+// io_uring batch of `nc` SQEs per bucket instead of a single-file op).  Each
+// chunk's fd is opened O_RDWR once and reused for both its read and its
+// write (closed only after the write completes), rather than reopened per
+// direction — halves the open()/close() syscalls, which matter here because
+// (unlike a single-file-per-bucket design) a bucket spanning many chunks
+// scattered across drives pays this cost once per chunk, not once per bucket.
 template <typename T = uint64_t, typename Processor>
 void process_buckets_inplace(std::vector<chunk_seq>& buckets, Processor processor) {
     static_assert(CHUNK_SIZE % sizeof(T) == 0,
@@ -87,14 +92,15 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets, Processor processo
             previous = std::move(current);
             current  = std::move(next);
 
-            // Reap the read submitted last round (it filled `current`).
+            // Reap the read submitted last round (it filled `current`).  The fds
+            // stay open (opened O_RDWR below) for the write stage to reuse, so
+            // each chunk pays one open/close pair instead of two.
             if (reap_read) {
                 for (size_t ci = 0; ci < current.nc; ci++) {
                     struct io_uring_cqe* cqe;
                     SYSCALL(io_uring_wait_cqe(&read_ring, &cqe));
                     SYSCALL(cqe->res);
                     io_uring_cqe_seen(&read_ring, cqe);
-                    close(current.fds[ci]);
                 }
                 process = true;
             } else {
@@ -119,7 +125,7 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets, Processor processo
                     size_t nelem = 0;
                     for (size_t ci = 0; ci < nc; ci++) {
                         const chunk& c = bs.chunks[ci];
-                        int fd = open(c.filename.c_str(), O_RDONLY | O_DIRECT);
+                        int fd = open(c.filename.c_str(), O_RDWR | O_DIRECT);
                         SYSCALL(fd);
                         next.fds[ci] = fd;
                         struct io_uring_sqe* sqe = io_uring_get_sqe(&read_ring);
@@ -144,12 +150,8 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets, Processor processo
                     std::memset(current.buf + current.nelem, 0,
                                (padded - current.nelem) * sizeof(T));
 
-                const chunk_seq& bs = buckets[current.bucket];
-                for (size_t ci = 0; ci < current.nc; ci++) {
-                    int fd = open(bs.chunks[ci].filename.c_str(), O_WRONLY | O_DIRECT);
-                    SYSCALL(fd);
-                    current.fds[ci] = fd;
-                }
+                // current.fds[ci] is still the O_RDWR fd opened for the read
+                // above; reuse it rather than reopening for the write.
                 submit_write = true;
             } else {
                 submit_write = false;

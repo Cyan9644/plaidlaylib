@@ -420,22 +420,32 @@ void chunk_count_sort(const D& dseq, size_t num_buckets,
         const size_t sc = stage_cnt[si];
         if (sc == 0) return;
         T* src = stage.data() + si * STAGE;
-        std::lock_guard<std::mutex> lk(asm_mu[b]);
-        size_t off = 0;
-        while (off < sc) {
-            const size_t take = std::min(ept - asm_cnt[b], sc - off);
-            memcpy(asm_buf[b] + asm_cnt[b], src + off, take * sizeof(T));
-            asm_cnt[b] += take;
-            off        += take;
-            if (asm_cnt[b] == ept) {                 // assembly full -> emit
-                T* full = asm_buf[b];
-                asm_buf[b] = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
-                CHECK(asm_buf[b] != nullptr) << "chunk_count_sort(parallel): assembly realloc failed";
-                asm_cnt[b] = 0;
-                emit_chunk(b, full, ept);
+        // Buffers that filled up during this drain; emitted after asm_mu[b] is
+        // released (see below) rather than while it's held.
+        std::vector<T*> full_buffers;
+        {
+            std::lock_guard<std::mutex> lk(asm_mu[b]);
+            size_t off = 0;
+            while (off < sc) {
+                const size_t take = std::min(ept - asm_cnt[b], sc - off);
+                memcpy(asm_buf[b] + asm_cnt[b], src + off, take * sizeof(T));
+                asm_cnt[b] += take;
+                off        += take;
+                if (asm_cnt[b] == ept) {                 // assembly full -> queue for emit
+                    full_buffers.push_back(asm_buf[b]);
+                    asm_buf[b] = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
+                    CHECK(asm_buf[b] != nullptr) << "chunk_count_sort(parallel): assembly realloc failed";
+                    asm_cnt[b] = 0;
+                }
             }
+            stage_cnt[si] = 0;
         }
-        stage_cnt[si] = 0;
+        // emit_chunk's writer.Push blocks if the writer's queue is full; doing it
+        // here (lock already released) means a slow writer stalls only this
+        // worker, not every other worker draining into the same bucket. Order
+        // within a bucket doesn't matter to either caller (sample_sort re-sorts
+        // each bucket; random_shuffle wants random order anyway).
+        for (T* full : full_buffers) emit_chunk(b, full, ept);
     };
 
     delayed::for_each_chunk(dseq, [&](size_t ci, size_t n, auto it) {

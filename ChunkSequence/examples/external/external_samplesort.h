@@ -32,10 +32,54 @@
 
 namespace ChunkSequenceOps{
 
+// Lightweight per-phase timer for sample_sort, enabled by setting the
+// environment variable SS_PHASE_TIMING (to anything).  Each mark() prints the
+// wall-clock time since the previous mark to stderr, so a single run yields a
+// phase-by-phase breakdown of where the sort spends its time.  On destruction it
+// additionally prints one machine-readable line to stdout that
+// benchmarks/samplesort_phase_bench.py (and any other harness) can grep:
+//
+//   SSPHASE,<tag>,<phase1>=<s>,<phase2>=<s>,...,total=<s>
+//
+// Only the outermost/first sample_sort call (tag "0") emits the machine line, so
+// a sweep gets exactly one SSPHASE row per input.  Disabled (zero overhead
+// beyond a branch) when the env var is unset, so it is safe to leave compiled
+// into the shipping header.
+struct SsPhaseTimer {
+    using Clock = std::chrono::steady_clock;
+    bool on;
+    std::string tag;
+    Clock::time_point last, start;
+    std::vector<std::pair<std::string, double>> phases;
+    explicit SsPhaseTimer(const char* t)
+        : on(std::getenv("SS_PHASE_TIMING") != nullptr), tag(t),
+          last(Clock::now()), start(last) {}
+    void mark(const char* name) {
+        if (!on) return;
+        auto now = Clock::now();
+        double s  = std::chrono::duration<double>(now - last).count();
+        double tot = std::chrono::duration<double>(now - start).count();
+        std::fprintf(stderr, "[ss %-3s] %-22s %8.4f s   (cum %8.4f s)\n",
+                     tag.c_str(), name, s, tot);
+        phases.emplace_back(name, s);
+        last = now;
+    }
+    ~SsPhaseTimer() {
+        if (!on || tag != "0" || phases.empty()) return;
+        double tot = std::chrono::duration<double>(Clock::now() - start).count();
+        std::string line = "SSPHASE," + tag;
+        for (auto& p : phases) line += "," + p.first + "=" + std::to_string(p.second);
+        line += ",total=" + std::to_string(tot);
+        std::fprintf(stdout, "%s\n", line.c_str());
+        std::fflush(stdout);
+    }
+};
+
 template <typename T, typename Less = std::less<>>
 chunk_seq sample_sort(chunk_seq& seq, Less less1 = {}) {
 static std::atomic<size_t> ss_counter{0};
 const std::string tag = std::to_string(ss_counter++);
+SsPhaseTimer _pt(tag.c_str());
 
 size_t n = 0;
   for(size_t r = 0; r < seq.chunks.size(); r++){
@@ -50,6 +94,7 @@ size_t max_sample_size = std::max(1UL, std::min(n, filer / O_DIRECT_MULTIPLE));
   size_t num_samples = std::max(std::min(filer / (1UL << 27), max_sample_size), min_sample_size);
 
   num_samples = (size_t{1} << parlay::log2_up(num_samples + 1)) - 1;
+  _pt.mark("size/params");
 
   if (n < num_samples){
     //we're likely going to want a fast quicksort method that takes better advantage of our 
@@ -58,10 +103,12 @@ size_t max_sample_size = std::max(1UL, std::min(n, filer / O_DIRECT_MULTIPLE));
     //but could overlap the I/O with computation.
 
     auto i = ChunkSequenceOps::materialize<T>(seq); //it would be good to make this materialize into a parlay sequence (now done)
+    _pt.mark("base:materialize");
 
     // std::sort(i.begin(), i.end(), less1);
     // i = parlay::sort(i);
     parlay::sort_inplace(i);
+    _pt.mark("base:sort");
     //this is going to be really slow if we just materialize and write back, probably the best thing to do is to pass a parlay sequence
     //at the recurring call based on the size, but this is kind of messy
     //the easiest way to fix the problem is to just make materialize faster by parallelizing it
@@ -92,6 +139,7 @@ unsigned int sample_size = std::max<size_t>(1, num_samples);
 
         pivots[count].second = scan_find<T>(seq, scan_seq, pivots[count].first);
     });
+    _pt.mark("sample:probe");
 
 
     pivots = parlay::sort(pivots, less2);
@@ -104,6 +152,7 @@ unsigned int sample_size = std::max<size_t>(1, num_samples);
 
 auto seconds = parlay::map(pivots, [](const auto& p){ return p.second; });
   parlay::internal::heap_tree ss(seconds);
+  _pt.mark("sample:pivots/heap");
 
 
 // std::vector<chunk_seq> externalSequenceVector(num_buckets);
@@ -125,6 +174,7 @@ auto ids = ChunkSequenceOps::delayed::map(ChunkSequenceOps::delayed::delay<T>(se
 std::vector<chunk_seq> externalSequenceVector(num_buckets);
 ChunkSequenceOps::chunk_count_sort(ids, num_buckets, externalSequenceVector,
                                    "ss_bucket_" + tag);
+_pt.mark("count_sort");
 
 //it should now be the case that externalSequenceVector is a full vector of the individual external sequences
 //in this case we just need a simple flatten to put all the chunk headers into a single list
@@ -158,8 +208,11 @@ ChunkSequenceOps::chunk_count_sort(ids, num_buckets, externalSequenceVector,
 
 // });
 ChunkSequenceOps::sort_buckets_inplace<T>(externalSequenceVector, less1);
+_pt.mark("bucket_sort");
 
-return ChunkSequenceOps::flatten(externalSequenceVector);
+auto result = ChunkSequenceOps::flatten(externalSequenceVector);
+_pt.mark("flatten");
+return result;
 
 
 //this sort_buckets method doesn't actually help the performance

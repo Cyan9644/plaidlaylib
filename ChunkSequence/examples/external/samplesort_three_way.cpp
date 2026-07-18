@@ -103,6 +103,7 @@
 
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/trace_marker.h"
 #include "ChunkSequence/chunk_seq.h"
 #include "ChunkSequence/ExternalPrimitives/materialize.h"
 #include "ChunkSequence/examples/external/bench_drives.h"
@@ -143,6 +144,7 @@ namespace {
 // and sweep every file it put on the drives.
 struct Sorter {
     std::string name;
+    std::string label;  // short slug for trace_mark, e.g. build_start_<label>
     std::vector<std::string> prefixes;
     std::function<double()> build;                       // -> build seconds
     std::function<double()> sort;                        // -> sort seconds
@@ -194,6 +196,7 @@ int main(int argc, char* argv[]) {
     std::vector<Sorter> sorters(3);
 
     sorters[0].name     = "Peter's (FileInfo, scatter-gather)";
+    sorters[0].label    = "peter";
     sorters[0].prefixes = kPeterPrefixes;
     sorters[0].build    = [&] { return peter_shim::BuildInput("pss_in", n); };
     sorters[0].sort     = [&] {
@@ -202,6 +205,7 @@ int main(int argc, char* argv[]) {
     sorters[0].read_back = [&] { return peter_shim::ReadBackSorted(pss_files, pss_sizes); };
 
     sorters[1].name     = "ours, direct I/O (chunk_seq)";
+    sorters[1].label    = "direct";
     sorters[1].prefixes = kDirectPrefixes;
     sorters[1].build    = [&] {
         auto t0 = Clock::now();
@@ -219,6 +223,7 @@ int main(int argc, char* argv[]) {
     };
 
     sorters[2].name     = "ours, primitives (chunk_seq)";
+    sorters[2].label    = "primitives";
     sorters[2].prefixes = kPrimPrefixes;
     sorters[2].build    = [&] {
         auto t0 = Clock::now();
@@ -272,13 +277,17 @@ int main(int argc, char* argv[]) {
 
         std::cout << "  [" << (k + 1) << "/3] " << s.name << ": building input..."
                   << std::flush;
+        trace_mark(("build_start_" + s.label).c_str());
         s.build_s = s.build();
+        trace_mark(("build_end_" + s.label).c_str());
         std::cout << " " << std::setprecision(3) << s.build_s << "s, sorting..."
                   << std::flush;
         // The build's writeback must not land inside the sort's timer.
         settle_drives();
 
+        trace_mark(("op_start_" + s.label).c_str());
         s.sort_s = s.sort();
+        trace_mark(("op_end_" + s.label).c_str());
         std::cout << " " << std::setprecision(3) << s.sort_s << "s   ("
                   << std::setprecision(2) << to_gb(n * sizeof(uint64_t)) / s.sort_s
                   << " GB/s)\n";
