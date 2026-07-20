@@ -88,6 +88,23 @@ def _configs_chunk_bytes():
 # size->count conversion aligns n to this grid.
 EXAMPLE_CHUNK_BYTES = _configs_chunk_bytes()
 
+
+def _bellman_ford_dense_n(size_bytes):
+    """n_from_size for bellman_ford_dense: invert size_bytes = 16*n^2.
+
+    bellman_ford.cpp's dense case uses avg_degree = n/2, so edge count
+    m ~= n^2/2 and edge bytes = m * sizeof(weighted_edge) = m*32 = 16*n^2 --
+    quadratic in n, unlike every other example (see size_to_n). Rounds m
+    itself down to a whole number of the real 32-byte-element chunk grid
+    (at least one chunk) before inverting back to n, so sweep points still
+    land on a chunk boundary the way every other example's do -- just
+    computed in m-space instead of n-space, since n isn't the on-disk
+    element count here.
+    """
+    edge_epc = EXAMPLE_CHUNK_BYTES // 32   # elements per chunk for a 32-byte weighted_edge
+    m = max(edge_epc, (size_bytes // 32) // edge_epc * edge_epc)
+    return int((2 * m) ** 0.5)
+
 # ── examples registry ───────────────────────────────────────────────────────
 # Each example is a dual-purpose binary (bin/<name>Example) that prints a
 # `CSV,<cols...>` line the sweep greps.  `cols` names those fields in order;
@@ -337,6 +354,72 @@ EXAMPLES = [
      "title": "cut / slice: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["cut_in*", "cut_out*"]},
 
+    # bellman_fordExample: three registry entries, one per RMAT graph-density
+    # case (sparse/balanced/dense avg_degree) that bellman_ford.cpp already
+    # builds and cross-checks. The binary normally runs and prints a CSV line
+    # for ALL THREE cases per invocation; `extra_argv`'s trailing case name
+    # selects bellman_ford.cpp's argv[3] case filter so each entry's run does
+    # and prints exactly ONE case -- required because run_binary/io_trace.py
+    # keep only the last "CSV," line, so without the filter every entry would
+    # silently report the dense case's numbers.  The leading "8" in each
+    # extra_argv is a placeholder occupying argv[2] (balanced_avg_degree)'s
+    # position so argv[3] lands correctly; sparse/dense ignore it (their
+    # avg_degree is fixed independent of that arg).
+    #
+    # Each compares THREE implementations, like samplesort_three_way /
+    # external_random_shuffle: external_bellman_ford (per-vertex, O(rounds*n)
+    # reader setups -- op_s), external_bellman_ford_fast (one streaming
+    # ChunkSegmentedReduce pass per round -- fast_op_s), and in-memory
+    # parlaylib bellman_ford (inmem_op_s).
+    #
+    # NOT in the make bench-examples/-mid/-full target lists (opt-in via
+    # --example only, same precedent as samplesort_three_way /
+    # external_random_shuffle / kth_smallest): external_bellman_ford is
+    # documented as dramatically slower than the in-memory baseline even at
+    # small n, so it doesn't belong in the default dev-box sweep.
+    {"name": "bellman_ford_sparse", "target": "bin/bellman_fordExample",
+     "cols": ["case", "n", "m", "build_s", "op_s", "inmem_op_s", "reachable",
+              "throughput_gb_s", "fast_op_s", "fast_reachable", "fast_throughput_gb_s"],
+     "time_col": "op_s", "inmem_col": "inmem_op_s",
+     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core, per-vertex"),
+     "extra_series": [("fast_op_s", "out-of-core, streaming (fast)", "^-")],
+     "extra_argv": ["8", "sparse"],
+     "elem_bytes": 2 * 32, "input_seqs": 1,   # avg_degree(2) * sizeof(weighted_edge)
+     "xlabel": "input size (edge bytes)",
+     "title": "Bellman-Ford (sparse, avg_degree=2): out-of-core vs in-mem",
+     "data_globs": ["bf_edges_sparse*"]},
+
+    {"name": "bellman_ford_balanced", "target": "bin/bellman_fordExample",
+     "cols": ["case", "n", "m", "build_s", "op_s", "inmem_op_s", "reachable",
+              "throughput_gb_s", "fast_op_s", "fast_reachable", "fast_throughput_gb_s"],
+     "time_col": "op_s", "inmem_col": "inmem_op_s",
+     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core, per-vertex"),
+     "extra_series": [("fast_op_s", "out-of-core, streaming (fast)", "^-")],
+     "extra_argv": ["8", "balanced"],
+     "elem_bytes": 8 * 32, "input_seqs": 1,   # avg_degree(8) * sizeof(weighted_edge)
+     "xlabel": "input size (edge bytes)",
+     "title": "Bellman-Ford (balanced, avg_degree=8): out-of-core vs in-mem",
+     "data_globs": ["bf_edges_balanced*"]},
+
+    # dense: avg_degree = n/2 (bellman_ford.cpp), so edge bytes ~= (n^2/2) *
+    # sizeof(weighted_edge) = 16*n^2 -- quadratic in n, not linear, so this
+    # entry overrides size_to_n's default formula via n_from_size
+    # (_bellman_ford_dense_n, defined above the registry). elem_bytes/
+    # input_seqs below are unused whenever n_from_size is present (see
+    # size_to_n) -- kept only as documentation of the on-disk element size.
+    {"name": "bellman_ford_dense", "target": "bin/bellman_fordExample",
+     "cols": ["case", "n", "m", "build_s", "op_s", "inmem_op_s", "reachable",
+              "throughput_gb_s", "fast_op_s", "fast_reachable", "fast_throughput_gb_s"],
+     "time_col": "op_s", "inmem_col": "inmem_op_s",
+     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core, per-vertex"),
+     "extra_series": [("fast_op_s", "out-of-core, streaming (fast)", "^-")],
+     "extra_argv": ["8", "dense"],
+     "n_from_size": _bellman_ford_dense_n,
+     "elem_bytes": 32, "input_seqs": 1,
+     "xlabel": "input size (edge bytes)",
+     "title": "Bellman-Ford (dense, avg_degree=n/2): out-of-core vs in-mem",
+     "data_globs": ["bf_edges_dense*"]},
+
 ]
 
 
@@ -384,7 +467,18 @@ def size_to_n(entry, size_bytes):
     chunks (at least one) to preserve the O_DIRECT chunk-aligned invariant: the
     engine tolerates a partial final chunk, but the original design keeps sweep
     points on the ELEMS_PER_CHUNK grid.
+
+    An entry with an `n_from_size` callable overrides the linear formula above
+    with `n_from_size(size_bytes) -> n` instead -- for examples where
+    `elem_bytes` isn't a true per-n constant (e.g. bellman_ford_dense, whose
+    edge count scales as n^2 since avg_degree itself grows with n).  The
+    chunk-grid rounding below does NOT apply to this path: it assumes n counts
+    elem_bytes-sized on-disk elements directly, which isn't true when n and
+    the on-disk footprint are related non-linearly, so `n_from_size` is
+    responsible for its own rounding if it wants any.
     """
+    if "n_from_size" in entry:
+        return max(1, entry["n_from_size"](size_bytes))
     per_n = entry["elem_bytes"] * entry["input_seqs"]
     epc = EXAMPLE_CHUNK_BYTES // entry["elem_bytes"]   # elements per chunk for this seq
     n = (size_bytes // per_n) // epc * epc
@@ -582,7 +676,8 @@ def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings):
         n = size_to_n(entry, size)
         print(f"\n=== example {entry['name']}: size={_bytes_fmt(size, None)} "
               f"(n={n}) ===", flush=True)
-        fields, problem = run_binary(binary, [n] + extra_args, fatal=False)
+        fields, problem = run_binary(binary, [n] + entry.get("extra_argv", []) + extra_args,
+                                     fatal=False)
         if problem:
             w = (f"example {entry['name']} at size={_bytes_fmt(size, None)} (n={n}): "
                  f"{problem}" + ("" if fields else " — point dropped"))

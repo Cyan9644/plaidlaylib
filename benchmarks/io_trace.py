@@ -576,7 +576,10 @@ def main():
 
         # ParseGlobalArguments consumes only *leading* --flags, then positionals
         # shift down; so order must be [--flags] [n] [example-specific positionals].
-        bin_args = flags + [n] + passthrough
+        # entry["extra_argv"] (e.g. bellman_ford_*'s case filter) are fixed
+        # positionals the registry entry itself needs; passthrough is whatever
+        # the user added after "--" on io_trace.py's own command line.
+        bin_args = flags + [n] + entry.get("extra_argv", []) + passthrough
 
         samples, markers, stdout = run_traced(binary, bin_args, devices, args.interval)
         if len(samples) < 2:

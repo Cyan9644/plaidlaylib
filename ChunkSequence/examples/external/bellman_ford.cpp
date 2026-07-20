@@ -41,7 +41,7 @@
 // exists to measure exactly that gap, not to hide it.  Scale n up
 // cautiously via argv for the slow variant.
 //
-//   usage: bellman_fordExample [global --flags] [n] [balanced_avg_degree]
+//   usage: bellman_fordExample [global --flags] [n] [balanced_avg_degree] [case]
 //     n                    requested vertex count, rounded up to a power of
 //                          two by the RMAT generator (default 200); shared by
 //                          all three cases
@@ -49,6 +49,12 @@
 //                          8, matching parlaylib's own bellman_ford.cpp
 //                          driver); the "sparse" case always uses avg_degree
 //                          2, and "dense" always uses n/2
+//     case                 "all" (default), or "sparse"/"balanced"/"dense" to
+//                          run and print a CSV line for just that one case
+//                          instead of all three -- used by
+//                          benchmarks/run_benches.py's EXAMPLES registry /
+//                          io_trace.py, which need exactly one CSV line per
+//                          invocation (they keep only the last line seen)
 //
 // One CSV line per case:
 //   CSV,case,n,m,build_s,op_s,inmem_op_s,reachable,throughput_gb_s,fast_op_s,fast_reachable,fast_throughput_gb_s
@@ -276,6 +282,7 @@ int main(int argc, char* argv[]) {
     RaiseFdLimit();
     const size_t n_req = (argc > 1) ? std::stoull(argv[1]) : 200;
     const size_t balanced_avg_degree = (argc > 2) ? std::stoull(argv[2]) : 8;
+    const std::string case_filter = (argc > 3) ? argv[3] : "all";
 
     // Sparse/balanced/dense span avg_degree from a bare-spanning-tree-ish 2,
     // through the parlaylib driver's own default of 8, up to n/2 (m ~ n^2/2)
@@ -291,8 +298,14 @@ int main(int argc, char* argv[]) {
     };
 
     bool all_agree = true;
-    for (const auto& c : cases)
+    bool ran_any = false;
+    for (const auto& c : cases) {
+        if (case_filter != "all" && case_filter != c.label) continue;
         all_agree &= run_case(c.label, n_req, c.avg_degree);
+        ran_any = true;
+    }
+    CHECK(ran_any) << "unknown case " << case_filter
+                    << " (expected all|sparse|balanced|dense)";
 
     return all_agree ? 0 : 1;
 }
