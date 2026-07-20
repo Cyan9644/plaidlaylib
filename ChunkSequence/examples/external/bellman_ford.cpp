@@ -31,15 +31,19 @@
 // adjacency doubles as its transpose GT, which both algorithms pull from.
 //
 // Defaults are deliberately tiny.  external_bellman_ford relaxes a vertex by
-// calling delayed::materialize on a fresh delayed cut of the edge chunk_seq
-// PER VERTEX PER ROUND (chunk_delayed.h's for_each_chunk spins up its own
-// ChunkSequenceReader — 10 io_uring rings by default — on every call), so
-// its cost scales as O(rounds * n) reader setups, not O(rounds * m) bytes
-// read.  That is expected to make it dramatically slower than the in-memory
-// baseline, and dramatically slower than external_bellman_ford_fast (which
-// does one reader setup per round), even on small graphs; this benchmark
-// exists to measure exactly that gap, not to hide it.  Scale n up
-// cautiously via argv for the slow variant.
+// calling sequential_materialize on a fresh delayed cut of the edge chunk_seq
+// PER VERTEX PER ROUND (a blocking pread per chunk touched, via a per-worker
+// SequentialReadContext -- see external_bellman_ford.h), so its cost scales
+// as O(rounds * n) reader setups, not O(rounds * m) bytes read.  That is
+// expected to make it dramatically slower than the in-memory baseline, and
+// dramatically slower than external_bellman_ford_fast (which does one
+// streaming pass per round), even on small graphs; this benchmark exists to
+// measure exactly that gap, not to hide it.  Because of that, run_case()
+// skips the per-vertex method once a case's edge bytes exceed
+// BELLMAN_FORD_PER_VERTEX_MAX_BYTES (default 512 KiB, env-overridable) --
+// past that it isn't useful benchmark data, just wall-clock cost -- and
+// leaves its CSV fields blank for that point.  external_bellman_ford_fast and
+// the in-memory baseline are never gated and always run at every size.
 //
 //   usage: bellman_fordExample [global --flags] [n] [balanced_avg_degree] [case]
 //     n                    requested vertex count, rounded up to a power of
@@ -59,7 +63,9 @@
 // One CSV line per case:
 //   CSV,case,n,m,build_s,op_s,inmem_op_s,reachable,throughput_gb_s,fast_op_s,fast_reachable,fast_throughput_gb_s
 //   throughput = edge bytes (m * sizeof(weighted_edge)) / op_s (fast_* are
-//   the same fields for external_bellman_ford_fast).
+//   the same fields for external_bellman_ford_fast).  op_s/reachable/
+//   throughput_gb_s are blank when the per-vertex method is skipped past its
+//   byte budget.
 
 #include <chrono>
 #include <cstdint>
@@ -91,6 +97,7 @@
 #include "utils/file_utils.h"
 #include "utils/trace_marker.h"
 #include "ChunkSequence/chunk_seq.h"
+#include "ChunkSequence/examples/external/bench_drives.h"
 #include "ChunkSequence/examples/external/external_bellman_ford.h"
 
 using Clock = std::chrono::steady_clock;
@@ -164,35 +171,62 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
 
     const size_t start = 0;
 
-    std::cout << "Running out-of-core Bellman-Ford..." << std::flush;
-    trace_mark(("op_start_" + label).c_str());
-    t0 = Clock::now();
-    parlay::sequence<long double> d_ext = external_bellman_ford(graph, start);
-    const double op_s = elapsed(t0);
-    trace_mark(("op_end_" + label).c_str());
-    std::cout << " done\n";
+    // external_bellman_ford (per-vertex) does O(rounds*n) reader setups (see
+    // the file header), so it's dramatically slower than everything else here
+    // even at modest edge counts -- not useful benchmark data past a small
+    // budget, and impractically slow to just leave running. Skip it past a
+    // byte budget (edge bytes, matching every other example's
+    // EXAMPLE_INMEM_BUDGET_BYTES-style RAM-cliff gate), leaving its CSV
+    // fields blank so the plotted "out-of-core, per-vertex" line simply stops
+    // there (benchmarks/run_benches.py's _series already drops blanks).
+    size_t per_vertex_budget = 512 * 1024;   // 512 KiB of edges
+    if (const char* e = getenv("BELLMAN_FORD_PER_VERTEX_MAX_BYTES"))
+        per_vertex_budget = std::stoull(e);
+    const size_t edge_bytes = m * sizeof(weighted_edge);
+    const bool per_vertex_ok = edge_bytes <= per_vertex_budget;
 
-    // external_bellman_ford returns an empty sequence (rather than an
-    // optional) if it doesn't converge within n rounds.
-    const bool ext_converged = d_ext.size() == n;
+    bench_drives::settle_drives();   // isolate the first timed read from the build's writeback
+
+    bool ext_converged = false;
     size_t reachable = 0;
-    if (ext_converged)
-        reachable = parlay::reduce(parlay::map(d_ext, [](long double dv) -> size_t {
-            return unreached(dv) ? 0 : 1;
-        }));
+    double op_s = 0, gb_s = 0;
+    parlay::sequence<long double> d_ext;
+    if (per_vertex_ok) {
+        std::cout << "Running out-of-core Bellman-Ford..." << std::flush;
+        trace_mark(("op_start_" + label).c_str());
+        t0 = Clock::now();
+        d_ext = external_bellman_ford(graph, start);
+        op_s = elapsed(t0);
+        trace_mark(("op_end_" + label).c_str());
+        std::cout << " done\n";
 
-    const double gb_s = to_gb(m * sizeof(weighted_edge)) / op_s;
-    std::cout << reachable << "/" << n << " vertices reachable   "
-              << std::setprecision(4) << op_s << "s   "
-              << std::setprecision(2) << gb_s << " GB/s (edges read)\n";
-    if (!ext_converged)
-        std::cout << "*** out-of-core Bellman-Ford did not converge within "
-                  << n << " rounds ***\n";
+        // external_bellman_ford returns an empty sequence (rather than an
+        // optional) if it doesn't converge within n rounds.
+        ext_converged = d_ext.size() == n;
+        if (ext_converged)
+            reachable = parlay::reduce(parlay::map(d_ext, [](long double dv) -> size_t {
+                return unreached(dv) ? 0 : 1;
+            }));
+
+        gb_s = to_gb(edge_bytes) / op_s;
+        std::cout << reachable << "/" << n << " vertices reachable   "
+                  << std::setprecision(4) << op_s << "s   "
+                  << std::setprecision(2) << gb_s << " GB/s (edges read)\n";
+        if (!ext_converged)
+            std::cout << "*** out-of-core Bellman-Ford did not converge within "
+                      << n << " rounds ***\n";
+
+        bench_drives::settle_drives();   // isolate the fast method's timer from this run
+    } else {
+        std::cout << "out-of-core Bellman-Ford (per-vertex): skipped (edges "
+                  << to_gb(edge_bytes) << " GB exceed per-vertex budget "
+                  << to_gb(per_vertex_budget) << " GB)\n";
+    }
 
     // external_bellman_ford_fast: same algorithm, one streaming pass over the
-    // edges per round (ChunkSegmentedReduce) instead of a per-vertex reader
-    // setup -- see external_bellman_ford.h for why that's expected to be
-    // dramatically faster.
+    // edges per round (delayed::segmented_reduce) instead of a per-vertex
+    // reader setup -- see external_bellman_ford.h for why that's expected to
+    // be dramatically faster.
     std::cout << "Running out-of-core Bellman-Ford (fast)..." << std::flush;
     trace_mark(("fast_op_start_" + label).c_str());
     t0 = Clock::now();
@@ -208,7 +242,7 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
             return unreached(dv) ? 0 : 1;
         }));
 
-    const double fast_gb_s = to_gb(m * sizeof(weighted_edge)) / fast_op_s;
+    const double fast_gb_s = to_gb(edge_bytes) / fast_op_s;
     std::cout << fast_reachable << "/" << n << " vertices reachable   "
               << std::setprecision(4) << fast_op_s << "s   "
               << std::setprecision(2) << fast_gb_s << " GB/s (edges read)\n";
@@ -255,16 +289,23 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
         return ok;
     };
 
-    const bool agree = compare_to_mem("out-of-core", d_ext, ext_converged);
+    // Skip the cross-check for a budget-skipped per-vertex run -- there's no
+    // result to compare.
+    const bool agree = !per_vertex_ok || compare_to_mem("out-of-core", d_ext, ext_converged);
     const bool fast_agree = compare_to_mem("out-of-core (fast)", d_fast, fast_converged);
 
     // Machine-readable line for benchmarks/run_benches.py.
     // Columns: case,n,m,build_s,op_s,inmem_op_s,reachable,throughput_gb_s,
     //          fast_op_s,fast_reachable,fast_throughput_gb_s
+    // (op_s/reachable/throughput_gb_s blank when the per-vertex method is
+    // skipped past the byte budget, so the plotted per-vertex line stops.)
     auto f9 = [](double v) { std::ostringstream o; o << std::setprecision(9) << v; return o.str(); };
     std::cout << "CSV," << label << ',' << n << ',' << m << ',' << f9(build_s)
-              << ',' << f9(op_s) << ',' << f9(inmem_op_s) << ',' << reachable
-              << ',' << f9(gb_s) << ',' << f9(fast_op_s) << ',' << fast_reachable
+              << ',' << (per_vertex_ok ? f9(op_s) : std::string())
+              << ',' << f9(inmem_op_s)
+              << ',' << (per_vertex_ok ? std::to_string(reachable) : std::string())
+              << ',' << (per_vertex_ok ? f9(gb_s) : std::string())
+              << ',' << f9(fast_op_s) << ',' << fast_reachable
               << ',' << f9(fast_gb_s) << '\n';
 
     cleanup_prefix(edge_prefix);
