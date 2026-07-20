@@ -50,15 +50,21 @@ RAM-backed and generate no /proc/diskstats traffic, so the disk panels come out
 empty (the script warns and still records CPU).  Run it on the 30-SSD machine.
 
   usage:
-    python3 benchmarks/io_trace.py <example> [--size 1GiB] [--interval 0.1]
-        [--mount-glob /mnt/ssd*] [--outdir results] [--ssd-args '...']
-        [-- <extra args passed through to the example binary>]
+    python3 benchmarks/io_trace.py <example> [--size 1GiB | --n 8192]
+        [--interval 0.1] [--mount-glob /mnt/ssd*] [--outdir results]
+        [--ssd-args '...'] [-- <extra args passed through to the example binary>]
 
     python3 benchmarks/io_trace.py samplesort_three_way \\
         --size "2^30 2^32 2^34 2^36 2^38"
 
-Reuses run_benches.py by import: the EXAMPLES registry, parse_bytes, size_to_n,
-make(), clear_bench_data(), REPO_ROOT/BINDIR.  Compilation stays in the Makefile.
+    # --n bypasses --size/size_to_n and passes raw counts straight through as
+    # argv[1] -- for examples (like bellman_ford's slow per-vertex variant)
+    # where the byte-size model picks an impractically large n:
+    python3 benchmarks/io_trace.py bellman_ford_sparse --n "512 1024 2048 4096 8192"
+
+Reuses run_benches.py by import: the EXAMPLES registry, parse_bytes, parse_count,
+size_to_n, make(), clear_bench_data(), REPO_ROOT/BINDIR.  Compilation stays in
+the Makefile.
 """
 
 import argparse
@@ -511,6 +517,13 @@ def plot_sweep(rows, path, title):
     print(f"  wrote {path}", flush=True)
 
 
+def _desc(label, n, n_mode):
+    """Human-readable point description for print()/titles: 'n=8192' in --n
+    mode (label already IS the n token, so showing n again would be
+    redundant), 'size=1MiB (n=1048576)' in --size mode."""
+    return f"n={label}" if n_mode else f"size={label} (n={n})"
+
+
 # ── main ────────────────────────────────────────────────────────────────────
 def main():
     argv = sys.argv[1:]
@@ -523,10 +536,23 @@ def main():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("example", help="example name; choices: "
                     + ", ".join(e["name"] for e in rb.EXAMPLES))
-    ap.add_argument("--size", default="512MiB",
+    ap.add_argument("--size", default=None,
                     help="one size, or a space-separated list to sweep (e.g. "
                          "'2^30 2^32 2^34'); each converted per example to an "
-                         "element count (see run_benches.size_to_n)")
+                         "element count (see run_benches.size_to_n). Default "
+                         "'512MiB' if neither --size nor --n is given. Mutually "
+                         "exclusive with --n.")
+    ap.add_argument("--n", default=None,
+                    help="one count, or a space-separated list to sweep, as the "
+                         "example's raw argv[1] (e.g. bellman_ford's vertex "
+                         "count) -- bypasses --size/size_to_n entirely. Use this "
+                         "when the byte-size model picks an impractically large "
+                         "n (e.g. '512 1024 2048 4096 8192' for bellman_ford's "
+                         "slow per-vertex variant, instead of a size like "
+                         "'1MiB' that size_to_n would turn into a six-figure "
+                         "vertex count). Accepts the same forms as "
+                         "run_benches.py's --n-values (raw digits, 2^k, K/M/G "
+                         "suffixes). Mutually exclusive with --size.")
     ap.add_argument("--interval", type=float, default=0.1,
                     help="sampling interval in seconds (default 0.1)")
     ap.add_argument("--mount-glob", default="/mnt/ssd*",
@@ -542,16 +568,32 @@ def main():
                          "(also restores the multi-point io_sweep.csv/.png summary)")
     args = ap.parse_args(argv)
 
+    if args.size and args.n:
+        ap.error("--size and --n are mutually exclusive")
+
     entry = next((e for e in rb.EXAMPLES if e["name"] == args.example), None)
     if entry is None:
         ap.error(f"unknown example {args.example!r}; choices: "
                  + ", ".join(e["name"] for e in rb.EXAMPLES))
 
-    size_tokens = args.size.split()
-    if not size_tokens:
-        ap.error("--size must not be empty")
-    sizes_bytes = [rb.parse_bytes(s) for s in size_tokens]
-    ns = [rb.size_to_n(entry, b) for b in sizes_bytes]
+    n_mode = args.n is not None
+    if n_mode:
+        point_labels = args.n.split()
+        if not point_labels:
+            ap.error("--n must not be empty")
+        ns = [rb.parse_count(t) for t in point_labels]
+        # Best-effort bytes estimate for perf_row["input_bytes"] (the *_scale.png
+        # x-axis) and the trace title -- exact for entries without n_from_size
+        # (the same linear formula size_to_n itself uses, just inverted), an
+        # approximation for entries like bellman_ford_dense where it's cosmetic
+        # only (see size_to_n / the registry entry's own comment).
+        sizes_bytes = [n * entry["elem_bytes"] * entry["input_seqs"] for n in ns]
+    else:
+        point_labels = (args.size or "512MiB").split()
+        if not point_labels:
+            ap.error("--size must not be empty")
+        sizes_bytes = [rb.parse_bytes(s) for s in point_labels]
+        ns = [rb.size_to_n(entry, b) for b in sizes_bytes]
     # First occurrence of the max, so a tie deterministically picks the
     # earliest point rather than depending on list-scan order elsewhere.
     largest_idx = ns.index(max(ns))
@@ -579,19 +621,20 @@ def main():
     # what run_benches.py's normal sweep would plot). io_trace.py runs the
     # binary anyway, so this is free — no separate run_benches.py pass needed.
     perf_rows = []
-    # Raw (ser, markers, t0, outdir, n, size_str) for the traced point that
+    # Raw (ser, markers, t0, outdir, n, desc) for the traced point that
     # turns out largest (normally just THE traced point, since only
     # largest_idx is sampled by default); per-algorithm breakdown plots are
     # generated for this one only, after the loop — the largest point is the
     # one where per-algorithm IO/CPU behavior is most informative anyway.
     largest = None
 
-    for point_idx, size_str in enumerate(size_tokens):
+    for point_idx, point_label in enumerate(point_labels):
         size_bytes = sizes_bytes[point_idx]
         n = ns[point_idx]
         trace_this_point = args.trace_all or point_idx == largest_idx
-        print(f"\n--- {args.example}  size={size_str} (n={n}) "
-              f"[{point_idx + 1}/{len(size_tokens)}] "
+        desc = _desc(point_label, n, n_mode)
+        print(f"\n--- {args.example}  {desc} "
+              f"[{point_idx + 1}/{len(point_labels)}] "
               f"{'[traced]' if trace_this_point else '[perf only]'} ---", flush=True)
 
         # ParseGlobalArguments consumes only *leading* --flags, then positionals
@@ -616,14 +659,14 @@ def main():
                 perf_row["input_bytes"] = str(size_bytes)
                 perf_rows.append(perf_row)
             elif fields is not None:
-                print(f"  !!! no (or malformed) CSV, line for size={size_str}; "
+                print(f"  !!! no (or malformed) CSV, line for {desc}; "
                       "excluded from the performance comparison", flush=True)
             rb.clear_bench_data(args.mount_glob, not args.no_clean)
             continue
 
         samples, markers, stdout = run_traced(binary, bin_args, devices, args.interval)
         if len(samples) < 2:
-            print(f"  !!! too few samples for size={size_str} (run too short for "
+            print(f"  !!! too few samples for {desc} (run too short for "
                   "--interval); skipping this point", flush=True)
             continue
 
@@ -638,20 +681,20 @@ def main():
             perf_row["input_bytes"] = str(size_bytes)
             perf_rows.append(perf_row)
         else:
-            print(f"  !!! no (or malformed) CSV, line for size={size_str}; "
+            print(f"  !!! no (or malformed) CSV, line for {desc}; "
                   "excluded from the performance comparison", flush=True)
 
         ser = compute_series(samples, devices)
         t0 = samples[0][0]
 
-        # point_idx suffix avoids collisions when the same size appears twice
-        # in one sweep (e.g. --size "2^30 2^30" to check run-to-run variance).
-        outdir = os.path.join(sweep_dir, f"trace_{entry['name']}_{size_str}_{point_idx}")
+        # point_idx suffix avoids collisions when the same point appears twice
+        # in one sweep (e.g. --n "8192 8192" to check run-to-run variance).
+        outdir = os.path.join(sweep_dir, f"trace_{entry['name']}_{point_label}_{point_idx}")
         os.makedirs(outdir, exist_ok=True)
         print(f"Trace directory: {outdir}", flush=True)
 
         write_trace_csv(os.path.join(outdir, "trace.csv"), ser, devices, t0)
-        title = (f"{entry['name']}  size={size_str} (n={n})  "
+        title = (f"{entry['name']}  {desc}  "
                  f"({len(devices)} drives, {args.interval}s samples)")
         plot_trace(ser, markers, devices, t0, os.path.join(outdir, "trace.png"), title)
 
@@ -663,11 +706,11 @@ def main():
 
         if largest is None or n > largest["n"]:
             largest = {"ser": ser, "markers": markers, "t0": t0, "outdir": outdir,
-                      "n": n, "size_str": size_str}
+                      "n": n, "desc": desc}
 
         # Raw values (not pre-formatted): plot_sweep needs floats to plot;
         # write_sweep_csv formats at write time.
-        row = {"size": size_str, "size_bytes": size_bytes, "n": n}
+        row = {"size": point_label, "size_bytes": size_bytes, "n": n}
         for label, kinds in pair_windows(markers).items():
             for kind, (start_mono, end_mono) in kinds.items():
                 stats = window_series_stats(ser, t0, start_mono, end_mono)
@@ -685,7 +728,7 @@ def main():
         windows = pair_windows(largest["markers"])
         if len(windows) >= 2:
             print(f"\nPer-algorithm breakdown for the largest point "
-                  f"(size={largest['size_str']}, n={largest['n']}):", flush=True)
+                  f"({largest['desc']}):", flush=True)
             for label, kinds in windows.items():
                 lo = min(w[0] for w in kinds.values())
                 hi = max(w[1] for w in kinds.values())
@@ -697,8 +740,8 @@ def main():
                 sub_markers = [(lbl, m) for lbl, m in largest["markers"] if lo <= m <= hi]
                 write_trace_csv(os.path.join(largest["outdir"], f"trace_{label}.csv"),
                                 sub_ser, devices, lo)
-                sub_title = (f"{args.example} / {label}  size={largest['size_str']} "
-                            f"(n={largest['n']})  ({len(devices)} drives, "
+                sub_title = (f"{args.example} / {label}  {largest['desc']}  "
+                            f"({len(devices)} drives, "
                             f"{args.interval}s samples)")
                 plot_trace(sub_ser, sub_markers, devices, lo,
                           os.path.join(largest["outdir"], f"trace_{label}.png"), sub_title)
@@ -711,7 +754,7 @@ def main():
     # its write_csv/plot_example directly so this matches every other
     # *_scale.csv/.png in the repo exactly, not a separate reimplementation.
     # Every point contributes here regardless of whether it was traced.
-    if len(size_tokens) > 1 and perf_rows:
+    if len(point_labels) > 1 and perf_rows:
         os.makedirs(sweep_dir, exist_ok=True)
         rb.write_csv(os.path.join(sweep_dir, f"{entry['name']}_scale.csv"),
                     ["input_bytes"] + entry["cols"], perf_rows)
@@ -733,10 +776,10 @@ def main():
         plot_sweep(sweep_rows, os.path.join(sweep_dir, "io_sweep.png"),
                   f"{args.example}: IO/CPU sweep across {len(sweep_rows)} sizes")
         print(f"\nSweep done. Summary in {sweep_dir}", flush=True)
-    elif len(size_tokens) > 1 and not args.trace_all:
-        print(f"\n(only the largest size was traced, as usual — pass --trace-all "
+    elif len(point_labels) > 1 and not args.trace_all:
+        print(f"\n(only the largest point was traced, as usual — pass --trace-all "
               "for a multi-point io_sweep.csv/.png)", flush=True)
-    elif len(size_tokens) > 1:
+    elif len(point_labels) > 1:
         print("\n  !!! every traced point failed; no io_sweep summary written", flush=True)
 
 
