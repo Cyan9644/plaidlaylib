@@ -19,13 +19,23 @@ It answers, for a given algorithm:
   * per-drive access pattern — a device x time heatmap of read+write MB/s.
 
 `--size` accepts space-separated tokens (like samplesort_phase_bench.py's
-`--n-values`) to sweep several sizes in one command. Each size still gets its
-own full time-series trace (trace.csv/trace.png, unchanged from a single-size
-run); on top of that, a sweep of >1 size also writes one combined summary CSV
-(io_sweep.csv: one row per size, with per-phase duration/util/CPU/throughput
-columns derived by pairing each `..._start_<label>`/`..._end_<label>` marker)
-plus io_sweep.png so trends across n can be read the same way as the other
-benchmark CSVs, without re-parsing every point's raw trace.
+`--n-values`) to sweep several sizes in one command. By default, disk/CPU
+sampling (and its trace.csv/trace.png) is only actually done for the LARGEST
+size in the sweep — that's the point where the drives are most saturated and
+the I/O profile is most informative, and repeating the sampler at every
+smaller point mostly just adds wall-clock time (running the example itself,
+which sampling doesn't speed up) for traces nobody looks at. Every point,
+traced or not, still contributes one CSV performance row (that comparison
+DOES benefit from every point — see below), so the smaller points aren't
+wasted, just not disk/CPU-sampled. Pass `--trace-all` to sample every point
+anyway, which also restores the combined summary across sizes: io_sweep.csv
+(one row per TRACED size, with per-phase duration/util/CPU/throughput columns
+derived by pairing each `..._start_<label>`/`..._end_<label>` marker) plus
+io_sweep.png, so trends across n can be read the same way as the other
+benchmark CSVs, without re-parsing every point's raw trace. With only the
+largest point traced (the default), that summary would be a single-point
+"trend", so it's skipped — the per-size trend to look at instead is
+`{name}_scale.png`, built from every point's CSV row regardless of tracing.
 
 For the single largest size in the run (always, sweep or not), if its markers
 carry 2+ distinct labels (e.g. samplesort_three_way's peter/direct/primitives),
@@ -527,6 +537,9 @@ def main():
                     help="extra global flags for the binary (e.g. '--num_ssd=4')")
     ap.add_argument("--no-clean", action="store_true",
                     help="leave the example's data files on the mounts")
+    ap.add_argument("--trace-all", action="store_true",
+                    help="disk/CPU-sample every --size point, not just the largest "
+                         "(also restores the multi-point io_sweep.csv/.png summary)")
     args = ap.parse_args(argv)
 
     entry = next((e for e in rb.EXAMPLES if e["name"] == args.example), None)
@@ -537,6 +550,11 @@ def main():
     size_tokens = args.size.split()
     if not size_tokens:
         ap.error("--size must not be empty")
+    sizes_bytes = [rb.parse_bytes(s) for s in size_tokens]
+    ns = [rb.size_to_n(entry, b) for b in sizes_bytes]
+    # First occurrence of the max, so a tie deterministically picks the
+    # earliest point rather than depending on list-scan order elsewhere.
+    largest_idx = ns.index(max(ns))
 
     devices, mapping = resolve_devices(args.mount_glob)
     if devices:
@@ -561,18 +579,20 @@ def main():
     # what run_benches.py's normal sweep would plot). io_trace.py runs the
     # binary anyway, so this is free — no separate run_benches.py pass needed.
     perf_rows = []
-    # Raw (ser, markers, t0, outdir, n, size_str) for the largest-n point seen
-    # so far; per-algorithm breakdown plots are generated for this one only
-    # after the loop — doing it at every point would be a lot of extra work
-    # for a big sweep, and the largest point is the one where per-algorithm
-    # IO/CPU behavior is most informative anyway.
+    # Raw (ser, markers, t0, outdir, n, size_str) for the traced point that
+    # turns out largest (normally just THE traced point, since only
+    # largest_idx is sampled by default); per-algorithm breakdown plots are
+    # generated for this one only, after the loop — the largest point is the
+    # one where per-algorithm IO/CPU behavior is most informative anyway.
     largest = None
 
     for point_idx, size_str in enumerate(size_tokens):
-        size_bytes = rb.parse_bytes(size_str)
-        n = rb.size_to_n(entry, size_bytes)
+        size_bytes = sizes_bytes[point_idx]
+        n = ns[point_idx]
+        trace_this_point = args.trace_all or point_idx == largest_idx
         print(f"\n--- {args.example}  size={size_str} (n={n}) "
-              f"[{point_idx + 1}/{len(size_tokens)}] ---", flush=True)
+              f"[{point_idx + 1}/{len(size_tokens)}] "
+              f"{'[traced]' if trace_this_point else '[perf only]'} ---", flush=True)
 
         # ParseGlobalArguments consumes only *leading* --flags, then positionals
         # shift down; so order must be [--flags] [n] [example-specific positionals].
@@ -580,6 +600,26 @@ def main():
         # positionals the registry entry itself needs; passthrough is whatever
         # the user added after "--" on io_trace.py's own command line.
         bin_args = flags + [n] + entry.get("extra_argv", []) + passthrough
+
+        if not trace_this_point:
+            # No Sampler, no PLAID_TRACE — just the CSV performance row, at
+            # the actual run cost (sampling itself is cheap; skipping it here
+            # doesn't speed up the example, but it does skip the per-point
+            # trace.csv/trace.png work, and — the main point — lets the
+            # smaller points be swept at all without paying for a trace
+            # nobody was going to look at).
+            fields, problem = rb.run_binary(binary, bin_args, fatal=False)
+            if problem:
+                print(f"  !!! {problem}", flush=True)
+            if fields is not None and len(fields) == len(entry["cols"]):
+                perf_row = dict(zip(entry["cols"], fields))
+                perf_row["input_bytes"] = str(size_bytes)
+                perf_rows.append(perf_row)
+            elif fields is not None:
+                print(f"  !!! no (or malformed) CSV, line for size={size_str}; "
+                      "excluded from the performance comparison", flush=True)
+            rb.clear_bench_data(args.mount_glob, not args.no_clean)
+            continue
 
         samples, markers, stdout = run_traced(binary, bin_args, devices, args.interval)
         if len(samples) < 2:
@@ -670,6 +710,7 @@ def main():
     # throughput — what run_benches.py's normal sweep would produce), reusing
     # its write_csv/plot_example directly so this matches every other
     # *_scale.csv/.png in the repo exactly, not a separate reimplementation.
+    # Every point contributes here regardless of whether it was traced.
     if len(size_tokens) > 1 and perf_rows:
         os.makedirs(sweep_dir, exist_ok=True)
         rb.write_csv(os.path.join(sweep_dir, f"{entry['name']}_scale.csv"),
@@ -681,14 +722,22 @@ def main():
             print(f"  !!! {entry['name']}_scale.png plotting failed ({exc}); "
                   "CSV was written", flush=True)
 
-    if len(size_tokens) > 1:
-        if not sweep_rows:
-            sys.exit("every size in the sweep failed; no summary written")
+    # The multi-point IO/CPU trend needs 2+ TRACED points, not just 2+ sizes
+    # requested — with the default (only the largest size traced), that's
+    # normally exactly one, so there's nothing to plot a trend across; this
+    # is expected, not a failure, so it's a note rather than a warning.
+    # (--trace-all restores one traced point per size, as before.)
+    if len(sweep_rows) > 1:
         os.makedirs(sweep_dir, exist_ok=True)
         write_sweep_csv(os.path.join(sweep_dir, "io_sweep.csv"), sweep_rows)
         plot_sweep(sweep_rows, os.path.join(sweep_dir, "io_sweep.png"),
                   f"{args.example}: IO/CPU sweep across {len(sweep_rows)} sizes")
         print(f"\nSweep done. Summary in {sweep_dir}", flush=True)
+    elif len(size_tokens) > 1 and not args.trace_all:
+        print(f"\n(only the largest size was traced, as usual — pass --trace-all "
+              "for a multi-point io_sweep.csv/.png)", flush=True)
+    elif len(size_tokens) > 1:
+        print("\n  !!! every traced point failed; no io_sweep summary written", flush=True)
 
 
 if __name__ == "__main__":
