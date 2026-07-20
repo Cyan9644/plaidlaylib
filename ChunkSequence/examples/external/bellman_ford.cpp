@@ -267,6 +267,13 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
 
 int main(int argc, char* argv[]) {
     ParseGlobalArguments(argc, argv);
+    // external_bellman_ford holds one SequentialReadContext per parlay worker
+    // (external_bellman_ford.h), each with its own fd cache (bounded at
+    // MAX_CACHED_FDS = 256, chunk_delayed.h), plus the CSR build's own
+    // readers/writers -- workers * 256 alone blows past the common 1024 soft
+    // RLIMIT_NOFILE.  Lift the soft limit to the hard limit before any I/O
+    // starts (same fix every other external example applies).
+    RaiseFdLimit();
     const size_t n_req = (argc > 1) ? std::stoull(argv[1]) : 200;
     const size_t balanced_avg_degree = (argc > 2) ? std::stoull(argv[2]) : 8;
 
