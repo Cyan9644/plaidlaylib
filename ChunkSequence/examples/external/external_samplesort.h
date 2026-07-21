@@ -163,7 +163,7 @@ auto seconds = parlay::map(pivots, [](const auto& p){ return p.second; });
 auto ids = ChunkSequenceOps::delayed::map(ChunkSequenceOps::delayed::delay<T>(seq),[&](T e){return std::pair<T, size_t>{e, ss.rank(e, less1)};});
 
 std::vector<chunk_seq> externalSequenceVector(num_buckets);
-ChunkSequenceOps::count_sort(ids, num_buckets, externalSequenceVector,"ss_bucket_" + tag);
+ChunkSequenceOps::count_sort_bucketed(ids, num_buckets, externalSequenceVector,"ss_bucket_" + tag);
 _pt.mark("count_sort");
 
 //it should now be the case that externalSequenceVector is a full vector of the individual external sequences
