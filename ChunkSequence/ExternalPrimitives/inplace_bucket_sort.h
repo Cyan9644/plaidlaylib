@@ -42,13 +42,17 @@ constexpr size_t kBucketPipelineStaggerUs = 5000;
 // different buckets overlap on every worker instead of each bucket paying
 // its own read-then-compute-then-write latency serially — the same
 // technique as direct_samplesort.h's WorkerOnlyPhase2 / Peter's
-// ScatterGather, generalized here to a bucket spanning several chunks (one
-// io_uring batch of `nc` SQEs per bucket instead of a single-file op).  Each
-// chunk's fd is opened O_RDWR once and reused for both its read and its
-// write (closed only after the write completes), rather than reopened per
-// direction — halves the open()/close() syscalls, which matter here because
-// (unlike a single-file-per-bucket design) a bucket spanning many chunks
-// scattered across drives pays this cost once per chunk, not once per bucket.
+// ScatterGather.  A bucket's chunks are grouped into maximal contiguous runs
+// (same filename, back-to-back begin_addr) before I/O is issued: one open(),
+// one read SQE, one write SQE per run, instead of per chunk.  Since
+// count_sort now carves each bucket out of one contiguous per-bucket file,
+// this collapses to exactly one run per bucket in the common case — matching
+// direct_samplesort.h's single open/read/write per bucket — while a bucket
+// that happens to span multiple files still degrades safely to one run per
+// chunk.  Each run's fd is opened O_RDWR once and reused for both its read
+// and its write (closed only after the write completes), rather than
+// reopened per direction, halving the open()/close() syscalls on top of the
+// run-coalescing itself.
 template <typename T = uint64_t, typename Processor>
 void process_buckets_inplace(std::vector<chunk_seq>& buckets, Processor processor) {
     static_assert(CHUNK_SIZE % sizeof(T) == 0,
@@ -78,11 +82,17 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets, Processor processo
         SYSCALL(InitIoUringWithRetry(ring_depth, &read_ring, IORING_SETUP_SINGLE_ISSUER));
         SYSCALL(InitIoUringWithRetry(ring_depth, &write_ring, IORING_SETUP_SINGLE_ISSUER));
 
+        // A maximal run of consecutive chunks sharing one file at
+        // back-to-back offsets, read/written with a single SQE.
+        struct Run {
+            int fd = -1;
+            size_t start_ci = 0, count = 0, read_bytes = 0;
+        };
         struct Stage {
             size_t bucket = (size_t)-1;
             T* buf = nullptr;
             size_t nc = 0, nelem = 0;
-            std::vector<int> fds;
+            std::vector<Run> runs;
         };
         Stage previous, current, next;
         bool reap_read = false, submit_read = true, process = false,
@@ -94,9 +104,9 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets, Processor processo
 
             // Reap the read submitted last round (it filled `current`).  The fds
             // stay open (opened O_RDWR below) for the write stage to reuse, so
-            // each chunk pays one open/close pair instead of two.
+            // each run pays one open/close pair instead of two.
             if (reap_read) {
-                for (size_t ci = 0; ci < current.nc; ci++) {
+                for (size_t ri = 0; ri < current.runs.size(); ri++) {
                     struct io_uring_cqe* cqe;
                     SYSCALL(io_uring_wait_cqe(&read_ring, &cqe));
                     SYSCALL(cqe->res);
@@ -121,19 +131,37 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets, Processor processo
                     next.nc = nc;
                     next.buf = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, nc * CHUNK_SIZE);
                     CHECK(next.buf != nullptr) << "process_buckets_inplace: buffer alloc failed";
-                    next.fds.resize(nc);
+
                     size_t nelem = 0;
-                    for (size_t ci = 0; ci < nc; ci++) {
-                        const chunk& c = bs.chunks[ci];
-                        int fd = open(c.filename.c_str(), O_RDWR | O_DIRECT);
+                    size_t ci = 0;
+                    while (ci < nc) {
+                        const size_t start = ci;
+                        ci++;
+                        // Extend the run while consecutive chunks share a file
+                        // at back-to-back offsets; a run may only continue past
+                        // a full (non-partial) chunk, since a partial chunk's
+                        // bytes on disk aren't followed by more of this file.
+                        while (ci < nc &&
+                               bs.chunks[ci].filename == bs.chunks[ci - 1].filename &&
+                               bs.chunks[ci].begin_addr ==
+                                   bs.chunks[ci - 1].begin_addr + CHUNK_SIZE &&
+                               bs.chunks[ci - 1].used == CHUNK_SIZE) {
+                            ci++;
+                        }
+                        const size_t count = ci - start;
+                        const chunk& first = bs.chunks[start];
+                        const chunk& last = bs.chunks[ci - 1];
+                        const size_t read_bytes = (count - 1) * CHUNK_SIZE + AlignUp(last.used);
+
+                        int fd = open(first.filename.c_str(), O_RDWR | O_DIRECT);
                         SYSCALL(fd);
-                        next.fds[ci] = fd;
                         struct io_uring_sqe* sqe = io_uring_get_sqe(&read_ring);
                         CHECK(sqe != nullptr) << "process_buckets_inplace: read ring out of sqes";
-                        io_uring_prep_read(sqe, fd, next.buf + ci * ept, AlignUp(c.used),
-                                           (off_t)c.begin_addr);
-                        nelem += c.used / sizeof(T);
+                        io_uring_prep_read(sqe, fd, next.buf + start * ept, read_bytes,
+                                           (off_t)first.begin_addr);
+                        next.runs.push_back(Run{fd, start, count, read_bytes});
                     }
+                    for (const chunk& c : bs.chunks) nelem += c.used / sizeof(T);
                     next.nelem = nelem;
                     SYSCALL(io_uring_submit(&read_ring));
                 }
@@ -150,8 +178,8 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets, Processor processo
                     std::memset(current.buf + current.nelem, 0,
                                (padded - current.nelem) * sizeof(T));
 
-                // current.fds[ci] is still the O_RDWR fd opened for the read
-                // above; reuse it rather than reopening for the write.
+                // current.runs[*].fd is still the O_RDWR fd opened for the
+                // read above; reuse it rather than reopening for the write.
                 submit_write = true;
             } else {
                 submit_write = false;
@@ -159,12 +187,12 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets, Processor processo
 
             // Reap the write submitted last round (it drained `previous`).
             if (reap_write) {
-                for (size_t ci = 0; ci < previous.nc; ci++) {
+                for (size_t ri = 0; ri < previous.runs.size(); ri++) {
                     struct io_uring_cqe* cqe;
                     SYSCALL(io_uring_wait_cqe(&write_ring, &cqe));
                     SYSCALL(cqe->res);
                     io_uring_cqe_seen(&write_ring, cqe);
-                    close(previous.fds[ci]);
+                    close(previous.runs[ri].fd);
                 }
                 free(previous.buf);
             }
@@ -172,11 +200,12 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets, Processor processo
             // Submit this bucket's write.
             if (submit_write) {
                 const chunk_seq& bs = buckets[current.bucket];
-                for (size_t ci = 0; ci < current.nc; ci++) {
+                for (const Run& run : current.runs) {
                     struct io_uring_sqe* sqe = io_uring_get_sqe(&write_ring);
                     CHECK(sqe != nullptr) << "process_buckets_inplace: write ring out of sqes";
-                    io_uring_prep_write(sqe, current.fds[ci], current.buf + ci * ept, CHUNK_SIZE,
-                                        (off_t)bs.chunks[ci].begin_addr);
+                    io_uring_prep_write(sqe, run.fd, current.buf + run.start_ci * ept,
+                                        run.count * CHUNK_SIZE,
+                                        (off_t)bs.chunks[run.start_ci].begin_addr);
                 }
                 SYSCALL(io_uring_submit(&write_ring));
             }
