@@ -8,7 +8,7 @@
 //                     written straight against io_uring/O_DIRECT.
 //   3. our primitives external_samplesort.h (ChunkSequenceOps::sample_sort): the
 //                     same algorithm again, but built out of the library's
-//                     primitives (delayed map -> chunk_count_sort ->
+//                     primitives (delayed map -> count_sort ->
 //                     sort_buckets_inplace -> flatten).
 //   4. in-memory      parlay::sort on the same keys in DRAM — the yardstick the
 //                     other three are chasing, and the thing they exist to beat

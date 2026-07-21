@@ -20,7 +20,7 @@
 #include "ChunkSequence/ExternalPrimitives/materialize.h"
 #include "ChunkSequence/chunk_pack.h"
 #include "ChunkSequence/ExternalPrimitives/scan_find.h"
-#include "ChunkSequence/ExternalPrimitives/chunk_count_sort.h"
+#include "ChunkSequence/ExternalPrimitives/count_sort.h"
 #include "ChunkSequence/ExternalPrimitives/flatten.h"
 #include "ChunkSequence/ExternalPrimitives/sort_buckets.h"
 #include "ChunkSequence/ExternalPrimitives/inplace_bucket_sort.h"
@@ -86,7 +86,7 @@ auto ids = ChunkSequenceOps::delayed::map(
 });
 
 std::vector<chunk_seq> externalSequenceVector(num_buckets);
-ChunkSequenceOps::chunk_count_sort(ids, num_buckets, externalSequenceVector, 
+ChunkSequenceOps::count_sort(ids, num_buckets, externalSequenceVector, 
     "ss_bucket_" + tag);
 
 ChunkSequenceOps::sort_buckets_inplace<T>(externalSequenceVector, less1);

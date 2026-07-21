@@ -4,7 +4,7 @@
 // (deterministic from parlay::hash64, so it is reproducible and duplicate-free),
 // then sorts them with the out-of-core sample sort in
 // Examples/external/external_samplesort.h (oversampled pivots -> bucket via
-// heap_tree -> chunk_count_sort into per-bucket external sequences -> recurse
+// heap_tree -> count_sort into per-bucket external sequences -> recurse
 // per bucket -> flatten the sorted buckets), which mirrors parlaylib's in-memory
 // sample_sort but keeps every intermediate out of core.
 //

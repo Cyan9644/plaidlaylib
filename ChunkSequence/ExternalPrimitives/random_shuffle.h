@@ -17,7 +17,7 @@
 #include "ChunkSequence/chunk_delayed.h"
 #include "ChunkSequence/n_reader.h"
 #include "ChunkSequence/ExternalPrimitives/materialize.h"
-#include "ChunkSequence/ExternalPrimitives/chunk_count_sort.h"
+#include "ChunkSequence/ExternalPrimitives/count_sort.h"
 #include "ChunkSequence/ExternalPrimitives/flatten.h"
 #include "ChunkSequence/ExternalPrimitives/inplace_bucket_sort.h"
 #include "utils/file_utils.h"
@@ -89,7 +89,7 @@ std::vector<chunk_seq> externalSequenceVector(num_buckets);
     // ChunkSequenceOps::inplace_bucket_sort(seq, ids, externalSequenceVector,"random_bucket_" + tag);
 
   
-    ChunkSequenceOps::chunk_count_sort(ids, num_buckets, externalSequenceVector, prefix + "_bucket_" + tag);
+    ChunkSequenceOps::count_sort(ids, num_buckets, externalSequenceVector, prefix + "_bucket_" + tag);
     // Less less = //we want this less function to allow us to sort by chunk filename
 
     // parlay::sort_inplace(seq2.chunks, less);
@@ -220,7 +220,7 @@ public:
                           });
 
         std::vector<chunk_seq> buckets(num_buckets);
-        chunk_count_sort(ids, num_buckets, buckets, result_prefix);
+        count_sort(ids, num_buckets, buckets, result_prefix);
 
         // Phase 2 (ProcessBucket): every bucket is DRAM-sized by construction, so
         // each is read back, processed, and written over its own chunks.

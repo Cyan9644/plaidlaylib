@@ -1,7 +1,7 @@
 //AI-Generated chunk count sort to get the samplesort running for testing
-//this was based on my original chunk_count_sort.h
-#ifndef CHUNK_COUNT_SORT_H
-#define CHUNK_COUNT_SORT_H
+//this was based on my original count_sort.h
+#ifndef count_sort_H
+#define count_sort_H
 
 #include <cstring>
 #include <mutex>
@@ -24,11 +24,11 @@ namespace ChunkSequenceOps {
 
 
 template<typename T = uint64_t>
-void chunk_count_sort(const chunk_seq& seq, const chunk_seq& ids,
+void count_sort(const chunk_seq& seq, const chunk_seq& ids,
                       std::vector<chunk_seq>& externalSequenceVector,
                       const std::string& result_prefix = "bucket") {
     const size_t num_buckets = externalSequenceVector.size();
-    CHECK(num_buckets > 0) << "chunk_count_sort: externalSequenceVector must be "
+    CHECK(num_buckets > 0) << "count_sort: externalSequenceVector must be "
                               "pre-sized to the number of buckets";
     static_assert(CHUNK_SIZE % sizeof(T) == 0,
         "sizeof(T) must divide CHUNK_SIZE for O_DIRECT alignment");
@@ -59,7 +59,7 @@ void chunk_count_sort(const chunk_seq& seq, const chunk_seq& ids,
     std::vector<size_t> buffer_counters(num_buckets, 0);
     for (size_t b = 0; b < num_buckets; b++) {
         buffers[b] = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
-        CHECK(buffers[b] != nullptr) << "chunk_count_sort: buffer alloc failed";
+        CHECK(buffers[b] != nullptr) << "count_sort: buffer alloc failed";
     }
 
    
@@ -81,7 +81,7 @@ void chunk_count_sort(const chunk_seq& seq, const chunk_seq& ids,
         // completes); the writer always writes a full CHUNK_SIZE block.
         writer.Push(std::shared_ptr<T>(buffers[b], free), ept, d, base);
         buffers[b] = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
-        CHECK(buffers[b] != nullptr) << "chunk_count_sort: buffer alloc failed";
+        CHECK(buffers[b] != nullptr) << "count_sort: buffer alloc failed";
         buffer_counters[b] = 0;
     };
 
@@ -96,7 +96,7 @@ void chunk_count_sort(const chunk_seq& seq, const chunk_seq& ids,
         const size_t n   = match.sizes[0];
         for (size_t k = 0; k < n; k++) {
             const size_t j = (size_t)id_ptr[k];   // bucket for this value
-            CHECK(j < num_buckets) << "chunk_count_sort: bucket id " << j
+            CHECK(j < num_buckets) << "count_sort: bucket id " << j
                 << " out of range (num_buckets=" << num_buckets << ")";
             buffers[j][buffer_counters[j]++] = val_ptr[k];
             if (buffer_counters[j] == ept) flush(j);   // block full -> emit
@@ -116,7 +116,7 @@ void chunk_count_sort(const chunk_seq& seq, const chunk_seq& ids,
 
 
 /**
- * Keyed variant of chunk_count_sort: instead of consuming a precomputed,
+ * Keyed variant of count_sort: instead of consuming a precomputed,
  * chunk-parallel bucket-id sequence, the bucket for each element is computed
  * inline from its value via key_fn(value) -> bucket index.  This lets callers
  * skip materializing an id chunk_seq to disk entirely (no ChunkMap write pass,
@@ -131,12 +131,12 @@ void chunk_count_sort(const chunk_seq& seq, const chunk_seq& ids,
  * @tparam KeyFn   Callable T -> integral bucket index in [0, num_buckets).
  */
 template<typename T = uint64_t, typename KeyFn>
-void chunk_count_sort_by_key(const chunk_seq& seq, size_t num_buckets,
+void count_sort_by_key(const chunk_seq& seq, size_t num_buckets,
                       std::vector<chunk_seq>& externalSequenceVector,
                       KeyFn key_fn,
                       const std::string& result_prefix = "bucket") {
     CHECK(externalSequenceVector.size() == num_buckets)
-        << "chunk_count_sort_by_key: externalSequenceVector must be pre-sized to "
+        << "count_sort_by_key: externalSequenceVector must be pre-sized to "
            "num_buckets";
     static_assert(CHUNK_SIZE % sizeof(T) == 0,
         "sizeof(T) must divide CHUNK_SIZE for O_DIRECT alignment");
@@ -163,7 +163,7 @@ void chunk_count_sort_by_key(const chunk_seq& seq, size_t num_buckets,
     std::vector<size_t> buffer_counters(num_buckets, 0);
     for (size_t b = 0; b < num_buckets; b++) {
         buffers[b] = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
-        CHECK(buffers[b] != nullptr) << "chunk_count_sort_by_key: buffer alloc failed";
+        CHECK(buffers[b] != nullptr) << "count_sort_by_key: buffer alloc failed";
     }
 
     size_t slot = 0;
@@ -182,7 +182,7 @@ void chunk_count_sort_by_key(const chunk_seq& seq, size_t num_buckets,
                   externalSequenceVector[b].chunks.size()});
         writer.Push(std::shared_ptr<T>(buffers[b], free), ept, d, base);
         buffers[b] = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
-        CHECK(buffers[b] != nullptr) << "chunk_count_sort_by_key: buffer alloc failed";
+        CHECK(buffers[b] != nullptr) << "count_sort_by_key: buffer alloc failed";
         buffer_counters[b] = 0;
     };
 
@@ -196,7 +196,7 @@ void chunk_count_sort_by_key(const chunk_seq& seq, size_t num_buckets,
         if (ptr == nullptr) break;                 // sequence exhausted
         for (size_t k = 0; k < n; k++) {
             const size_t j = (size_t)key_fn(ptr[k]);
-            CHECK(j < num_buckets) << "chunk_count_sort_by_key: bucket id " << j
+            CHECK(j < num_buckets) << "count_sort_by_key: bucket id " << j
                 << " out of range (num_buckets=" << num_buckets << ")";
             buffers[j][buffer_counters[j]++] = ptr[k];
             if (buffer_counters[j] == ept) flush(j);
@@ -214,7 +214,7 @@ void chunk_count_sort_by_key(const chunk_seq& seq, size_t num_buckets,
 
 
 /**
- * Delayed-source variant of chunk_count_sort: instead of a materialized id
+ * Delayed-source variant of count_sort: instead of a materialized id
  * chunk_seq co-indexed with seq, the bucket for each element is carried by a
  * *delayed* (fused) sequence whose elements are std::pair{value, bucket}.  The
  * caller builds it as, e.g.,
@@ -222,11 +222,11 @@ void chunk_count_sort_by_key(const chunk_seq& seq, size_t num_buckets,
  *   namespace d = ChunkSequenceOps::delayed;
  *   auto ids = d::map(d::delay<T>(seq),
  *                     [&](T v){ return std::pair<T, size_t>{v, key(v)}; });
- *   chunk_count_sort(ids, num_buckets, out, prefix);
+ *   count_sort(ids, num_buckets, out, prefix);
  *
  * so the routing key is recomputed on the fly during a single fused read pass
  * over seq -- no ChunkMap write pass, no second co-indexed read.  Same result as
- * chunk_count_sort_by_key, but expressed through the delayed layer so the map
+ * count_sort_by_key, but expressed through the delayed layer so the map
  * stays a first-class delayed op.
  *
  * The pair carries the value because the count sort must write the value into
@@ -238,17 +238,17 @@ void chunk_count_sort_by_key(const chunk_seq& seq, size_t num_buckets,
  * @tparam D  A delayed node whose value_type is std::pair<T, IntegralBucket>.
  */
 // Serial reference implementation (single-threaded scatter over the fused read
-// pass).  Kept for A/B comparison; prefer the parallel chunk_count_sort below,
+// pass).  Kept for A/B comparison; prefer the parallel count_sort below,
 // which does the same routing across all workers.  The two are interchangeable
 // (both order-independent within a bucket).
 template<class D>
-void chunk_count_sort_serial(const D& dseq, size_t num_buckets,
+void count_sort_serial(const D& dseq, size_t num_buckets,
                       std::vector<chunk_seq>& externalSequenceVector,
                       const std::string& result_prefix = "bucket") {
     using Pair = typename D::value_type;
     using T    = typename Pair::first_type;
     CHECK(externalSequenceVector.size() == num_buckets)
-        << "chunk_count_sort(delayed): externalSequenceVector must be pre-sized "
+        << "count_sort(delayed): externalSequenceVector must be pre-sized "
            "to num_buckets";
     static_assert(CHUNK_SIZE % sizeof(T) == 0,
         "sizeof(T) must divide CHUNK_SIZE for O_DIRECT alignment");
@@ -275,7 +275,7 @@ void chunk_count_sort_serial(const D& dseq, size_t num_buckets,
     std::vector<size_t> buffer_counters(num_buckets, 0);
     for (size_t b = 0; b < num_buckets; b++) {
         buffers[b] = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
-        CHECK(buffers[b] != nullptr) << "chunk_count_sort(delayed): buffer alloc failed";
+        CHECK(buffers[b] != nullptr) << "count_sort(delayed): buffer alloc failed";
     }
 
     size_t slot = 0;
@@ -294,7 +294,7 @@ void chunk_count_sort_serial(const D& dseq, size_t num_buckets,
                   externalSequenceVector[b].chunks.size()});
         writer.Push(std::shared_ptr<T>(buffers[b], free), ept, d, base);
         buffers[b] = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
-        CHECK(buffers[b] != nullptr) << "chunk_count_sort(delayed): buffer alloc failed";
+        CHECK(buffers[b] != nullptr) << "count_sort(delayed): buffer alloc failed";
         buffer_counters[b] = 0;
     };
 
@@ -308,7 +308,7 @@ void chunk_count_sort_serial(const D& dseq, size_t num_buckets,
             for (size_t k = 0; k < n; k++) {
                 Pair pr = *it; ++it;
                 const size_t j = (size_t)pr.second;
-                CHECK(j < num_buckets) << "chunk_count_sort(delayed): bucket id "
+                CHECK(j < num_buckets) << "count_sort(delayed): bucket id "
                     << j << " out of range (num_buckets=" << num_buckets << ")";
                 buffers[j][buffer_counters[j]++] = pr.first;
                 if (buffer_counters[j] == ept) flush(j);
@@ -325,7 +325,7 @@ void chunk_count_sort_serial(const D& dseq, size_t num_buckets,
 }
 
 
-// Parallel delayed-source chunk_count_sort.  Same contract as the serial
+// Parallel delayed-source count_sort.  Same contract as the serial
 // version above (route each element of a fused pair{value,bucket} sequence into
 // its bucket's per-bucket run), but the scatter runs across all parlay workers
 // via for_each_chunk instead of the single-threaded for_each_window.  This is
@@ -341,13 +341,13 @@ void chunk_count_sort_serial(const D& dseq, size_t num_buckets,
 // (the latter matches the serial version's footprint), so this stays feasible
 // even when num_buckets grows with n.
 template<class D>
-void chunk_count_sort(const D& dseq, size_t num_buckets,
+void count_sort(const D& dseq, size_t num_buckets,
                       std::vector<chunk_seq>& externalSequenceVector,
                       const std::string& result_prefix = "bucket") {
     using Pair = typename D::value_type;
     using T    = typename Pair::first_type;
     CHECK(externalSequenceVector.size() == num_buckets)
-        << "chunk_count_sort(parallel): externalSequenceVector must be pre-sized "
+        << "count_sort(parallel): externalSequenceVector must be pre-sized "
            "to num_buckets";
     static_assert(CHUNK_SIZE % sizeof(T) == 0,
         "sizeof(T) must divide CHUNK_SIZE for O_DIRECT alignment");
@@ -377,7 +377,7 @@ void chunk_count_sort(const D& dseq, size_t num_buckets,
     std::vector<std::mutex> asm_mu(num_buckets);
     for (size_t b = 0; b < num_buckets; b++) {
         asm_buf[b] = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
-        CHECK(asm_buf[b] != nullptr) << "chunk_count_sort(parallel): assembly alloc failed";
+        CHECK(asm_buf[b] != nullptr) << "count_sort(parallel): assembly alloc failed";
     }
 
     // Drive/offset assignment + per-bucket chunk-list append (both quick, done
@@ -434,7 +434,7 @@ void chunk_count_sort(const D& dseq, size_t num_buckets,
                 if (asm_cnt[b] == ept) {                 // assembly full -> queue for emit
                     full_buffers.push_back(asm_buf[b]);
                     asm_buf[b] = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
-                    CHECK(asm_buf[b] != nullptr) << "chunk_count_sort(parallel): assembly realloc failed";
+                    CHECK(asm_buf[b] != nullptr) << "count_sort(parallel): assembly realloc failed";
                     asm_cnt[b] = 0;
                 }
             }
@@ -453,7 +453,7 @@ void chunk_count_sort(const D& dseq, size_t num_buckets,
         for (size_t k = 0; k < n; k++) {
             Pair pr = *it; ++it;
             const size_t j = (size_t)pr.second;
-            CHECK(j < num_buckets) << "chunk_count_sort(parallel): bucket id " << j
+            CHECK(j < num_buckets) << "count_sort(parallel): bucket id " << j
                 << " out of range (num_buckets=" << num_buckets << ")";
             const size_t si = w * num_buckets + j;
             stage[si * STAGE + stage_cnt[si]++] = pr.first;
@@ -488,4 +488,4 @@ inline chunk_seq fuse(const std::vector<chunk_seq>& externalSequenceVector) {
 
 } // namespace ChunkSequenceOps
 
-#endif // CHUNK_COUNT_SORT_H
+#endif // count_sort_H

@@ -21,7 +21,7 @@
 #include "ChunkSequence/ExternalPrimitives/materialize.h"
 #include "ChunkSequence/chunk_pack.h"
 #include "ChunkSequence/ExternalPrimitives/scan_find.h"
-#include "ChunkSequence/ExternalPrimitives/chunk_count_sort.h"
+#include "ChunkSequence/ExternalPrimitives/count_sort.h"
 #include "ChunkSequence/ExternalPrimitives/flatten.h"
 #include "ChunkSequence/ExternalPrimitives/sort_buckets.h"
 #include "ChunkSequence/ExternalPrimitives/inplace_bucket_sort.h"
@@ -30,21 +30,11 @@
 #define DRAM_SIZE ((size_t)500 * 1024 * 1024 * 1024) //==500 GB
 
 
+
+//CLAUDE'S ssPhaseTimer IS NO LONGER NECESSARY, USE ug PETER'S TIMER 
+
 namespace ChunkSequenceOps{
 
-// Lightweight per-phase timer for sample_sort, enabled by setting the
-// environment variable SS_PHASE_TIMING (to anything).  Each mark() prints the
-// wall-clock time since the previous mark to stderr, so a single run yields a
-// phase-by-phase breakdown of where the sort spends its time.  On destruction it
-// additionally prints one machine-readable line to stdout that
-// benchmarks/samplesort_phase_bench.py (and any other harness) can grep:
-//
-//   SSPHASE,<tag>,<phase1>=<s>,<phase2>=<s>,...,total=<s>
-//
-// Only the outermost/first sample_sort call (tag "0") emits the machine line, so
-// a sweep gets exactly one SSPHASE row per input.  Disabled (zero overhead
-// beyond a branch) when the env var is unset, so it is safe to leave compiled
-// into the shipping header.
 struct SsPhaseTimer {
     using Clock = std::chrono::steady_clock;
     bool on;
@@ -75,6 +65,8 @@ struct SsPhaseTimer {
     }
 };
 
+
+//samplesort implementation with primitives
 template <typename T, typename Less = std::less<>>
 chunk_seq sample_sort(chunk_seq& seq, Less less1 = {}) {
 static std::atomic<size_t> ss_counter{0};
@@ -156,24 +148,22 @@ auto seconds = parlay::map(pivots, [](const auto& p){ return p.second; });
 
 
 // std::vector<chunk_seq> externalSequenceVector(num_buckets);
-// ChunkSequenceOps::chunk_count_sort<T>(seq, ids, externalSequenceVector, "ss_bucket_" + tag);
+// ChunkSequenceOps::count_sort<T>(seq, ids, externalSequenceVector, "ss_bucket_" + tag);
 
 // std::vector<chunk_seq> externalSequenceVector(num_buckets);
-// ChunkSequenceOps::chunk_count_sort_by_key<T>(
+// ChunkSequenceOps::count_sort_by_key<T>(
 //     seq, num_buckets, externalSequenceVector,
 //     [&](T e){ return ss.rank(e, less1); },
 //     "ss_bucket_" + tag);
 
 // //one potential optimization here is that ChunkMap doesn't really need to write its data back to disk
 // //we could just make this delayed
-// //the issue then is that chunk_count_sort takes a materialized chunk sequence, so we'll need to edit it or make a new one
+// //the issue then is that count_sort takes a materialized chunk sequence, so we'll need to edit it or make a new one
 //this is exactly what the code does now
-auto ids = ChunkSequenceOps::delayed::map(ChunkSequenceOps::delayed::delay<T>(seq),
-    [&](T e){ return std::pair<T, size_t>{e, ss.rank(e, less1)}; });
+auto ids = ChunkSequenceOps::delayed::map(ChunkSequenceOps::delayed::delay<T>(seq),[&](T e){return std::pair<T, size_t>{e, ss.rank(e, less1)};});
 
 std::vector<chunk_seq> externalSequenceVector(num_buckets);
-ChunkSequenceOps::chunk_count_sort(ids, num_buckets, externalSequenceVector,
-                                   "ss_bucket_" + tag);
+ChunkSequenceOps::count_sort(ids, num_buckets, externalSequenceVector,"ss_bucket_" + tag);
 _pt.mark("count_sort");
 
 //it should now be the case that externalSequenceVector is a full vector of the individual external sequences
@@ -207,6 +197,9 @@ _pt.mark("count_sort");
 
 
 // });
+
+//we can replace this with a more general pass method once we figure out a framework for streaming
+//still, this is a useful-ish method so I don't feel like it's cheating too badly
 ChunkSequenceOps::sort_buckets_inplace<T>(externalSequenceVector, less1);
 _pt.mark("bucket_sort");
 

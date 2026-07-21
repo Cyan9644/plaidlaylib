@@ -13,7 +13,7 @@
 #include "ChunkSequence/chunk_pack.h"
 #include "ChunkSequence/ExternalPrimitives/scan_find.h"
 #include "ChunkSequence/ExternalPrimitives/LinearFind.h"
-#include "ChunkSequence/ExternalPrimitives/chunk_count_sort2.h"
+#include "ChunkSequence/ExternalPrimitives/count_sort2.h"
 #include "ChunkSequence/ExternalPrimitives/flatten.h"
 
 
@@ -90,7 +90,7 @@ auto ids = ChunkMap<T, size_t>(seq, "ss_id_" + tag,[&](T e){
 });
 
 std::vector<chunk_seq> externalSequenceVector(2);
-ChunkSequenceOps::chunk_count_sort2<T>(seq, ids, externalSequenceVector, "ss_bucket_" + tag);
+ChunkSequenceOps::count_sort2<T>(seq, ids, externalSequenceVector, "ss_bucket_" + tag);
 auto& left = externalSequenceVector[0];
 auto& right = externalSequenceVector[1];
 
@@ -109,7 +109,7 @@ parlay::par_do([&](){
 
 return flatten(externalSequenceVector);
 // std::vector<chunk_seq> externalSequenceVector(num_buckets);
-// ChunkSequenceOps::chunk_count_sort2<T>(seq, ids, externalSequenceVector, "ss_bucket_" + tag);
+// ChunkSequenceOps::count_sort2<T>(seq, ids, externalSequenceVector, "ss_bucket_" + tag);
 
 // parlay::parallel_for(0, num_buckets, [&](long i){
 
@@ -135,8 +135,8 @@ return flatten(externalSequenceVector);
 
 // Delayed variant of quicksort: same random-pivot two-way partition and
 // recursion, but the per-element bucket id is computed inline inside the
-// counting sort (chunk_count_sort_by_key via ss.rank) instead of being written
-// out as an id chunk_seq by ChunkMap and read back by chunk_count_sort2.  That
+// counting sort (count_sort_by_key via ss.rank) instead of being written
+// out as an id chunk_seq by ChunkMap and read back by count_sort2.  That
 // fuses the map into the partition pass, so each level costs one read + one
 // write of the data rather than ~3 reads + 2 writes.
 template <typename T = uint64_t, typename Less = std::less<>>
@@ -177,9 +177,9 @@ parlay::internal::heap_tree ss(seconds);
 
 // Fused map + counting sort: the bucket (side of the pivot) is derived inline
 // via ss.rank during the single streaming pass, so no id chunk_seq is written
-// or re-read (the ChunkMap + chunk_count_sort2 pair the eager path uses).
+// or re-read (the ChunkMap + count_sort2 pair the eager path uses).
 std::vector<chunk_seq> externalSequenceVector(2);
-ChunkSequenceOps::chunk_count_sort_by_key<T>(seq, (size_t)2,
+ChunkSequenceOps::count_sort_by_key<T>(seq, (size_t)2,
     externalSequenceVector,
     [&](T e){ return ss.rank(e, less1); }, "ss_bucket_" + tag);
 auto& left = externalSequenceVector[0];

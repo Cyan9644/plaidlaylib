@@ -632,7 +632,7 @@ void for_each_chunk(const D& d, Body&& body, size_t reader_threads = 10) {
 // opens and CHUNK_SIZE allocations happen once across MANY calls instead of
 // once per call.  Meant to be constructed once (e.g. one per parlay::worker_id()
 // slot, held for an algorithm's whole lifetime -- see chunk_partition.h's /
-// chunk_count_sort.h's per-worker-slot idiom, valid because a parlay task runs
+// count_sort.h's per-worker-slot idiom, valid because a parlay task runs
 // uninterrupted on one worker) and threaded through every
 // sequential_for_each_chunk / sequential_materialize call that would otherwise
 // pay open()+aligned_alloc() per call (e.g. Bellman-Ford's per-vertex

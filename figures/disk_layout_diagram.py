@@ -11,7 +11,7 @@ matplotlib.use("Agg")
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import LinearSegmentedColormap, hsv_to_rgb, rgb_to_hsv
 from matplotlib.lines import Line2D
 
 # Light-mode chart palette (see the dataviz skill's reference palette).
@@ -21,13 +21,17 @@ INK_SECONDARY = "#52514e"
 INK_MUTED = "#898781"
 BASELINE = "#c3c2b7"
 
-# Sequential blue ramp (steps 100->700): color encodes a chunk/range's original
-# position in the logical sequence, consistently across both panels.
-_BLUE_STEPS = [
-    "#cde2fb", "#b7d3f6", "#9ec5f4", "#86b6ef", "#6da7ec", "#5598e7",
-    "#3987e5", "#2a78d6", "#256abf", "#1c5cab", "#184f95", "#104281", "#0d366b",
+# Color encodes a chunk/range's original position in the logical sequence,
+# consistently across both images. A red-to-blue ramp (through dusty rose,
+# mauve, plum, and indigo) shifts noticeably from end to end, but stays
+# low-chroma throughout -- no saturated/neon stop anywhere on the ramp -- so
+# it stays easy on the eyes.
+_RED_BLUE_STEPS = [
+    "#e6c2c0", "#d8a6a6", "#c78d94", "#b17587", "#976480",
+    "#7c5678", "#614d6e", "#4a4869", "#3a4568", "#2f4166",
+    "#293c60", "#243655", "#1f2f48",
 ]
-SEQ_CMAP = LinearSegmentedColormap.from_list("seq_blue", _BLUE_STEPS)
+SEQ_CMAP = LinearSegmentedColormap.from_list("seq_red_blue", _RED_BLUE_STEPS)
 
 N_DISKS = 6
 CHUNKS_PER_DISK = 5
@@ -57,9 +61,9 @@ def draw_disk_frame(ax, x0, label):
             fontsize=9.5, color=INK_PRIMARY)
 
 
-def style_panel(ax, caption):
+def style_panel(ax, caption, ylim=(-0.85, 1.34)):
     ax.set_xlim(-0.05, group_width() + 0.05)
-    ax.set_ylim(-0.85, 1.34)
+    ax.set_ylim(*ylim)
     ax.set_xticks([])
     ax.set_yticks([])
     ax.set_facecolor(SURFACE)
@@ -72,28 +76,36 @@ def style_panel(ax, caption):
 
 
 def draw_peter_panel(ax):
-    ax.set_title("Sequential Striping", fontsize=13.5,
-                 color=INK_PRIMARY, pad=16, fontweight="bold")
     rows = 200
+    # Lighter near the top of a disk, darker near the bottom -- an HSV "V"
+    # ramp layered on top of the position-based hue, so the within-disk
+    # gradient reads clearly even though a single disk only spans 1/N_DISKS
+    # of SEQ_CMAP's (deliberately gradual) hue range. Scaling only V leaves
+    # hue/saturation -- i.e. the red-to-blue color scheme -- untouched.
+    depth = np.linspace(0, 1, rows)
+    v_scale = (1.25 - 0.55 * depth).reshape(rows, 1)
     for d in range(N_DISKS):
         x0 = col_x0(d)
         # This disk holds the d-th contiguous 1/N_DISKS slice of the logical
         # sequence, so its column continues exactly where the previous disk's
         # column left off -- position order == disk order.
-        seg = np.linspace(d / N_DISKS, (d + 1) / N_DISKS, rows).reshape(rows, 1)
-        ax.imshow(seg, cmap=SEQ_CMAP, vmin=0, vmax=1, aspect="auto",
+        seg = np.linspace(d / N_DISKS, (d + 1) / N_DISKS, rows)
+        rgba = SEQ_CMAP(seg)
+        hsv = rgb_to_hsv(rgba[:, :3])
+        hsv[:, 2:3] = np.clip(hsv[:, 2:3] * v_scale, 0, 1)
+        rgba[:, :3] = hsv_to_rgb(hsv)
+        img = rgba.reshape(rows, 1, 4)
+        ax.imshow(img, aspect="auto",
                   extent=(x0, x0 + COL_WIDTH, 0, 1), origin="upper", zorder=1)
         draw_disk_frame(ax, x0, f"Disk {d}")
     style_panel(
         ax,
         "Contiguous Within Disk, Ordered by Sequence Position",
+        ylim=(-0.18, 1.34),
     )
 
 
 def draw_chunkseq_panel(ax):
-    ax.set_title("Hashed Chunking", fontsize=13.5,
-                 color=INK_PRIMARY, pad=16, fontweight="bold")
-
     # Simulates parlay::hash64(slot) % num_drives: chunk order is scrambled by
     # a deterministic hash, then dealt round-robin so drive load stays
     # balanced (balls-in-bins) while original-position order is destroyed.
@@ -121,6 +133,13 @@ def draw_chunkseq_panel(ax):
     )
     draw_chunks_array(ax)
 
+    # Dashed divider between the external/on-disk tiles above and the
+    # in-memory chunk_seq.chunks array below.
+    ax.add_line(Line2D(
+        [0, group_width()], [-0.12, -0.12],
+        color=INK_MUTED, linewidth=1.4, linestyle=(0, (4, 3)), zorder=10,
+    ))
+
 
 def draw_chunks_array(ax):
     # Depicts chunk_seq.chunks: the in-memory, index-ordered accessor -- drawn
@@ -128,7 +147,7 @@ def draw_chunks_array(ax):
     # (same chunks, same colors, but back in original index order: chunks[i]
     # is a direct, no-I/O lookup regardless of which physical disk holds it).
     ax.text(group_width() / 2, -0.18,
-            "chunk_seq.chunks (std::vector<chunk>)",
+            "In-Memory Representation",
             ha="center", va="top", fontsize=10, color=INK_PRIMARY,
             fontweight="bold")
 
@@ -174,49 +193,51 @@ def draw_colorbar(ax):
             transform=ax.transAxes)
 
 
-def build_figure():
-    fig = plt.figure(figsize=(13, 6.8), constrained_layout=True)
+def build_single_panel_figure(title, draw_panel, figsize=(7.5, 7)):
+    fig = plt.figure(figsize=figsize, constrained_layout=True)
     fig.patch.set_facecolor(SURFACE)
-    gs = fig.add_gridspec(2, 2, height_ratios=[1, 0.10], hspace=0.05, wspace=0.14)
+    # Colorbar first (top row) so the legend is seen before the panel it
+    # explains; the panel itself is the larger bottom row.
+    gs = fig.add_gridspec(2, 1, height_ratios=[0.14, 1], hspace=0.05)
 
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax2 = fig.add_subplot(gs[0, 1])
-    cax = fig.add_subplot(gs[1, :])
+    cax = fig.add_subplot(gs[0])
     cax.set_facecolor(SURFACE)
+    ax = fig.add_subplot(gs[1])
 
-    draw_peter_panel(ax1)
-    draw_chunkseq_panel(ax2)
     draw_colorbar(cax)
+    draw_panel(ax)
 
-    fig.suptitle(
-        "Sequence Representation",
-        fontsize=15, color=INK_PRIMARY, fontweight="bold",
-    )
-
-    # Vertical divider between the two panels, placed at the actual midpoint
-    # of their figure-coordinate bounding boxes once constrained_layout settles.
-    fig.canvas.draw()
-    pos1 = ax1.get_position()
-    pos2 = ax2.get_position()
-    mid_x = (pos1.x1 + pos2.x0) / 2
-    fig.add_artist(Line2D(
-        [mid_x, mid_x], [pos2.y0 - 0.02, pos1.y1 + 0.01],
-        transform=fig.transFigure, color=INK_MUTED, linewidth=1.4,
-        linestyle=(0, (4, 3)), zorder=10,
-    ))
+    fig.suptitle(title, fontsize=15, color=INK_PRIMARY, fontweight="bold")
     return fig
+
+
+def build_sequential_figure():
+    return build_single_panel_figure(
+        "Sequential Striping", draw_peter_panel, figsize=(7.5, 5.4))
+
+
+def build_hashed_figure():
+    return build_single_panel_figure("Hashed Chunking", draw_chunkseq_panel)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", default="disk_layout_diagram.png",
-                         help="output PNG path (default: %(default)s)")
+    parser.add_argument(
+        "--out-prefix", default="disk_layout_diagram",
+        help="output PNG basename prefix; writes "
+             "<prefix>_sequential.png and <prefix>_hashed.png "
+             "(default: %(default)s)")
     args = parser.parse_args()
 
-    fig = build_figure()
-    fig.savefig(args.out, dpi=150, facecolor=fig.get_facecolor())
-    plt.close(fig)
-    print(f"wrote {args.out}")
+    for suffix, build in (
+        ("sequential", build_sequential_figure),
+        ("hashed", build_hashed_figure),
+    ):
+        out = f"{args.out_prefix}_{suffix}.png"
+        fig = build()
+        fig.savefig(out, dpi=150, facecolor=fig.get_facecolor())
+        plt.close(fig)
+        print(f"wrote {out}")
 
 
 if __name__ == "__main__":

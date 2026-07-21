@@ -22,7 +22,7 @@ namespace ChunkSequenceOps {
  * NReader<T> — read N chunk sequences in lockstep and hand a worker the N
  * co-indexed buffers together from a single Poll().
  *
- * Motivation (see chunk_count_sort.h): some primitives need to walk two (or
+ * Motivation (see count_sort.h): some primitives need to walk two (or
  * more) chunk_seqs that share an index space at the same time — e.g. a values
  * sequence and a same-length bucket-id sequence — pairing element k of chunk i
  * in one with element k of chunk i in the other.  A single ChunkSequenceReader

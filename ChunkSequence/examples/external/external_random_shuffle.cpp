@@ -3,7 +3,7 @@
 //
 //   1. random_shuffle_method  (ExternalPrimitives/random_shuffle.h) -- the
 //      bucketing shuffle written on the high-level abstractions: a fused delayed
-//      map draws each element's bucket, chunk_count_sort routes the elements into
+//      map draws each element's bucket, count_sort routes the elements into
 //      per-bucket external sequences, each bucket is read back / shuffled in DRAM
 //      / written out as *fresh* files, flatten concatenates them.
 //   2. ChunkSequenceOps::Permutation::Permute -- the same algorithm on the

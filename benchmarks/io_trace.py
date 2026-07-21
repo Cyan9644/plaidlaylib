@@ -40,10 +40,10 @@ largest point traced (the default), that summary would be a single-point
 For the single largest size in the run (always, sweep or not), if its markers
 carry 2+ distinct labels (e.g. samplesort_three_way's peter/direct/primitives),
 each label's own build_start..op_end window is additionally sliced out and
-plotted/saved standalone (trace_<label>.png/.csv, same 3-panel layout as the
-combined trace.png) — the per-algorithm breakdown, generated once rather than
-at every sweep point since it's mainly useful at the scale you actually care
-about.
+plotted/saved standalone (trace_<label>_throughput/_cpu/_drives.png, plus
+trace_<label>.csv, same per-panel breakdown as the combined trace) — the
+per-algorithm breakdown, generated once rather than at every sweep point since
+it's mainly useful at the scale you actually care about.
 
 MEANINGFUL ONLY ON REAL BLOCK DEVICES.  On the tmpfs dev box the "SSDs" are
 RAM-backed and generate no /proc/diskstats traffic, so the disk panels come out
@@ -365,37 +365,72 @@ def _overlay_phases(ax, markers, t0):
         ax.axvline(mono - t0, color=color, linestyle="--", linewidth=1.0, alpha=0.8)
 
 
-def plot_trace(ser, markers, devices, t0, path, title):
+def _phase_legend(fig, markers):
+    """Bottom phase-boundary legend, if any markers fall on this panel."""
+    seen = {}
+    for label, _ in markers:
+        color, name = PHASE_STYLE.get(label, ("k", label))
+        seen[name] = color
+    if not seen:
+        return
+    from matplotlib.lines import Line2D
+    handles = [Line2D([0], [0], color=c, linestyle="--", label=n)
+               for n, c in seen.items()]
+    # Below the x-axis label (not just the axes) so it doesn't collide with
+    # it now that each panel is its own standalone figure; bbox_inches="tight"
+    # keeps it in frame.
+    fig.legend(handles=handles, loc="lower center", ncol=len(handles),
+               bbox_to_anchor=(0.5, -0.15), title="phase boundaries")
+
+
+def plot_trace(ser, markers, devices, t0, path):
+    """Write three standalone panels — throughput / CPU / per-drive access
+    pattern — as separate PNGs derived from `path` (<base>_throughput.png,
+    <base>_cpu.png, <base>_drives.png) instead of one combined figure.
+    """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    base, ext = os.path.splitext(path)
     xs = [t - t0 for t in ser["t"]]
-    fig, (ax_bw, ax_bn, ax_hm) = plt.subplots(
-        3, 1, figsize=(12, 12), constrained_layout=True,
-        gridspec_kw={"height_ratios": [1, 1, 1.3]})
 
     # A — aggregate throughput (read/write asymmetry).
+    fig, ax_bw = plt.subplots(figsize=(10, 4.5), constrained_layout=True)
     ax_bw.plot(xs, ser["agg_read"], "-", color="tab:blue", label="read")
     ax_bw.plot(xs, ser["agg_write"], "-", color="tab:red", label="write")
     ax_bw.set_ylabel("aggregate MB/s")
+    ax_bw.set_xlabel("seconds since first sample")
     ax_bw.set_title("Aggregate throughput across all drives (read vs write)")
     ax_bw.grid(True, linestyle=":", linewidth=0.5)
     _overlay_phases(ax_bw, markers, t0)
     ax_bw.legend(loc="upper right")
+    _phase_legend(fig, markers)
+    throughput_path = f"{base}_throughput{ext}"
+    fig.savefig(throughput_path, dpi=140, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  wrote {throughput_path}", flush=True)
 
-    # B — bottleneck (io-bound vs cpu-bound).
+    # B — CPU/disk utilization (io-bound vs cpu-bound).
+    fig, ax_bn = plt.subplots(figsize=(10, 4.5), constrained_layout=True)
     ax_bn.plot(xs, ser["mean_util"], "-", color="tab:purple", label="mean drive %util")
     ax_bn.plot(xs, ser["cpu"], "-", color="tab:green", label="CPU %")
     ax_bn.plot(xs, ser["iowait"], "-", color="tab:orange", label="iowait %")
     ax_bn.set_ylabel("percent")
+    ax_bn.set_xlabel("seconds since first sample")
     ax_bn.set_ylim(0, 105)
-    ax_bn.set_title("Bottleneck: drive utilization vs CPU")
+    ax_bn.set_title("CPU/Disk Utilization")
     ax_bn.grid(True, linestyle=":", linewidth=0.5)
     _overlay_phases(ax_bn, markers, t0)
     ax_bn.legend(loc="upper right")
+    _phase_legend(fig, markers)
+    cpu_path = f"{base}_cpu{ext}"
+    fig.savefig(cpu_path, dpi=140, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  wrote {cpu_path}", flush=True)
 
     # C — per-drive access pattern heatmap (read+write MB/s).
+    fig, ax_hm = plt.subplots(figsize=(10, 5.5), constrained_layout=True)
     if devices and xs:
         import numpy as np
         mat = np.array([[ser["dev_read"][d][i] + ser["dev_write"][d][i]
@@ -404,7 +439,7 @@ def plot_trace(ser, markers, devices, t0, path, title):
                           extent=[xs[0], xs[-1], -0.5, len(devices) - 0.5],
                           interpolation="nearest")
         ax_hm.set_yticks(range(len(devices)))
-        ax_hm.set_yticklabels(devices, fontsize=6)
+        ax_hm.set_yticklabels([f"drive {i}" for i in range(len(devices))], fontsize=6)
         fig.colorbar(im, ax=ax_hm, label="read+write MB/s")
     else:
         ax_hm.text(0.5, 0.5, "no block-device traffic\n(tmpfs? wrong --mount-glob?)",
@@ -412,24 +447,11 @@ def plot_trace(ser, markers, devices, t0, path, title):
     ax_hm.set_title("Per-drive access pattern (read+write MB/s)")
     ax_hm.set_xlabel("seconds since first sample")
     _overlay_phases(ax_hm, markers, t0)
-
-    # phase legend across the top
-    seen = {}
-    for label, _ in markers:
-        color, name = PHASE_STYLE.get(label, ("k", label))
-        seen[name] = color
-    if seen:
-        from matplotlib.lines import Line2D
-        handles = [Line2D([0], [0], color=c, linestyle="--", label=n)
-                   for n, c in seen.items()]
-        # Below the figure so it never collides with the suptitle / panel A
-        # title; bbox_inches="tight" keeps it in frame.
-        fig.legend(handles=handles, loc="lower center", ncol=len(handles),
-                   bbox_to_anchor=(0.5, -0.05), title="phase boundaries")
-    fig.suptitle(title)
-    fig.savefig(path, dpi=140, bbox_inches="tight")
+    _phase_legend(fig, markers)
+    drives_path = f"{base}_drives{ext}"
+    fig.savefig(drives_path, dpi=140, bbox_inches="tight")
     plt.close(fig)
-    print(f"  wrote {path}", flush=True)
+    print(f"  wrote {drives_path}", flush=True)
 
 
 def write_sweep_csv(path, rows):
@@ -694,9 +716,7 @@ def main():
         print(f"Trace directory: {outdir}", flush=True)
 
         write_trace_csv(os.path.join(outdir, "trace.csv"), ser, devices, t0)
-        title = (f"{entry['name']}  {desc}  "
-                 f"({len(devices)} drives, {args.interval}s samples)")
-        plot_trace(ser, markers, devices, t0, os.path.join(outdir, "trace.png"), title)
+        plot_trace(ser, markers, devices, t0, os.path.join(outdir, "trace.png"))
 
         # tidy the drives before the next point, matching run_benches' hygiene
         rb.clear_bench_data(args.mount_glob, not args.no_clean)
@@ -718,12 +738,12 @@ def main():
                     row[f"{label}_{kind}_{stat_name}"] = val
         sweep_rows.append(row)
 
-    # Per-algorithm breakdown (same 3-panel style as the combined trace.png:
-    # aggregate throughput / drive %util vs CPU / per-drive heatmap) for the
-    # largest point only, one set of plots per label found in its markers
-    # (e.g. peter/direct/primitives for samplesort_three_way). Each is that
-    # algorithm's own build_start..op_end window sliced out and plotted
-    # exactly as if it had been traced alone.
+    # Per-algorithm breakdown (same 3-file style as the combined trace:
+    # aggregate throughput / CPU-disk utilization / per-drive heatmap, each
+    # its own PNG) for the largest point only, one set of plots per label
+    # found in its markers (e.g. peter/direct/primitives for
+    # samplesort_three_way). Each is that algorithm's own build_start..op_end
+    # window sliced out and plotted exactly as if it had been traced alone.
     if largest is not None:
         windows = pair_windows(largest["markers"])
         if len(windows) >= 2:
@@ -740,11 +760,8 @@ def main():
                 sub_markers = [(lbl, m) for lbl, m in largest["markers"] if lo <= m <= hi]
                 write_trace_csv(os.path.join(largest["outdir"], f"trace_{label}.csv"),
                                 sub_ser, devices, lo)
-                sub_title = (f"{args.example} / {label}  {largest['desc']}  "
-                            f"({len(devices)} drives, "
-                            f"{args.interval}s samples)")
                 plot_trace(sub_ser, sub_markers, devices, lo,
-                          os.path.join(largest["outdir"], f"trace_{label}.png"), sub_title)
+                          os.path.join(largest["outdir"], f"trace_{label}.png"))
         elif windows:
             print(f"\n(only one labeled phase ({next(iter(windows))}) found; "
                   "nothing to split into a per-algorithm breakdown)", flush=True)

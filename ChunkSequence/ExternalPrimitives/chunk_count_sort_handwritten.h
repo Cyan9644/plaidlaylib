@@ -1,6 +1,6 @@
 //this file is kept for reference but should not be used
-#ifndef CHUNK_COUNT_SORT_H
-#define CHUNK_COUNT_SORT_H
+#ifndef count_sort_H
+#define count_sort_H
 #include <pthread.h>
 #include "ChunkSequence/external_engine.h"
 #include <cassert>
@@ -46,7 +46,7 @@ namespace ChunkSequenceOps{
 //a better approach is probably to have an array of bucket_number size with each element being an external sequence
 //but then eventually we need to fuse these back into a single sequence, which shouldn't be too bad
 template<typename T>
-chunk_seq& chunk_count_sort(const chunk_seq& seq, const chunk_seq& ids, std::vector<chunk_seq&> externalSequenceVector){
+chunk_seq& count_sort(const chunk_seq& seq, const chunk_seq& ids, std::vector<chunk_seq&> externalSequenceVector){
     //what we want to do here is poll from both seq and ids to match elements to bucket indices
     //the current strategy is to make separate buffers for each bucket and push these to the external sequence corresponding to the
     //bucket in externalSequenceVector when they become full

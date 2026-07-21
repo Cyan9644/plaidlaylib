@@ -12,7 +12,7 @@
 // one reads a chunk_seq through ChunkSequenceReader and names its output chunks.
 //
 // external_samplesort.h is the other experiment: the same algorithm built out of
-// the library's primitives (delayed map -> chunk_count_sort -> ... -> flatten).
+// the library's primitives (delayed map -> count_sort -> ... -> flatten).
 // Between the three, "algorithm", "substrate" and "primitives overhead" are each
 // isolated.  This file is deliberately an example, not a library primitive: what
 // it does by hand is the list of abstractions the primitives are missing (see

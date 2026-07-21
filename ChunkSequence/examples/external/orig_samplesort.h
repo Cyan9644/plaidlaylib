@@ -14,7 +14,7 @@
 #include "ChunkSequence/ExternalPrimitives/materialize.h"
 #include "ChunkSequence/chunk_pack.h"
 #include "ChunkSequence/ExternalPrimitives/scan_find.h"
-#include "ChunkSequence/ExternalPrimitives/chunk_count_sort2.h"
+#include "ChunkSequence/ExternalPrimitives/count_sort2.h"
 #include "ChunkSequence/ExternalPrimitives/flatten.h"
 #include "ChunkSequence/examples/external/primitive_quicksort.h"
 
@@ -90,7 +90,7 @@ auto ids = ChunkMap<T, size_t>(seq, "ss_id_" + tag,[&](T e){//problem: the dual 
 });
 
 std::vector<chunk_seq> externalSequenceVector(num_buckets);
-ChunkSequenceOps::chunk_count_sort2<T>(seq, ids, externalSequenceVector, "ss_bucket_" + tag);
+ChunkSequenceOps::count_sort2<T>(seq, ids, externalSequenceVector, "ss_bucket_" + tag);
 
 //it should now be the case that externalSequenceVector is a full vector of the individual external sequences
 //in this case we just need a simple flatten to put all the chunk headers into a single list

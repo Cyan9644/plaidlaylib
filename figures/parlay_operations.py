@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Conceptual diagram: parallel collection operations (map, reduce) over an
-in-memory parlay::sequence<T>.  Not data-driven (no CSV input, no CLI sweep)
--- it renders synthetic layout data purely to illustrate the two primitives.
-Sibling to parlay_vs_chunkseq.py / disk_layout_diagram.py; shares their
-palette so the three figures read as one set.
+"""Conceptual diagrams: parallel collection operations over an in-memory
+parlay::sequence<T>.  Not data-driven (no CSV input, no CLI sweep) -- it
+renders synthetic layout data purely to illustrate the primitives.  Writes two
+independent single-panel PNGs (sequence, map); shares its palette and
+single-panel layout with figures/disk_layout_diagram.py so the figures read
+as one set.
 """
 import argparse
 
@@ -14,23 +15,26 @@ import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LinearSegmentedColormap
-from matplotlib.lines import Line2D
 
 # Light-mode chart palette (see the dataviz skill's reference palette;
-# matches figures/parlay_vs_chunkseq.py / disk_layout_diagram.py).
+# matches figures/disk_layout_diagram.py).
 SURFACE = "#fcfcfb"
 INK_PRIMARY = "#0b0b0b"
 INK_SECONDARY = "#52514e"
 INK_MUTED = "#898781"
 BASELINE = "#c3c2b7"
 
-# Sequential blue ramp (steps 100->700): color encodes an element's original
-# position in the logical sequence, consistently across panels.
-_BLUE_STEPS = [
-    "#cde2fb", "#b7d3f6", "#9ec5f4", "#86b6ef", "#6da7ec", "#5598e7",
-    "#3987e5", "#2a78d6", "#256abf", "#1c5cab", "#184f95", "#104281", "#0d366b",
+# Color encodes an element's original position in the logical sequence,
+# consistently across panels. A red-to-blue ramp (through dusty rose, mauve,
+# plum, and indigo) shifts noticeably from end to end, but stays low-chroma
+# throughout -- no saturated/neon stop anywhere on the ramp -- so it stays
+# easy on the eyes.
+_RED_BLUE_STEPS = [
+    "#e6c2c0", "#d8a6a6", "#c78d94", "#b17587", "#976480",
+    "#7c5678", "#614d6e", "#4a4869", "#3a4568", "#2f4166",
+    "#293c60", "#243655", "#1f2f48",
 ]
-SEQ_CMAP = LinearSegmentedColormap.from_list("seq_blue", _BLUE_STEPS)
+SEQ_CMAP = LinearSegmentedColormap.from_list("seq_red_blue", _RED_BLUE_STEPS)
 
 
 def dram_box(ax, x0, y0, w, h, label):
@@ -85,12 +89,8 @@ def draw_parlay_panel(ax):
             "Physically Contiguous",
             ha="center", va="top", fontsize=10, color=INK_PRIMARY,
             fontweight="bold")
-    ax.text(0.5, box_y0 - 0.34,
-            "Stored in DRAM",
-            ha="center", va="top", fontsize=9.5, color=INK_PRIMARY,
-            fontweight="bold")
 
-    style_panel(ax, "Sequence lives in DRAM", ylim=(-2.05, 1.35))
+    style_panel(ax, "Sequence lives in DRAM", ylim=(-0.85, 0.60))
 
 
 def draw_map_panel(ax):
@@ -139,71 +139,7 @@ def draw_map_panel(ax):
 
     style_panel(
         ax, "map(sequence) --> sequence",
-        ylim=(-0.62, 0.95),
-    )
-
-
-def draw_reduce_panel(ax):
-    ax.set_title("parlay::reduce", fontsize=13, color=INK_PRIMARY, pad=12,
-                 fontweight="bold")
-
-    n_leaves = 8
-    x0s, span = 0.08, 0.84
-    leaf_x = [x0s + (i + 0.5) * span / n_leaves for i in range(n_leaves)]
-    levels_y = [0.55, 0.28, 0.01, -0.30]  # leaves, 4, 2, 1 (root)
-
-    level_x = [leaf_x]
-    for lvl in range(1, 4):
-        prev = level_x[-1]
-        level_x.append([(prev[2 * k] + prev[2 * k + 1]) / 2
-                         for k in range(len(prev) // 2)])
-
-    # Connectors, drawn before nodes so node markers sit on top.
-    for lvl in range(1, 4):
-        y_child, y_parent = levels_y[lvl - 1], levels_y[lvl]
-        prev = level_x[lvl - 1]
-        for k, px in enumerate(level_x[lvl]):
-            for cx in (prev[2 * k], prev[2 * k + 1]):
-                ax.add_line(Line2D(
-                    [cx, px], [y_child, y_parent],
-                    color=INK_MUTED, linewidth=1.1, zorder=1,
-                ))
-
-    # Leaves: small colored squares (position-encoded, same ramp as elsewhere).
-    leaf_w, leaf_h = 0.045, 0.16
-    for i, cx in enumerate(leaf_x):
-        ax.add_patch(mpatches.Rectangle(
-            (cx - leaf_w / 2, levels_y[0] - leaf_h / 2), leaf_w, leaf_h,
-            facecolor=SEQ_CMAP(i / n_leaves), edgecolor=SURFACE,
-            linewidth=0.5, zorder=3,
-        ))
-
-    # Internal combine nodes: neutral ink tone -- these are aggregate
-    # values, not one original position.
-    for lvl in (1, 2):
-        for px in level_x[lvl]:
-            ax.add_patch(mpatches.Circle(
-                (px, levels_y[lvl]), 0.028,
-                facecolor=INK_SECONDARY, edgecolor=SURFACE,
-                linewidth=0.6, zorder=3,
-            ))
-
-    # Root result.
-    root_x, root_y = level_x[3][0], levels_y[3]
-    ax.add_patch(mpatches.Circle(
-        (root_x, root_y), 0.055,
-        facecolor=INK_PRIMARY, edgecolor=SURFACE, linewidth=0.8, zorder=4,
-    ))
-    ax.text(root_x, root_y, "r", ha="center", va="center",
-            fontsize=10, color=SURFACE, fontweight="bold", zorder=5)
-
-    # ax.text(0.5, levels_y[0] + leaf_h / 2 + 0.06,
-    #         "monoid-combine pairs at each level, in parallel",
-    #         ha="center", va="bottom", fontsize=8.5, color=INK_SECONDARY)
-
-    style_panel(
-        ax, "reduce(sequence, monoid) --> value",
-        ylim=(-0.55, 0.92),
+        ylim=(-0.45, 0.95),
     )
 
 
@@ -221,58 +157,52 @@ def draw_colorbar(ax):
         spine.set_visible(False)
 
 
-def build_figure():
-    fig = plt.figure(figsize=(13, 8.4), constrained_layout=True)
+def build_single_panel_figure(title, draw_panel, figsize=(7.5, 7)):
+    fig = plt.figure(figsize=figsize, constrained_layout=True)
     fig.patch.set_facecolor(SURFACE)
-    gs = fig.add_gridspec(3, 2, height_ratios=[1, 1, 0.08],
-                           hspace=0.22, wspace=0.14)
+    # Colorbar first (top row) so the legend is seen before the panel it
+    # explains; the panel itself is the larger bottom row.
+    gs = fig.add_gridspec(2, 1, height_ratios=[0.14, 1], hspace=0.05)
 
-    ax_left = fig.add_subplot(gs[0:2, 0])
-    ax_map = fig.add_subplot(gs[0, 1])
-    ax_reduce = fig.add_subplot(gs[1, 1])
-    cax = fig.add_subplot(gs[2, :])
+    cax = fig.add_subplot(gs[0])
     cax.set_facecolor(SURFACE)
+    ax = fig.add_subplot(gs[1])
 
-    draw_parlay_panel(ax_left)
-    draw_map_panel(ax_map)
-    draw_reduce_panel(ax_reduce)
     draw_colorbar(cax)
+    draw_panel(ax)
 
-    fig.suptitle(
-        "Objectives and Primitive Operations",
-        fontsize=15, color=INK_PRIMARY, fontweight="bold",
-    )
-
-    fig.canvas.draw()
-    pos_left = ax_left.get_position()
-    pos_map = ax_map.get_position()
-    pos_reduce = ax_reduce.get_position()
-
-    mid_x = (pos_left.x1 + pos_map.x0) / 2
-    fig.add_artist(Line2D(
-        [mid_x, mid_x], [pos_reduce.y0 - 0.01, pos_left.y1 + 0.01],
-        transform=fig.transFigure, color=INK_MUTED, linewidth=1.4,
-        linestyle=(0, (4, 3)), zorder=10,
-    ))
-    mid_y = (pos_map.y0 + pos_reduce.y1) / 2
-    fig.add_artist(Line2D(
-        [mid_x, pos_map.x1], [mid_y, mid_y],
-        transform=fig.transFigure, color=INK_MUTED, linewidth=1.1,
-        linestyle=(0, (4, 3)), zorder=10,
-    ))
+    fig.suptitle(title, fontsize=15, color=INK_PRIMARY, fontweight="bold")
     return fig
+
+
+def build_sequence_figure():
+    return build_single_panel_figure(
+        "Sequence Representation", draw_parlay_panel, figsize=(7.5, 4.6))
+
+
+def build_map_figure():
+    return build_single_panel_figure(
+        "The Map Primitive", draw_map_panel, figsize=(7.5, 4.4))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", default="parlay_operations.png",
-                         help="output PNG path (default: %(default)s)")
+    parser.add_argument(
+        "--out-prefix", default="parlay_operations",
+        help="output PNG basename prefix; writes "
+             "<prefix>_sequence.png and <prefix>_map.png "
+             "(default: %(default)s)")
     args = parser.parse_args()
 
-    fig = build_figure()
-    fig.savefig(args.out, dpi=150, facecolor=fig.get_facecolor())
-    plt.close(fig)
-    print(f"wrote {args.out}")
+    for suffix, build in (
+        ("sequence", build_sequence_figure),
+        ("map", build_map_figure),
+    ):
+        out = f"{args.out_prefix}_{suffix}.png"
+        fig = build()
+        fig.savefig(out, dpi=150, facecolor=fig.get_facecolor())
+        plt.close(fig)
+        print(f"wrote {out}")
 
 
 if __name__ == "__main__":

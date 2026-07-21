@@ -10,7 +10,7 @@
 #include <parlay/random.h>
 #include "ChunkSequence/ExternalPrimitives/materialize.h"
 #include "ChunkSequence/ExternalPrimitives/scan_find.h"
-#include "ChunkSequence/ExternalPrimitives/chunk_count_sort.h"
+#include "ChunkSequence/ExternalPrimitives/count_sort.h"
 #include "ChunkSequence/ExternalPrimitives/flatten.h"
 
 
@@ -77,10 +77,10 @@ auto seconds = parlay::map(pivots, [](const auto& p){ return p.second; });
 // Route every key into its bucket in a single streaming pass over seq, deriving
 // the bucket from the value (ss.rank) on the fly.  The earlier version first
 // materialized a full size_t bucket-id chunk_seq to disk with ChunkMap (an 8n
-// write + 8n read) purely to feed chunk_count_sort2; folding the rank into the
+// write + 8n read) purely to feed count_sort2; folding the rank into the
 // count sort drops that entire pass -- seq is now read once here, not twice.
 std::vector<chunk_seq> externalSequenceVector(num_buckets);
-ChunkSequenceOps::chunk_count_sort_by_key<T>(
+ChunkSequenceOps::count_sort_by_key<T>(
     seq, num_buckets, externalSequenceVector,
     [&](T e){ return ss.rank(e, less1); },
     "fs_bucket_" + tag);
