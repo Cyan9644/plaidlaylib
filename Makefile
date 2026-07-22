@@ -42,20 +42,22 @@ TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/flatMapTest $(BINDIR)/findIfTest \
                  $(BINDIR)/histogramTest $(BINDIR)/kmpTest $(BINDIR)/rabinKarpTest \
                  $(BINDIR)/scalarTest $(BINDIR)/bigintAddTest $(BINDIR)/convexHullTest \
-                 $(BINDIR)/partitionTest $(BINDIR)/segmentedReduceTest
+                 $(BINDIR)/partitionTest $(BINDIR)/segmentedReduceTest \
+                 $(BINDIR)/dc3Test
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/rabin_karpExample $(BINDIR)/kth_smallestExample \
                     $(BINDIR)/external_samplesortExample $(BINDIR)/external_linefitExample \
                     $(BINDIR)/fitmem_sortExample $(BINDIR)/fitmem_kth_smallestExample \
-                    $(BINDIR)/bigint_addExample $(BINDIR)/chunk_cutExample \
+                    $(BINDIR)/bigint_addExample $(BINDIR)/bigint_add_eagerExample \
+                    $(BINDIR)/chunk_cutExample \
                     $(BINDIR)/external_samplesort_vs_peterExample \
                     $(BINDIR)/direct_samplesort_vs_peterExample \
                     $(BINDIR)/samplesort_three_wayExample \
                     $(BINDIR)/external_random_shuffleExample \
                     $(BINDIR)/convex_hullExample \
-                    $(BINDIR)/bellman_fordExample
+                    $(BINDIR)/bellman_fordExample \
 
 # Peter's external sample sort (the second contestant in the
 # external_samplesort_vs_peter comparison) ships its own configs.h /
@@ -207,6 +209,11 @@ $(BINDIR)/partitionTest: ChunkSequence/tests/partition_test.cpp $(UTIL_OBJS)
 $(BINDIR)/segmentedReduceTest: ChunkSequence/tests/segmented_reduce_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
+# dc3Test: out-of-core DC3 suffix array vs brute force + a streaming-vs-DRAM
+# differential.  Header-only algorithm (chunk_dc3.h), no upstream baseline.
+$(BINDIR)/dc3Test: ChunkSequence/tests/dc3_test.cpp $(UTIL_OBJS)
+	$(LINK)
+
 # convexHullTest includes upstream quickhull.h (its in-DRAM differential
 # baseline), so it needs the order-only deps/parlaylib-examples prereq.
 $(BINDIR)/convexHullTest: ChunkSequence/tests/convex_hull_test.cpp $(UTIL_OBJS) | deps/parlaylib-examples
@@ -286,6 +293,19 @@ $(BINDIR)/direct_samplesort_vs_peterExample: ChunkSequence/examples/external/dir
 # across rounds so no sort is always the one paying for the previous one's
 # deleted files.  Same shim as the pairwise drivers.
 $(BINDIR)/samplesort_three_wayExample: ChunkSequence/examples/external/samplesort_three_way.cpp $(UTIL_OBJS) $(OBJDIR)/peter_shim.o | deps/parlaylib-examples
+	$(LINK)
+
+# suffix_array: out-of-core prefix-doubling suffix array (built on the direct-I/O
+# sample sort) vs upstream parlaylib suffix_array in DRAM.  Same examples/external/
+# location and plain recipe as the other external siblings; the upstream baseline
+# header resolves via -Ideps (in $(INCLUDES)).
+$(BINDIR)/suffix_arrayExample: ChunkSequence/examples/external/suffix_array.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(LINK)
+
+# dc3: out-of-core DC3 / skew suffix array (streaming Kärkkäinen–Sanders on the
+# direct-I/O sample sort) vs upstream parlaylib suffix_array in DRAM.  Same
+# examples/external/ location and plain recipe as suffix_arrayExample.
+$(BINDIR)/dc3Example: ChunkSequence/examples/external/dc3.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # ── benchmarks ─────────────────────────────────────────────────────────────────

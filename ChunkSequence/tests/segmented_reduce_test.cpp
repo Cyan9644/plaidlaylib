@@ -123,7 +123,7 @@ int main(int argc, char* argv[]) {
     }
 
     {
-        const size_t n2 = std::min(n, 2'000'000ULL);
+        const size_t n2 = std::min(n, (size_t) 2'000'000ULL);
         const size_t ept2 = CHUNK_SIZE / sizeof(rec32);
         std::cout << "\n32-byte elements, n=" << n2 << " (elems_per_chunk="
                   << ept2 << ", != ELEMS_PER_CHUNK=" << ELEMS_PER_CHUNK << ")\n"

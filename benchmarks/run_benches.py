@@ -158,6 +158,35 @@ EXAMPLES = [
      "xlabel": "input size",
      "title": "Upper convex hull: out-of-core (quickhull) vs in-mem parlaylib",
      "data_globs": ["ch_in*", "ch_scratch*"]},
+    # suffix_arrayExample sweeps n; the plotted time is the construction (text
+    # build excluded).  Prefix-doubling does ~2 external sorts per round over
+    # ~log2(n) rounds, so its I/O (and peak disk residency) is many times the
+    # input -- run it standalone at SMALL --example-sizes (e.g. "8MiB 16MiB
+    # 32MiB"); it is deliberately NOT in the aggregate bench-examples list, whose
+    # 128MiB+ sizes would exceed a dev tmpfs.  All intermediates live under the
+    # sa_out prefix and are swept by the algorithm; sa_text/sa_out are the driver's.
+    {"name": "suffix_array", "target": "bin/suffix_arrayExample",
+     "cols": ["n", "build_s", "sa_s", "inmem_sa_s", "count", "throughput_gb_s"],
+     "time_col": "sa_s", "inmem_col": "inmem_sa_s",
+     "elem_bytes": 1, "input_seqs": 1,
+     "xlabel": "input size",
+     "title": "Suffix array: out-of-core (prefix doubling) vs in-mem parlaylib",
+     "data_globs": ["sa_text*", "sa_out*"]},
+    # dc3Example sweeps n; the plotted time is the DC3 construction (text build
+    # excluded).  DC3 recurses on a 2/3-shrinking problem, so its total I/O is a
+    # constant multiple of the input (not the O(log n) multiple prefix doubling
+    # pays) -- the direct head-to-head against suffix_array on identical text.
+    # Still several sorts per level, so like suffix_array it is kept OUT of the
+    # aggregate bench-examples list; run standalone at SMALL --example-sizes.  All
+    # intermediates live under the dc3_out prefix and are swept by the algorithm;
+    # dc3_text/dc3_out are the driver's.
+    {"name": "dc3", "target": "bin/dc3Example",
+     "cols": ["n", "build_s", "sa_s", "inmem_sa_s", "count", "throughput_gb_s"],
+     "time_col": "sa_s", "inmem_col": "inmem_sa_s",
+     "elem_bytes": 1, "input_seqs": 1,
+     "xlabel": "input size",
+     "title": "Suffix array: out-of-core (DC3 / skew) vs in-mem parlaylib",
+     "data_globs": ["dc3_text*", "dc3_out*"]},
     # kth_smallestExample sweeps n with k at the median (n/2); the plotted time
     # is the selection pass only (input build excluded).  Its recursion leaves
     # id_/flags_/next_ intermediates in addition to the kth_in input.
@@ -333,6 +362,22 @@ EXAMPLES = [
      "xlabel": "input size",
      "title": "big-integer add: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["bi_a*", "bi_b*", "bi_sum*"]},
+
+    # bigint_add_eagerExample: a SEPARATE, opt-in benchmark (deliberately NOT in
+    # the Makefile's bench-examples rules) that adds a third line — the same add
+    # done WITHOUT delayed fusion (intermediate classify/scan materialized to
+    # disk) — alongside the fused out-of-core add and the in-mem baseline.  Run
+    # it explicitly: `run_benches.py --example bigint_add_eager`.
+    {"name": "bigint_add_eager", "target": "bin/bigint_add_eagerExample",
+     "cols": ["n", "build_s", "add_s", "eager_add_s", "inmem_add_s",
+              "result_limbs", "throughput_gb_s"],
+     "time_col": "add_s", "inmem_col": "inmem_add_s",
+     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core delayed (fused)"),
+     "extra_series": [("eager_add_s", "out-of-core eager (no fusion)", "^-")],
+     "elem_bytes": 8, "input_seqs": 2,
+     "xlabel": "input size",
+     "title": "big-integer add: fused vs eager out-of-core vs in-mem parlaylib",
+     "data_globs": ["bie_a*", "bie_b*", "bie_sum*", "bie_eager*"]},
 
     # chunk_cutExample sweeps n; the plotted time is the cut itself (input build
     # excluded).  It cuts the middle ~half (k = n/2) with both endpoints in the

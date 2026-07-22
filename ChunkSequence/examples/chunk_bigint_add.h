@@ -34,8 +34,13 @@
 #include "parlay/primitives.h"
 #include "parlay/delayed.h"
 
+#include <unistd.h>
+
+#include "utils/file_utils.h"
+
 #include "ChunkSequence/chunk_seq.h"
 #include "ChunkSequence/chunk_delayed.h"
+#include "ChunkSequence/chunk_scan.h"
 
 namespace ChunkSequenceOps {
 
@@ -105,6 +110,85 @@ inline chunk_seq ChunkBigIntAdd(const chunk_seq& a, const chunk_seq& b,
     });
 
     chunk_seq result_seq = delayed::force(result, result_prefix);
+
+    // Same-sign addition that flips the sign bit overflowed into a new limb.
+    digit top = result_seq[n_a - 1];
+    if (a_sign == b_sign && ((top >> (digit_bits - 1)) != a_sign))
+        result_seq.push_back(a_sign ? static_cast<digit>(mask) : 0);
+
+    return result_seq;
+}
+
+// ── out-of-core: the SAME add, but WITHOUT delayed fusion ─────────────────────
+// A deliberately un-fused ("eager") counterpart to ChunkBigIntAdd, used only by
+// the bigint_add_eager benchmark to show the I/O cost the delayed layer avoids.
+// The library has no eager two-input combine, so the two zips necessarily stay
+// delayed; but the intermediate map(classify) and scan(carry) are materialized
+// to disk between primitives instead of being fused into one pass:
+//   stage 1: force(map(zip(A,B), classify))  -> a carry chunk_seq on disk
+//   stage 2: ChunkScan(carries, carry monoid) -> a scanned carry chunk_seq
+//   stage 3: force(map(zip(zip(A,B), scanned), add)) -> the result
+// The carry codes are stored as full 8-byte `digit`s (not the 1-byte `carry`
+// enum): the delayed layer's chunk grid is hardwired to 8-byte elements
+// (ELEMS_PER_CHUNK, delay<uint64_t>), so a narrower on-disk intermediate could
+// not be re-read by delay() in stage 3.  Same operand-swap / sign-extension
+// prologue and overflow epilogue as ChunkBigIntAdd; produces an identical result.
+inline chunk_seq ChunkBigIntAddEager(const chunk_seq& a, const chunk_seq& b,
+                                     const std::string& result_prefix,
+                                     bool extra_one = false) {
+    using namespace bigint_detail;
+
+    size_t n_a = ChunkSequenceOps::size(a);
+    size_t n_b = ChunkSequenceOps::size(b);
+
+    // Keep a the longer operand so only b needs sign-extension padding.
+    if (n_a < n_b) return ChunkBigIntAddEager(b, a, result_prefix, extra_one);
+    if (n_b == 0) return a;
+
+    const bool a_sign = a[n_a - 1] >> (digit_bits - 1);
+    const bool b_sign = b[n_b - 1] >> (digit_bits - 1);
+    const double_digit mask = (static_cast<double_digit>(1) << digit_bits) - 1;
+    const digit pad = b_sign ? static_cast<digit>(mask) : 0;  // sign-extend b
+
+    const std::string cls_prefix = result_prefix + "_cls";
+    const std::string scn_prefix = result_prefix + "_scn";
+
+    // Carry codes stored as 8-byte digits (see header note); the monoid is the
+    // same carry_fn, and identity is `propagate` (see file header) so an
+    // all-propagate block forwards an incoming carry across its boundary.
+    auto u64_carry_fn = [](digit x, digit y) {
+        return (y == (digit)propagate) ? x : y;
+    };
+
+    // ── stage 1: classify each limb position, materialized to disk ────────────
+    auto pairs = delayed::zip(delayed::delay(a), delayed::delay(b), pad);
+    chunk_seq classes = delayed::force(
+        delayed::map(pairs, [mask](auto p) {
+            return (digit)classify(std::get<0>(p), std::get<1>(p), mask);
+        }),
+        cls_prefix);
+
+    // ── stage 2: eager prefix scan of the carries, materialized to disk ───────
+    auto monoid = parlay::binary_op(u64_carry_fn, (digit)propagate);
+    chunk_seq scanned = ChunkScan<digit>(classes, scn_prefix, monoid).first;
+
+    // ── stage 3: final add (re-reads a, b; both zips still delayed) ───────────
+    auto triple_zipped =
+        delayed::zip(delayed::zip(delayed::delay(a), delayed::delay(b), pad),
+                     delayed::delay(scanned));
+    auto result = delayed::map(triple_zipped, [extra_one](auto triple) {
+        auto [av, bv] = std::get<0>(triple);
+        digit c = std::get<1>(triple);
+        return static_cast<digit>(av + bv +
+                                  (c == (digit)propagate ? (digit)extra_one : c));
+    });
+
+    chunk_seq result_seq = delayed::force(result, result_prefix);
+
+    // Drop the two on-disk intermediates so they don't accumulate on the drives.
+    for (const std::string& p : {cls_prefix, scn_prefix})
+        for (size_t d = 0, nd = GetSSDList().size(); d < nd; d++)
+            unlink(GetFileName(p, d).c_str());
 
     // Same-sign addition that flips the sign bit overflowed into a new limb.
     digit top = result_seq[n_a - 1];
