@@ -121,7 +121,14 @@ static void check(const std::string& name, const std::vector<digit>& a,
     const std::vector<digit> got = materialize(S);
     report(name + " [out-of-core]", got == expected,
            "got " + vec_head(got) + " want " + vec_head(expected));
-    cleanup_prefix("bta_a"); cleanup_prefix("bta_b"); cleanup_prefix("bta_out");
+    cleanup_prefix("bta_out");
+
+    // out-of-core, un-fused (eager) — same result, materialized intermediates.
+    chunk_seq SE = ChunkSequenceOps::ChunkBigIntAddEager(A, B, "bta_eager", extra_one);
+    const std::vector<digit> gote = materialize(SE);
+    report(name + " [out-of-core eager]", gote == expected,
+           "got " + vec_head(gote) + " want " + vec_head(expected));
+    cleanup_prefix("bta_a"); cleanup_prefix("bta_b"); cleanup_prefix("bta_eager");
 
     // in-memory reference
     parlay::sequence<digit> am(a.begin(), a.end());

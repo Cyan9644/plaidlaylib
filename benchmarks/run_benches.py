@@ -334,6 +334,22 @@ EXAMPLES = [
      "title": "big-integer add: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["bi_a*", "bi_b*", "bi_sum*"]},
 
+    # bigint_add_eagerExample: a SEPARATE, opt-in benchmark (deliberately NOT in
+    # the Makefile's bench-examples rules) that adds a third line — the same add
+    # done WITHOUT delayed fusion (intermediate classify/scan materialized to
+    # disk) — alongside the fused out-of-core add and the in-mem baseline.  Run
+    # it explicitly: `run_benches.py --example bigint_add_eager`.
+    {"name": "bigint_add_eager", "target": "bin/bigint_add_eagerExample",
+     "cols": ["n", "build_s", "add_s", "eager_add_s", "inmem_add_s",
+              "result_limbs", "throughput_gb_s"],
+     "time_col": "add_s", "inmem_col": "inmem_add_s",
+     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core delayed (fused)"),
+     "extra_series": [("eager_add_s", "out-of-core eager (no fusion)", "^-")],
+     "elem_bytes": 8, "input_seqs": 2,
+     "xlabel": "input size",
+     "title": "big-integer add: fused vs eager out-of-core vs in-mem parlaylib",
+     "data_globs": ["bie_a*", "bie_b*", "bie_sum*", "bie_eager*"]},
+
     # chunk_cutExample sweeps n; the plotted time is the cut itself (input build
     # excluded).  It cuts the middle ~half (k = n/2) with both endpoints in the
     # MIDDLE of a chunk (never on a chunk boundary), so the cut length scales with

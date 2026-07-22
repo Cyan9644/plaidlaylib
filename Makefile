@@ -49,13 +49,14 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/rabin_karpExample $(BINDIR)/kth_smallestExample \
                     $(BINDIR)/external_samplesortExample $(BINDIR)/external_linefitExample \
                     $(BINDIR)/fitmem_sortExample $(BINDIR)/fitmem_kth_smallestExample \
-                    $(BINDIR)/bigint_addExample $(BINDIR)/chunk_cutExample \
+                    $(BINDIR)/bigint_addExample $(BINDIR)/bigint_add_eagerExample \
+                    $(BINDIR)/chunk_cutExample \
                     $(BINDIR)/external_samplesort_vs_peterExample \
                     $(BINDIR)/direct_samplesort_vs_peterExample \
                     $(BINDIR)/samplesort_three_wayExample \
                     $(BINDIR)/external_random_shuffleExample \
                     $(BINDIR)/convex_hullExample \
-                    $(BINDIR)/bellman_fordExample
+                    $(BINDIR)/bellman_fordExample \
 
 # Peter's external sample sort (the second contestant in the
 # external_samplesort_vs_peter comparison) ships its own configs.h /
