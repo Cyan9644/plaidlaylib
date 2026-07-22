@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <functional>
+#include <limits>
 #include <random>
 #include <chrono>
 #include <cstdio>
@@ -26,8 +27,7 @@
 #include "ChunkSequence/ExternalPrimitives/sort_buckets.h"
 #include "ChunkSequence/ExternalPrimitives/inplace_bucket_sort.h"
 #include "ChunkSequence/examples/external/primitive_quicksort.h"
-
-#define DRAM_SIZE ((size_t)500 * 1024 * 1024 * 1024) //==500 GB
+#include "configs.h"
 
 
 
@@ -80,12 +80,10 @@ n+= seq.chunks[r].used;
   size_t filer= n;
   n/=sizeof(T);
   
-  size_t min_sample_size = std::max(1UL, 4 * parlay::num_workers() * filer/ DRAM_SIZE);
+  size_t min_sample_size = std::max(1UL, 4 * parlay::num_workers() * filer/ MAIN_MEMORY_SIZE);
 // size_t max_sample_size = std::max(1UL, std::min(n / sizeof(T), filer / O_DIRECT_MULTIPLE));
 size_t max_sample_size = std::max(1UL, std::min(n, filer / O_DIRECT_MULTIPLE));
   size_t num_samples = std::max(std::min(filer / (1UL << 27), max_sample_size), min_sample_size);
-
-  num_samples = (size_t{1} << parlay::log2_up(num_samples + 1)) - 1;
   _pt.mark("size/params");
 
   if (n < num_samples){
@@ -142,7 +140,15 @@ unsigned int sample_size = std::max<size_t>(1, num_samples);
     auto num_buckets = sample_size + 1;
 
 
-auto seconds = parlay::map(pivots, [](const auto& p){ return p.second; });
+// heap_tree requires exactly 2^k-1 entries (see deps/parlaylib's heap_tree.h),
+// but num_buckets above must stay the raw, unrounded pivot count to keep the
+// scatter-phase buffer pools (count_sort / BucketWriter) from ~doubling at
+// large n. So pad only the tree's internal array, with a sentinel pivot that
+// no real element can rank past -- rank() stays in [0, sample_size] exactly
+// as if the array had not been padded.
+const size_t heap_size = (size_t{1} << parlay::log2_up(sample_size + 1)) - 1;
+parlay::sequence<T> seconds(heap_size, std::numeric_limits<T>::max());
+parlay::parallel_for(0, sample_size, [&](size_t i){ seconds[i] = pivots[i].second; });
   parlay::internal::heap_tree ss(seconds);
   _pt.mark("sample:pivots/heap");
 
