@@ -255,13 +255,13 @@ EXAMPLES = [
               "peter_build_s", "direct_build_s", "prim_build_s", "peter_gb_s",
               "direct_gb_s", "prim_gb_s"],
      "time_col": "direct_sort_s", "inmem_col": "inmem_sort_s",
-     "series_labels": ("in-mem parlay::sort (DRAM)",
-                       "ours, direct I/O (out-of-core)"),
-     "extra_series": [("peter_sort_s", "Peter's sort (out-of-core)", "d-"),
-                      ("prim_sort_s", "ours, primitives (out-of-core)", "^-")],
+     "series_labels": ("parlay::sort (DRAM)",
+                       "Ours, Direct Port"),
+     "extra_series": [("peter_sort_s", "Li et al. 2025", "d-"),
+                      ("prim_sort_s", "Ours, Composed External", "^-")],
      "elem_bytes": 8, "input_seqs": 1,
-     "xlabel": "input size",
-     "title": "sample sort: three out-of-core implementations vs in-mem parlaylib",
+     "xlabel": "Input Size",
+     "title": "Sample Sort: External vs Native ParlayLib",
      "data_globs": ["dss_in*", "dss*", "ss_in*", "ss_id_*", "ss_bucket_*",
                     "ss_base_*", "ss_deg_*", "qs_base_*",
                     "pss_in*", "pss_out*", "spfx_*"]},
@@ -744,9 +744,9 @@ def _draw_panel(ax, xs, lines, xlabel, title, xfmt=None):
     if xfmt is not None:
         ax.xaxis.set_major_formatter(ticker.FuncFormatter(xfmt))
     ax.set_xlabel(xlabel)
-    ax.set_ylabel("operation time (s)")
+    ax.set_ylabel("Operation Time (s)")
     ax.set_title(title)
-    ax.grid(True, which="both", linestyle=":", linewidth=0.5)
+    ax.grid(True, which="both")
     ax.legend()
 
 
@@ -754,6 +754,8 @@ def plot_delayed(rows, path):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    import plot_style
+    plot_style.apply()
 
     xs = [int(r["n"]) for r in rows]
     raw = _series(rows, "raw_read_s")
@@ -783,6 +785,8 @@ def plot_chunk_size(rows, path):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    import plot_style
+    plot_style.apply()
 
     xs = [int(r["chunk_size_bytes"]) for r in rows]
     raw = _series(rows, "raw_s")
@@ -824,6 +828,8 @@ def plot_example(rows, entry, path):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    import plot_style
+    plot_style.apply()
 
     xs = [int(r["input_bytes"]) for r in rows]
     # Default: out-of-core chunk impl vs in-memory parlaylib baseline (which
@@ -833,7 +839,7 @@ def plot_example(rows, entry, path):
     base_label, cmp_label = entry.get(
         "series_labels", ("in-mem parlaylib (DRAM)", "out-of-core (chunk)"))
     subtitle = "" if entry.get("no_ram_cliff") else \
-        "\n(in-mem line stops where the input exceeds the RAM budget)"
+        "\n(In-Memory Goes to DRAM Limit)"
     lines = [
         (base_label, _series(rows, entry["inmem_col"]), "o-"),
         (cmp_label, _series(rows, entry.get("time_col", "time_s")), "s-"),

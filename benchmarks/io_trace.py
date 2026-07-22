@@ -353,10 +353,10 @@ def write_trace_csv(path, ser, devices, t0):
     print(f"  wrote {path}", flush=True)
 
 
-PHASE_STYLE = {"build_start": ("tab:orange", "build"),
-               "build_end": ("tab:gray", "quiesce"),
-               "op_start": ("tab:green", "op"),
-               "op_end": ("tab:red", "end")}
+PHASE_STYLE = {"build_start": ("tab:orange", "Setup"),
+               "build_end": ("tab:gray", "Settling"),
+               "op_start": ("tab:green", "Begin"),
+               "op_end": ("tab:red", "End")}
 
 
 def _overlay_phases(ax, markers, t0):
@@ -380,7 +380,7 @@ def _phase_legend(fig, markers):
     # it now that each panel is its own standalone figure; bbox_inches="tight"
     # keeps it in frame.
     fig.legend(handles=handles, loc="lower center", ncol=len(handles),
-               bbox_to_anchor=(0.5, -0.15), title="phase boundaries")
+               bbox_to_anchor=(0.5, -0.15), title="Phase Boundaries")
 
 
 def plot_trace(ser, markers, devices, t0, path):
@@ -391,20 +391,22 @@ def plot_trace(ser, markers, devices, t0, path):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    import plot_style
+    plot_style.apply()
 
     base, ext = os.path.splitext(path)
     xs = [t - t0 for t in ser["t"]]
 
     # A — aggregate throughput (read/write asymmetry).
     fig, ax_bw = plt.subplots(figsize=(10, 4.5), constrained_layout=True)
-    ax_bw.plot(xs, ser["agg_read"], "-", color="tab:blue", label="read")
-    ax_bw.plot(xs, ser["agg_write"], "-", color="tab:red", label="write")
-    ax_bw.set_ylabel("aggregate MB/s")
-    ax_bw.set_xlabel("seconds since first sample")
-    ax_bw.set_title("Aggregate throughput across all drives (read vs write)")
-    ax_bw.grid(True, linestyle=":", linewidth=0.5)
+    ax_bw.plot(xs, ser["agg_read"], "-", color=plot_style.PALETTE["blue"], label="read")
+    ax_bw.plot(xs, ser["agg_write"], "-", color=plot_style.PALETTE["red"], label="write")
+    ax_bw.set_ylabel("Aggregate MB/s")
+    ax_bw.set_xlabel("Seconds Since Initial Sample")
+    ax_bw.set_title("Aggregate Throughput Over All Drives")
+    ax_bw.grid(True)
     _overlay_phases(ax_bw, markers, t0)
-    ax_bw.legend(loc="upper right")
+    ax_bw.legend(loc="upper right", fontsize=9)
     _phase_legend(fig, markers)
     throughput_path = f"{base}_throughput{ext}"
     fig.savefig(throughput_path, dpi=140, bbox_inches="tight")
@@ -413,16 +415,16 @@ def plot_trace(ser, markers, devices, t0, path):
 
     # B — CPU/disk utilization (io-bound vs cpu-bound).
     fig, ax_bn = plt.subplots(figsize=(10, 4.5), constrained_layout=True)
-    ax_bn.plot(xs, ser["mean_util"], "-", color="tab:purple", label="mean drive %util")
-    ax_bn.plot(xs, ser["cpu"], "-", color="tab:green", label="CPU %")
-    ax_bn.plot(xs, ser["iowait"], "-", color="tab:orange", label="iowait %")
-    ax_bn.set_ylabel("percent")
-    ax_bn.set_xlabel("seconds since first sample")
+    ax_bn.plot(xs, ser["mean_util"], "-", color=plot_style.PALETTE["violet"], label="mean drive %util")
+    ax_bn.plot(xs, ser["cpu"], "-", color=plot_style.PALETTE["green"], label="CPU %")
+    ax_bn.plot(xs, ser["iowait"], "-", color=plot_style.PALETTE["orange"], label="iowait %")
+    ax_bn.set_ylabel("Percent")
+    ax_bn.set_xlabel("Seconds Since Initial Sample")
     ax_bn.set_ylim(0, 105)
     ax_bn.set_title("CPU/Disk Utilization")
-    ax_bn.grid(True, linestyle=":", linewidth=0.5)
+    ax_bn.grid(True)
     _overlay_phases(ax_bn, markers, t0)
-    ax_bn.legend(loc="upper right")
+    ax_bn.legend(loc="upper left", fontsize=9)
     _phase_legend(fig, markers)
     cpu_path = f"{base}_cpu{ext}"
     fig.savefig(cpu_path, dpi=140, bbox_inches="tight")
@@ -440,12 +442,12 @@ def plot_trace(ser, markers, devices, t0, path):
                           interpolation="nearest")
         ax_hm.set_yticks(range(len(devices)))
         ax_hm.set_yticklabels([f"drive {i}" for i in range(len(devices))], fontsize=6)
-        fig.colorbar(im, ax=ax_hm, label="read+write MB/s")
+        fig.colorbar(im, ax=ax_hm, label="Read, Write MB/s")
     else:
         ax_hm.text(0.5, 0.5, "no block-device traffic\n(tmpfs? wrong --mount-glob?)",
                    ha="center", va="center", transform=ax_hm.transAxes)
-    ax_hm.set_title("Per-drive access pattern (read+write MB/s)")
-    ax_hm.set_xlabel("seconds since first sample")
+    ax_hm.set_title("Drive Access (MB/s)")
+    ax_hm.set_xlabel("Seconds Since Initial Sample")
     _overlay_phases(ax_hm, markers, t0)
     _phase_legend(fig, markers)
     drives_path = f"{base}_drives{ext}"
@@ -482,6 +484,8 @@ def plot_sweep(rows, path, title):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    import plot_style
+    plot_style.apply()
 
     ns = [row["n"] for row in rows]
     # Discover which (label, kind) windows actually appear anywhere in the
@@ -519,18 +523,18 @@ def plot_sweep(rows, path, title):
         ax_bw.plot(ns, thr, "o-", color=c, label=combo)
 
     ax_dur.set_xscale("log"); ax_dur.set_ylabel("duration (s)")
-    ax_dur.set_title("Phase duration vs n"); ax_dur.grid(True, linestyle=":", linewidth=0.5)
+    ax_dur.set_title("Phase duration vs n"); ax_dur.grid(True)
     ax_dur.legend(fontsize=8)
 
-    ax_bn.set_xscale("log"); ax_bn.set_ylabel("percent"); ax_bn.set_ylim(0, 105)
+    ax_bn.set_xscale("log"); ax_bn.set_ylabel("Percent"); ax_bn.set_ylim(0, 105)
     ax_bn.set_title("Mean drive %util (solid) vs CPU% (dashed) during each phase")
-    ax_bn.grid(True, linestyle=":", linewidth=0.5)
+    ax_bn.grid(True)
     ax_bn.legend(fontsize=7, ncol=2)
 
     ax_bw.set_xscale("log"); ax_bw.set_yscale("log")
-    ax_bw.set_ylabel("aggregate read+write MB/s"); ax_bw.set_xlabel("n (elements)")
+    ax_bw.set_ylabel("Aggregate MB/s"); ax_bw.set_xlabel("n (elements)")
     ax_bw.set_title("Mean throughput during each phase")
-    ax_bw.grid(True, linestyle=":", linewidth=0.5)
+    ax_bw.grid(True)
     ax_bw.legend(fontsize=8)
 
     fig.suptitle(title)
