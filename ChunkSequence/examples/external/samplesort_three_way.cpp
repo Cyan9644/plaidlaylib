@@ -171,7 +171,7 @@ int main(int argc, char* argv[]) {
     // Which sort goes first; the other two follow in order.  A check knob, not a
     // measurement one — with the teardown doing its job the times must not depend
     // on it (see the fairness note at the top).
-    size_t first = 0;
+    size_t first = 2;
     if (const char* e = getenv("SS3_FIRST")) first = std::stoull(e) % 3;
 
     // The in-memory baseline doubles as the cross-check reference, so one budget
