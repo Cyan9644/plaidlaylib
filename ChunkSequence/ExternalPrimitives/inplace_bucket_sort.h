@@ -3,7 +3,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -130,15 +129,6 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets, Processor processo
                     next = Stage{};
                     next.bucket = b;
                     next.nc = nc;
-                    if (getenv("SS_DEBUG_BUCKETS") != nullptr &&
-                        nc * CHUNK_SIZE > 4 * SS_TARGET_BUCKET_BYTES_C) {
-                        std::fprintf(stderr,
-                            "[pbi] worker=%zu bucket=%zu nc=%zu alloc=%.3f GiB "
-                            "(> 4x target %.3f GiB)\n",
-                            parlay::worker_id(), b, nc,
-                            (double)(nc * CHUNK_SIZE) / (1UL << 30),
-                            (double)(4 * SS_TARGET_BUCKET_BYTES_C) / (1UL << 30));
-                    }
                     next.buf = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, nc * CHUNK_SIZE);
                     CHECK(next.buf != nullptr) << "process_buckets_inplace: buffer alloc failed";
 

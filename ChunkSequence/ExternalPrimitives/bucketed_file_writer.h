@@ -25,7 +25,6 @@
 #include <liburing.h>
 
 #include <parlay/alloc.h>
-#include <parlay/internal/concurrency/hazptr_stack.h>
 #include <parlay/parallel.h>
 
 #include "absl/log/check.h"
@@ -40,80 +39,29 @@ constexpr size_t kFlushThresholdBytes = 1UL << 20;  // Initialize("spfx_", n, 1<
 constexpr size_t kWriterRingDepth     = 128;        // OrderedFileWriter::RunIOThread
 constexpr size_t kRequestsPerBucket   = 10;         // Initialize: pool = 10 * num_buckets
 
-// ── scatter-buffer allocator ────────────────────────────────────────────────
-// A pool of O_DIRECT-aligned scatter buffers.  alloc() is called by parlay
-// worker threads (count_sort's / direct_sample_sort's scatter loops); free()
-// is called both by those same workers (leftover partial buffers) AND by
-// BucketWriter::Recycle(), which runs on RunIoThread()'s plain std::thread --
-// deliberately outside the parlay pool, so writer I/O never competes with
-// compute workers for a scheduler slot (see RunIoThread's caller).
-//
-// This used to be parlay::internal::block_allocator (Peter's original
-// AlignedTypeAllocator, still in peter_samplesort/utils/type_allocator.h),
-// which is NOT safe for that mixed access pattern: its alloc()/free() index a
-// per-thread free list by parlay::worker_id(), a thread_local that silently
-// defaults to 0 on any thread the parlay scheduler never assigned an id to.
-// RunIoThread's std::threads therefore alias real worker 0's free list --
-// with worker 0 concurrently alloc()ing while an I/O thread free()s, that
-// list's `next` pointers are mutated by multiple OS threads with no
-// synchronization at all (block_allocator relies entirely on "one thread per
-// id" for its fast path). The result is a data race that corrupts the list
-// and segfaults once enough alloc/free churn hits a bad interleaving --
-// confirmed locally: a small repro (~700 buckets, 16 workers) reliably
-// segfaults ~6-7k chunks into a ~24k-chunk scatter pass.
-//
-// hazptr_stack is parlay's own lock-free concurrent stack (block_allocator
-// uses it internally for its cross-thread global pool), so it's already
-// proven safe for genuine multi-OS-thread push/pop -- exactly what's needed
-// here. One shared stack instead of per-worker lists costs a little
-// contention under heavy scatter traffic, but these buffers are only handed
-// out once per SAMPLE_SORT_BUCKET_SIZE (4 KiB) worth of elements, so the cost
-// is negligible next to the I/O this whole pass is bound by.
+// ── scatter-buffer allocator (Peter's utils/type_allocator.h) ─────────────────
+// parlay's block allocator with an alignment override, so a scatter buffer can go
+// straight into an O_DIRECT iovec.  Per-worker free lists: handing a filled
+// buffer to the writer and taking a fresh one costs no lock.
 template <size_t Size>
 struct AllocatorData {
-    alignas(O_DIRECT_MULTIPLE) char data[Size];
+    char data[Size];
 };
 
-using BucketData = AllocatorData<SAMPLE_SORT_BUCKET_SIZE>;
+template <typename T, size_t Align>
+class AlignedTypeAllocator {
+    static parlay::internal::block_allocator& allocator() {
+        return parlay::internal::get_block_allocator<sizeof(T), Align>();
+    }
 
-class bucket_allocator {
 public:
-    static BucketData* alloc() {
-        Pool& p = pool();
-        if (auto blk = p.free_list.pop()) return *blk;
-        void* raw = std::aligned_alloc(O_DIRECT_MULTIPLE, sizeof(BucketData));
-        CHECK(raw != nullptr) << "bucket_allocator: aligned_alloc failed";
-        {
-            std::lock_guard<std::mutex> l(p.mu);
-            p.all_blocks.push_back(static_cast<BucketData*>(raw));
-        }
-        return static_cast<BucketData*>(raw);
-    }
-    static void free(BucketData* p) { pool().free_list.push(p); }
-
-    // Frees every block this allocator ever handed out. Not safe to call
-    // concurrently with alloc()/free() (matches block_allocator::clear()'s
-    // contract) -- callers already run this once, single-threaded, after
-    // every alloc/free caller has finished.
-    static void finish() {
-        Pool& p = pool();
-        while (p.free_list.pop()) {}
-        std::lock_guard<std::mutex> l(p.mu);
-        for (BucketData* b : p.all_blocks) std::free(b);
-        p.all_blocks.clear();
-    }
-
-private:
-    struct Pool {
-        parlay::internal::hazptr_stack<BucketData*> free_list;
-        std::mutex mu;
-        std::vector<BucketData*> all_blocks;
-    };
-    static Pool& pool() {
-        static Pool p;
-        return p;
-    }
+    static T* alloc() { return static_cast<T*>(allocator().alloc()); }
+    static void free(T* p) { allocator().free(static_cast<void*>(p)); }
+    static void finish() { allocator().clear(); }
 };
+
+using BucketData       = AllocatorData<SAMPLE_SORT_BUCKET_SIZE>;
+using bucket_allocator = AlignedTypeAllocator<BucketData, O_DIRECT_MULTIPLE>;
 
 // ── bucketed writer  (Peter's OrderedFileWriter) ──────────────────────────────
 // One append-only O_DIRECT file per bucket.  Write() takes ownership of a

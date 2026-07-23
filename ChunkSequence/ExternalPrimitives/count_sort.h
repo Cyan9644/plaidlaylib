@@ -3,9 +3,6 @@
 #ifndef count_sort_H
 #define count_sort_H
 
-#include <atomic>
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -492,11 +489,7 @@ void count_sort(const D& dseq, size_t num_buckets,
     constexpr size_t kBufElems         = SAMPLE_SORT_BUCKET_SIZE / sizeof(T);
     constexpr size_t kWriterIoThreads  = 2;
 
-    const bool dbg = getenv("SS_DEBUG_COUNT_SORT") != nullptr;
-    if (dbg) std::fprintf(stderr, "[cs] enter count_sort num_buckets=%zu\n", num_buckets);
-
     BucketWriter<T> writer(result_prefix, num_buckets);
-    if (dbg) std::fprintf(stderr, "[cs] BucketWriter constructed\n");
 
     // The writer's I/O threads run on plain std::threads, isolated from the
     // parlay pool that for_each_chunk's dispatcher drives -- the same
@@ -504,7 +497,6 @@ void count_sort(const D& dseq, size_t num_buckets,
     std::vector<std::thread> io_threads;
     for (size_t i = 0; i < kWriterIoThreads; i++)
         io_threads.emplace_back([&writer] { writer.RunIoThread(); });
-    if (dbg) std::fprintf(stderr, "[cs] io_threads started\n");
 
     // One live bucket_allocator buffer per (worker, bucket), matching
     // direct_sample_sort's scatter loop -- persists across for_each_chunk's
@@ -515,13 +507,9 @@ void count_sort(const D& dseq, size_t num_buckets,
     std::vector<size_t> fill(W * num_buckets, 0);
     for (size_t i = 0; i < W * num_buckets; i++)
         buf[i] = (T*)bucket_allocator::alloc();
-    if (dbg) std::fprintf(stderr, "[cs] buf pool allocated (W=%zu)\n", W);
 
-    std::atomic<size_t> dbg_chunks{0};
-    const size_t dbg_total_chunks = dseq.num_chunks();
     delayed::for_each_chunk(dseq, [&](size_t ci, size_t n, auto it) {
         const size_t w = parlay::worker_id();
-        CHECK(w < W) << "count_sort: worker_id " << w << " >= W=" << W;
         for (size_t k = 0; k < n; k++) {
             Pair pr = *it; ++it;
             const size_t b = (size_t)pr.second;
@@ -535,14 +523,7 @@ void count_sort(const D& dseq, size_t num_buckets,
                 fill[si] = 0;
             }
         }
-        if (dbg) {
-            const size_t done = ++dbg_chunks;
-            if (done % 1000 == 0 || done == dbg_total_chunks)
-                std::fprintf(stderr, "[cs] scatter progress %zu/%zu chunks\n",
-                              done, dbg_total_chunks);
-        }
     });
-    if (dbg) std::fprintf(stderr, "[cs] for_each_chunk returned\n");
 
     // Flush every worker's residual per-bucket buffer.
     for (size_t i = 0; i < W * num_buckets; i++) {

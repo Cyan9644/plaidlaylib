@@ -63,7 +63,7 @@
 //     EXAMPLE_INMEM_BUDGET_BYTES
 //                      RAM budget for the in-memory sort + cross-check (~24n;
 //                      default: physical RAM)
-//     SS3_FIRST        which sort goes first, 0..2 (default 0, Peter's): a knob for
+//     SS3_FIRST        which sort goes first, 0..2 (default 0): a knob for
 //                      *checking* that the teardown works — rotate it and the
 //                      three times should not move.  It does not change what is
 //                      measured.
@@ -170,7 +170,7 @@ int main(int argc, char* argv[]) {
 
     // Which sort goes first; the other two follow in order.  A check knob, not a
     // measurement one — with the teardown doing its job the times must not depend
-    // on it (see the fairness note at the top).  Defaults to Peter's (index 0).
+    // on it (see the fairness note at the top).
     size_t first = 0;
     if (const char* e = getenv("SS3_FIRST")) first = std::stoull(e) % 3;
 

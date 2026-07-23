@@ -27,14 +27,6 @@ constexpr size_t READER_READ_SIZE = READER_READ_SIZE_BYTES;
 
 constexpr size_t SAMPLE_SORT_BUCKET_SIZE = 4 << 10;
 
-// Target bytes per samplesort bucket (pivot spacing = filer / this value).
-// Override at build time with -DSS_TARGET_BUCKET_BYTES=<n> to reach a large
-// bucket count at small n for local testing (default: real ~128 MiB target).
-#ifndef SS_TARGET_BUCKET_BYTES
-#define SS_TARGET_BUCKET_BYTES (1UL << 27)
-#endif
-constexpr size_t SS_TARGET_BUCKET_BYTES_C = SS_TARGET_BUCKET_BYTES;
-
 constexpr size_t IO_VECTOR_SIZE = 1024;
 
 // This is machine-dependent:
