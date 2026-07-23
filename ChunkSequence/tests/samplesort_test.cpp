@@ -13,18 +13,16 @@
 // at a data size (tens of MB) that runs in seconds.
 //
 // This is the regression test for the scatter-phase data race fixed in
-// count_sort.h: BucketWriter's I/O threads used to run on plain std::threads,
-// and RunIoThread -> Recycle() -> bucket_allocator::free() is keyed by
-// parlay::worker_id() -- a thread_local that silently returns 0 on any thread
-// the parlay scheduler never assigned an id to. Those threads therefore aliased
-// real worker 0's allocator slot, corrupting it under concurrent access once
-// enough alloc/free churn hit a bad interleaving (SIGSEGV) and leaking blocks
-// out of the free list (OOM). Changing the backing store does not help: both
-// block_allocator and hazptr_stack are worker-id keyed. The fix is to run those
-// I/O threads as parlay tasks, as direct_samplesort.h and Peter's
-// scatter_gather.h always did; see bucketed_file_writer.h's allocator comment.
-//
-// The config below generates enough scatter/gather churn to hit that race.
+// bucketed_file_writer.h: BucketWriter's I/O threads (plain std::thread,
+// deliberately outside the parlay pool) used to free() scatter buffers
+// through parlay::internal::block_allocator, whose free()/alloc() key a
+// per-thread free list by parlay::worker_id() -- a thread_local that
+// silently defaults to 0 on any thread the parlay scheduler never assigned
+// an id to. The I/O threads therefore aliased real worker 0's free list,
+// corrupting it under concurrent access once enough alloc/free churn hit a
+// bad interleaving. Confirmed locally: the config below reliably segfaulted
+// before the fix (a plain parlay::internal::block_allocator-backed
+// bucket_allocator) and passes reliably after (a hazptr_stack-backed one).
 //
 // Exits 0 iff the out-of-core output matches parlay::sort element-for-element.
 

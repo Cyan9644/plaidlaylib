@@ -41,41 +41,34 @@ constexpr size_t kWriterRingDepth     = 128;        // OrderedFileWriter::RunIOT
 constexpr size_t kRequestsPerBucket   = 10;         // Initialize: pool = 10 * num_buckets
 
 // ── scatter-buffer allocator ────────────────────────────────────────────────
-// A pool of O_DIRECT-aligned scatter buffers.  alloc() is called by the scatter
-// loops (count_sort's / direct_sample_sort's); free() is called both by those
-// same threads (leftover partial buffers) AND by BucketWriter::Recycle(), which
-// runs on whatever thread drives RunIoThread().
+// A pool of O_DIRECT-aligned scatter buffers.  alloc() is called by parlay
+// worker threads (count_sort's / direct_sample_sort's scatter loops); free()
+// is called both by those same workers (leftover partial buffers) AND by
+// BucketWriter::Recycle(), which runs on RunIoThread()'s plain std::thread --
+// deliberately outside the parlay pool, so writer I/O never competes with
+// compute workers for a scheduler slot (see RunIoThread's caller).
 //
-// ***INVARIANT: every thread that calls alloc()/free() must be a parlay worker
-// with its own worker id.***  This is not an implementation detail of the
-// current backing store -- it holds for every variant that has been tried here:
+// This used to be parlay::internal::block_allocator (Peter's original
+// AlignedTypeAllocator, still in peter_samplesort/utils/type_allocator.h),
+// which is NOT safe for that mixed access pattern: its alloc()/free() index a
+// per-thread free list by parlay::worker_id(), a thread_local that silently
+// defaults to 0 on any thread the parlay scheduler never assigned an id to.
+// RunIoThread's std::threads therefore alias real worker 0's free list --
+// with worker 0 concurrently alloc()ing while an I/O thread free()s, that
+// list's `next` pointers are mutated by multiple OS threads with no
+// synchronization at all (block_allocator relies entirely on "one thread per
+// id" for its fast path). The result is a data race that corrupts the list
+// and segfaults once enough alloc/free churn hits a bad interleaving --
+// confirmed locally: a small repro (~700 buckets, 16 workers) reliably
+// segfaults ~6-7k chunks into a ~24k-chunk scatter pass.
 //
-//   - parlay::internal::block_allocator (Peter's original AlignedTypeAllocator,
-//     still in peter_samplesort/utils/type_allocator.h) indexes a per-thread
-//     free list as local_lists[parlay::worker_id()];
-//   - hazptr_stack (below) indexes acquire_retire's announcements[worker_id()],
-//     in_progress[worker_id()] and retired[worker_id()] -- the last a plain
-//     std::vector<Node*>.
-//
-// parlay::worker_id() is a thread_local that silently returns 0 on any thread
-// the scheduler never assigned an id to (deps/parlaylib/parlay/scheduler.h), so
-// a plain std::thread aliases real worker 0's slot.  With worker 0 concurrently
-// allocating, that slot is then mutated by multiple OS threads with no
-// synchronization at all: the allocator's state is corrupted once enough
-// alloc/free churn hits a bad interleaving (SIGSEGV), and blocks leak out of the
-// free list so alloc() stops reusing them (unbounded growth -> OOM).  Both were
-// observed at n=2^38.  Hence direct_samplesort.h, count_sort.h and Peter's
-// scatter_gather.h all run RunIoThread() as a parlay task, never a std::thread.
-//
-// (This is *not* the isolation UnorderedFileWriter and ChunkSequenceReader rely
-// on -- their allocators are plain mutex-guarded free lists, callable from any
-// thread.  Only this one is worker-id keyed.)
-//
-// hazptr_stack is parlay's own lock-free concurrent stack (block_allocator uses
-// it internally for its cross-thread global pool).  One shared stack instead of
-// per-worker lists costs a little contention under heavy scatter traffic, but
-// these buffers are only handed out once per SAMPLE_SORT_BUCKET_SIZE (4 KiB)
-// worth of elements, so the cost is small next to the I/O this pass is bound by.
+// hazptr_stack is parlay's own lock-free concurrent stack (block_allocator
+// uses it internally for its cross-thread global pool), so it's already
+// proven safe for genuine multi-OS-thread push/pop -- exactly what's needed
+// here. One shared stack instead of per-worker lists costs a little
+// contention under heavy scatter traffic, but these buffers are only handed
+// out once per SAMPLE_SORT_BUCKET_SIZE (4 KiB) worth of elements, so the cost
+// is negligible next to the I/O this whole pass is bound by.
 template <size_t Size>
 struct AllocatorData {
     alignas(O_DIRECT_MULTIPLE) char data[Size];
@@ -167,10 +160,8 @@ public:
             if (bk.fd >= 0) close(bk.fd);
     }
 
-    // Drains `pending_` until it is closed.  MUST be run on kWriterIoThreads
-    // parlay workers alongside the scatter workers, never on a plain
-    // std::thread: Recycle() below calls bucket_allocator::free(), which is
-    // keyed by parlay::worker_id() (see the allocator's comment above).
+    // Drains `pending_` until it is closed.  Run on kWriterIoThreads parlay
+    // workers alongside the scatter workers.
     void RunIoThread() {
         struct io_uring ring;
         SYSCALL(InitIoUringWithRetry(kWriterRingDepth, &ring, IORING_SETUP_SINGLE_ISSUER));
