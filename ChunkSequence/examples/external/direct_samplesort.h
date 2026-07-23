@@ -123,7 +123,7 @@ namespace direct_ss {
 // per-bucket scatter buffer), IO_VECTOR_SIZE (1024, iovecs per writev) and
 // MAIN_MEMORY_SIZE (the DRAM budget the bucket count is derived from).  The rest
 // are inlined in his code:
-constexpr size_t kTargetBucketBytes   = 1UL << 27;  // GetSampleSize: ~128 MB/bucket
+constexpr size_t kTargetBucketBytes   = SS_TARGET_BUCKET_BYTES_C;  // GetSampleSize: ~128 MB/bucket
 constexpr size_t kWriterIoThreads     = 2;          // BucketedWriterConfig::num_threads
 constexpr size_t kGatherRingDepth     = 4;          // WorkerOnlyPhase2's two rings
 constexpr size_t kGatherStaggerUs     = 5000;       // usleep(5000 * worker_id)

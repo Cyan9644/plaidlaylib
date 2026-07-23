@@ -83,8 +83,16 @@ n+= seq.chunks[r].used;
   size_t min_sample_size = std::max(1UL, 4 * parlay::num_workers() * filer/ MAIN_MEMORY_SIZE);
 // size_t max_sample_size = std::max(1UL, std::min(n / sizeof(T), filer / O_DIRECT_MULTIPLE));
 size_t max_sample_size = std::max(1UL, std::min(n, filer / O_DIRECT_MULTIPLE));
-  size_t num_samples = std::max(std::min(filer / (1UL << 27), max_sample_size), min_sample_size);
+  size_t num_samples = std::max(std::min(filer / SS_TARGET_BUCKET_BYTES_C, max_sample_size), min_sample_size);
   _pt.mark("size/params");
+  if (_pt.on) {
+      const size_t W = std::max<size_t>(1, parlay::num_workers());
+      std::fprintf(stderr,
+          "[ss %-3s] n=%zu filer=%zu num_samples=%zu num_buckets=%zu W=%zu "
+          "count_sort_pool~=%.2f GiB\n",
+          tag.c_str(), n, filer, num_samples, num_samples + 1, W,
+          (double)(W * (num_samples + 1) * SAMPLE_SORT_BUCKET_SIZE) / (1UL << 30));
+  }
 
   if (n < num_samples){
     //we're likely going to want a fast quicksort method that takes better advantage of our 
@@ -106,7 +114,7 @@ size_t max_sample_size = std::max(1UL, std::min(n, filer / O_DIRECT_MULTIPLE));
 
   } 
 
-unsigned int sample_size = std::max<size_t>(1, num_samples);
+size_t sample_size = std::max<size_t>(1, num_samples);
   int over = 8;
   parlay::random_generator gen;
   std::uniform_int_distribution<long> dis(0, n-1);
@@ -171,6 +179,25 @@ auto ids = ChunkSequenceOps::delayed::map(ChunkSequenceOps::delayed::delay<T>(se
 std::vector<chunk_seq> externalSequenceVector(num_buckets);
 ChunkSequenceOps::count_sort(ids, num_buckets, externalSequenceVector,"ss_bucket_" + tag);
 _pt.mark("count_sort");
+if (_pt.on) {
+    size_t min_nc = std::numeric_limits<size_t>::max(), max_nc = 0, max_b = 0, nonempty = 0;
+    double sum_nc = 0;
+    for (size_t b = 0; b < num_buckets; b++) {
+        const size_t nc = externalSequenceVector[b].chunks.size();
+        if (nc == 0) continue;
+        nonempty++;
+        sum_nc += (double)nc;
+        min_nc = std::min(min_nc, nc);
+        if (nc > max_nc) { max_nc = nc; max_b = b; }
+    }
+    std::fprintf(stderr,
+        "[ss %-3s] buckets: nonempty=%zu/%zu min_chunks=%zu max_chunks=%zu "
+        "(bucket %zu, ~%.2f GiB) mean_chunks=%.2f\n",
+        tag.c_str(), nonempty, num_buckets,
+        (min_nc == std::numeric_limits<size_t>::max() ? 0 : min_nc), max_nc,
+        max_b, (double)max_nc * CHUNK_SIZE / (1UL << 30),
+        nonempty ? sum_nc / (double)nonempty : 0.0);
+}
 
 //it should now be the case that externalSequenceVector is a full vector of the individual external sequences
 //in this case we just need a simple flatten to put all the chunk headers into a single list
