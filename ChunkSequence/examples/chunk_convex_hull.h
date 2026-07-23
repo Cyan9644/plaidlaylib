@@ -44,7 +44,7 @@
 // vertex indices, matching upstream `upper_hull`'s output (and its tie-break:
 // among equally-far points the one with the larger original index wins, which is
 // exactly upstream's `maximum<pair<double,int>>` on (area, index)).
-//
+// 
 // This finds the UPPER hull (leftmost to rightmost across the top); the lower
 // hull is symmetric (negate y, or run the same recursion below the min--max
 // line) and a full hull is upper ++ lower with the shared endpoints dropped.
