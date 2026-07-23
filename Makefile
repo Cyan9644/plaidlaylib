@@ -43,7 +43,8 @@ TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/histogramTest $(BINDIR)/kmpTest $(BINDIR)/rabinKarpTest \
                  $(BINDIR)/scalarTest $(BINDIR)/bigintAddTest $(BINDIR)/convexHullTest \
                  $(BINDIR)/partitionTest $(BINDIR)/segmentedReduceTest \
-                 $(BINDIR)/dc3Test $(BINDIR)/samplesortTest
+                 $(BINDIR)/dc3Test $(BINDIR)/samplesortTest \
+                 $(BINDIR)/bigintMulTest
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
@@ -51,6 +52,7 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/external_samplesortExample $(BINDIR)/external_linefitExample \
                     $(BINDIR)/fitmem_sortExample $(BINDIR)/fitmem_kth_smallestExample \
                     $(BINDIR)/bigint_addExample $(BINDIR)/bigint_add_eagerExample \
+                    $(BINDIR)/bigint_mulExample \
                     $(BINDIR)/chunk_cutExample \
                     $(BINDIR)/external_samplesort_vs_peterExample \
                     $(BINDIR)/direct_samplesort_vs_peterExample \
@@ -202,6 +204,16 @@ $(BINDIR)/scalarTest: ChunkSequence/tests/scalar_test.cpp $(UTIL_OBJS)
 # order-only deps/parlaylib-examples prereq is needed (no upstream baseline).
 $(BINDIR)/bigintAddTest: ChunkSequence/tests/bigint_add_test.cpp $(UTIL_OBJS)
 	$(LINK)
+
+# bigintMulTest includes an example header (examples/chunk_bigint_mul.h; own
+# in-memory reference, no upstream baseline).  Built with a small CHUNK_SIZE so
+# modest operands span several chunks and actually recurse through the
+# out-of-core cut/shift/add path, while the schoolbook oracle stays fast.  The
+# util objects have no CHUNK_SIZE-dependent ABI (cf. the chunkSizeCompare rule),
+# so linking the default-built UTIL_OBJS is fine.
+$(BINDIR)/bigintMulTest: ChunkSequence/tests/bigint_mul_test.cpp $(UTIL_OBJS)
+	$(CXX) $(CXXFLAGS) -DCHUNK_SIZE_BYTES=16384 $(INCLUDES) $^ -o $@ $(LDFLAGS) \
+	    -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
 $(BINDIR)/partitionTest: ChunkSequence/tests/partition_test.cpp $(UTIL_OBJS)
 	$(LINK)

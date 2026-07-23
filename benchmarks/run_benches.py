@@ -363,6 +363,19 @@ EXAMPLES = [
      "title": "big-integer add: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["bi_a*", "bi_b*", "bi_sum*"]},
 
+    # bigint_mulExample sweeps n (limb count); the plotted time is the multiply
+    # pass only.  Baseline is our own verified in-memory Karatsuba (upstream
+    # parlaylib karatsuba is broken).  Set BIGINT_MUL_DRAM_BUDGET_BYTES small to
+    # exercise the out-of-core recursion at modest n on a dev box.
+    {"name": "bigint_mul", "target": "bin/bigint_mulExample",
+     "cols": ["n", "build_s", "mul_s", "inmem_mul_s", "result_limbs",
+              "throughput_gb_s"],
+     "time_col": "mul_s", "inmem_col": "inmem_mul_s",
+     "elem_bytes": 8, "input_seqs": 2,
+     "xlabel": "input size",
+     "title": "big-integer mul: out-of-core Karatsuba (ChunkSequenceOps) vs in-mem",
+     "data_globs": ["bm_a*", "bm_b*", "bm_prod*", "bimul_zero*"]},
+
     # bigint_add_eagerExample: a SEPARATE, opt-in benchmark (deliberately NOT in
     # the Makefile's bench-examples rules) that adds a third line — the same add
     # done WITHOUT delayed fusion (intermediate classify/scan materialized to

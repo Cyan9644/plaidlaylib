@@ -14,6 +14,7 @@
 #include <random>
 #include <array>
 #include <algorithm>
+#include <mutex>
 #include <parlay/parallel.h>
 #include <parlay/primitives.h>
 
@@ -45,6 +46,73 @@ inline chunk_seq cut_by_chunk(const chunk_seq& seq, size_t chunk_begin,
         c.index = out.chunks.size();
         out.chunks.push_back(c);
     }
+    return out;
+}
+
+
+// ── metadata shift / guard-limb append (zero-chunk aliasing) ─────────────────
+// A shift (multiply a big integer by base^(k*ELEMS_PER_CHUNK)) and a guard-limb
+// append both need chunks that *read as zeros* without moving any data.  We keep
+// one zero-filled CHUNK_SIZE block per drive, written once, and alias it as many
+// times as needed — safe because these chunks are only ever read, never written.
+inline const std::string& zero_chunk_prefix() {
+    static const std::string p = "bimul_zero";
+    return p;
+}
+
+// Write one zero-filled CHUNK_SIZE block per drive (idempotent for the run).
+inline void ensure_zero_chunks() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        const size_t nd = GetSSDList().size();
+        void* buf = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
+        CHECK(buf != nullptr) << "ensure_zero_chunks: buffer allocation failed";
+        memset(buf, 0, CHUNK_SIZE);
+        for (size_t d = 0; d < nd; d++) {
+            const std::string fn = GetFileName(zero_chunk_prefix(), d);
+            int fd = open(fn.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0644);
+            SYSCALL(fd);
+            SYSCALL(pwrite(fd, buf, CHUNK_SIZE, (off_t)0));
+            close(fd);
+        }
+        free(buf);
+    });
+}
+
+// One chunk header aliasing drive d's shared zero block, exposing `used` bytes.
+inline chunk zero_chunk_header(size_t d, size_t used, size_t index) {
+    ensure_zero_chunks();
+    const size_t nd = GetSSDList().size();
+    return {GetFileName(zero_chunk_prefix(), d % nd), 0, used, index};
+}
+
+// seq * base^(k * ELEMS_PER_CHUNK), as pure metadata: prepend k full zero chunks
+// (spread across drives) and reindex seq's chunks by +k.  Preserves the
+// dense-except-last invariant (the prepended chunks are full; seq's own tail
+// stays the tail) and leaves the top limb untouched (a canonical non-negative
+// operand stays canonical).  No data is written.
+inline chunk_seq prepend_zero_chunks(const chunk_seq& seq, size_t k) {
+    if (k == 0) return seq;
+    chunk_seq out;
+    out.chunks.reserve(k + seq.chunks.size());
+    for (size_t j = 0; j < k; j++)
+        out.chunks.push_back(zero_chunk_header(j, CHUNK_SIZE, j));
+    for (const chunk& c : seq.chunks) {
+        chunk nc = c;
+        nc.index = out.chunks.size();
+        out.chunks.push_back(nc);
+    }
+    return out;
+}
+
+// Append one chunk holding `used` zero bytes (aliased, no write).  The caller
+// must guarantee seq's current last chunk is full, so the result stays
+// dense-except-last.  Used to attach a zero guard limb (used == sizeof(limb)) to
+// a chunk-aligned cut half whose top limb has its sign bit set.
+inline chunk_seq append_zero_chunk(const chunk_seq& seq, size_t used) {
+    chunk_seq out = seq;
+    out.chunks.push_back(zero_chunk_header(out.chunks.size(), used,
+                                           out.chunks.size()));
     return out;
 }
 
