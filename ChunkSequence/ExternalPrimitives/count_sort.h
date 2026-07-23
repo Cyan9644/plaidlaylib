@@ -514,12 +514,21 @@ void count_sort(const D& dseq, size_t num_buckets,
 
     delayed::for_each_chunk(dseq, [&](size_t ci, size_t n, auto it) {
         const size_t w = parlay::worker_id();
+        // The scatter grid is sized W*num_buckets; if the body ever runs on a
+        // thread whose worker_id() >= W, `si` below indexes out of bounds ->
+        // SIGSEGV. Check once per chunk (cheap; worker_id is stable in the body).
+        CHECK(w < W) << "count_sort scatter: worker_id() " << w
+                     << " >= W " << W << " -- scatter grid overflow";
         for (size_t k = 0; k < n; k++) {
             Pair pr = *it; ++it;
             const size_t b = (size_t)pr.second;
             CHECK(b < num_buckets) << "count_sort_bucketed: bucket id " << b
                 << " out of range (num_buckets=" << num_buckets << ")";
             const size_t si = w * num_buckets + b;
+#ifdef PLAID_POOL_DEBUG
+            CHECK(buf[si] != nullptr) << "count_sort scatter: null buffer at si="
+                << si << " (w=" << w << ", b=" << b << ")";
+#endif
             buf[si][fill[si]++] = pr.first;
             if (fill[si] == kBufElems) {
                 writer.Write(b, buf[si], kBufElems);
