@@ -491,29 +491,26 @@ void count_sort(const D& dseq, size_t num_buckets,
 
     const size_t W = std::max<size_t>(1, parlay::num_workers());
 
-    // W enables the writer's deferred recycling: its I/O threads are plain
-    // std::threads (below), and bucket_allocator is keyed by
-    // parlay::worker_id() -- which silently returns 0 off the parlay pool, so a
-    // std::thread freeing through it corrupts real worker 0's free list.  With
-    // recycling on, the I/O threads only chain finished buffers; this scatter
-    // loop reclaims them via writer.TakeRecycled(w), on a genuine worker.
-    BucketWriter<T> writer(result_prefix, num_buckets, W);
+    BucketWriter<T> writer(result_prefix, num_buckets);
 
     // The writer's I/O threads run on plain std::threads, isolated from the
     // parlay pool that for_each_chunk's dispatcher drives -- the same
     // isolation UnorderedFileWriter already relies on elsewhere in this file.
+    // Every scatter buffer is drawn from the writer's own thread-safe pool
+    // (AllocBuffer/FreeBuffer), so the I/O threads can free finished buffers
+    // directly -- no parlay::worker_id()-keyed allocator is touched off-pool.
     std::vector<std::thread> io_threads;
     for (size_t i = 0; i < kWriterIoThreads; i++)
         io_threads.emplace_back([&writer] { writer.RunIoThread(); });
 
-    // One live bucket_allocator buffer per (worker, bucket), matching
-    // direct_sample_sort's scatter loop -- persists across for_each_chunk's
-    // per-chunk callback invocations, indexed by parlay::worker_id() exactly
-    // like the parallel count_sort's `stage` buffers above.
+    // One live scatter buffer per (worker, bucket), matching direct_sample_sort's
+    // scatter loop -- persists across for_each_chunk's per-chunk callback
+    // invocations, indexed by parlay::worker_id() exactly like the parallel
+    // count_sort's `stage` buffers above.
     std::vector<T*>     buf(W * num_buckets, nullptr);
     std::vector<size_t> fill(W * num_buckets, 0);
     for (size_t i = 0; i < W * num_buckets; i++)
-        buf[i] = (T*)bucket_allocator::alloc();
+        buf[i] = (T*)writer.AllocBuffer();
 
     delayed::for_each_chunk(dseq, [&](size_t ci, size_t n, auto it) {
         const size_t w = parlay::worker_id();
@@ -526,10 +523,7 @@ void count_sort(const D& dseq, size_t num_buckets,
             buf[si][fill[si]++] = pr.first;
             if (fill[si] == kBufElems) {
                 writer.Write(b, buf[si], kBufElems);
-                // Reuse a buffer the writer has finished with when one is going
-                // spare; otherwise take a fresh one from the allocator.
-                BucketData* nb = writer.TakeRecycled(w);
-                buf[si] = nb ? (T*)nb : (T*)bucket_allocator::alloc();
+                buf[si] = (T*)writer.AllocBuffer();
                 fill[si] = 0;
             }
         }
@@ -539,16 +533,12 @@ void count_sort(const D& dseq, size_t num_buckets,
     for (size_t i = 0; i < W * num_buckets; i++) {
         const size_t b = i % num_buckets;
         if (fill[i] > 0) writer.Write(b, buf[i], fill[i]);
-        else             bucket_allocator::free((BucketData*)buf[i]);
+        else             writer.FreeBuffer((BucketData*)buf[i]);
     }
 
     auto results = writer.ReapResult();
     for (auto& t : io_threads) t.join();
-    // The I/O threads are gone, so nothing can still be chaining buffers; hand
-    // the deferred ones back before the allocator drops its blocks.
-    writer.DrainRecycled();
     writer.CloseFiles();
-    bucket_allocator::finish();
 
     // Carve each bucket's contiguous result file into CHUNK_SIZE slices --
     // the same "no repack pass" carving direct_sample_sort uses for its

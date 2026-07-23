@@ -40,29 +40,21 @@ constexpr size_t kFlushThresholdBytes = 1UL << 20;  // Initialize("spfx_", n, 1<
 constexpr size_t kWriterRingDepth     = 128;        // OrderedFileWriter::RunIOThread
 constexpr size_t kRequestsPerBucket   = 10;         // Initialize: pool = 10 * num_buckets
 
-// ── scatter-buffer allocator (Peter's utils/type_allocator.h) ─────────────────
-// parlay's block allocator with an alignment override, so a scatter buffer can go
-// straight into an O_DIRECT iovec.  Per-worker free lists: handing a filled
-// buffer to the writer and taking a fresh one costs no lock.
+// ── scatter-buffer block ──────────────────────────────────────────────────────
+// One SAMPLE_SORT_BUCKET_SIZE (4 KiB) block; a filled one goes straight into an
+// O_DIRECT iovec.  Blocks are pooled by BucketWriter itself (AllocBuffer /
+// FreeBuffer below) rather than parlay's worker_id-keyed block_allocator: the
+// primitives caller drives the writer's I/O on plain std::threads, and
+// block_allocator's free lists are indexed by parlay::worker_id() -- which
+// silently returns 0 off the pool -- so freeing a buffer from an I/O thread there
+// corrupts real worker 0's list.  A writer-owned, lock-guarded pool is safe to
+// alloc/free from any thread, so the I/O threads free directly.
 template <size_t Size>
 struct AllocatorData {
     char data[Size];
 };
 
-template <typename T, size_t Align>
-class AlignedTypeAllocator {
-    static parlay::internal::block_allocator& allocator() {
-        return parlay::internal::get_block_allocator<sizeof(T), Align>();
-    }
-
-public:
-    static T* alloc() { return static_cast<T*>(allocator().alloc()); }
-    static void free(T* p) { allocator().free(static_cast<void*>(p)); }
-    static void finish() { allocator().clear(); }
-};
-
-using BucketData       = AllocatorData<SAMPLE_SORT_BUCKET_SIZE>;
-using bucket_allocator = AlignedTypeAllocator<BucketData, O_DIRECT_MULTIPLE>;
+using BucketData = AllocatorData<SAMPLE_SORT_BUCKET_SIZE>;
 
 // ── bucketed writer  (Peter's OrderedFileWriter) ──────────────────────────────
 // One append-only O_DIRECT file per bucket.  Write() takes ownership of a
@@ -86,16 +78,8 @@ public:
         size_t file_bytes = 0;   // bytes on disk (true_bytes rounded up)
     };
 
-    // `recycle_workers` > 0 opts into deferred buffer recycling: RunIoThread()
-    // then hands finished scatter buffers back through TakeRecycled() instead of
-    // calling bucket_allocator::free() itself.  Callers that drive RunIoThread()
-    // on a plain std::thread MUST pass it (see the note on Recycle below); the
-    // default 0 keeps the original path for callers whose I/O threads are parlay
-    // workers (direct_sample_sort).
-    BucketWriter(const std::string& prefix, size_t num_buckets,
-                 size_t recycle_workers = 0)
-        : num_buckets_(num_buckets), buckets_(num_buckets), results_(num_buckets),
-          recycle_workers_(recycle_workers), stash_(recycle_workers) {
+    BucketWriter(const std::string& prefix, size_t num_buckets)
+        : num_buckets_(num_buckets), buckets_(num_buckets), results_(num_buckets) {
         // One accumulating request is permanently held per bucket, so the pool
         // must exceed num_buckets for a flush to make progress; the surplus caps
         // how many requests can be in flight (and hence the writer's DRAM).
@@ -115,6 +99,31 @@ public:
     ~BucketWriter() {
         for (Bucket& bk : buckets_)
             if (bk.fd >= 0) close(bk.fd);
+        for (BucketData* p : pool_all_) std::free(p);
+    }
+
+    // Thread-safe scatter-buffer pool.  AllocBuffer/FreeBuffer are safe from any
+    // thread -- parlay workers and the plain-std::thread I/O threads alike -- so
+    // callers draw every scatter buffer from here and the I/O threads free
+    // finished buffers directly (see Recycle).  Every block is owned by the
+    // writer and released in the destructor.
+    BucketData* AllocBuffer() {
+        std::lock_guard<std::mutex> l(pool_lock_);
+        if (!pool_free_.empty()) {
+            BucketData* p = pool_free_.back();
+            pool_free_.pop_back();
+            return p;
+        }
+        BucketData* p = (BucketData*)std::aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT,
+                                                        sizeof(BucketData));
+        CHECK(p != nullptr) << "BucketWriter: scatter buffer alloc failed";
+        pool_all_.push_back(p);
+        return p;
+    }
+
+    void FreeBuffer(BucketData* p) {
+        std::lock_guard<std::mutex> l(pool_lock_);
+        pool_free_.push_back(p);
     }
 
     // Drains `pending_` until it is closed.  Run on kWriterIoThreads parlay
@@ -164,8 +173,8 @@ public:
         io_uring_queue_exit(&ring);
     }
 
-    // Takes ownership of `buf` (a bucket_allocator block); `count` is its live
-    // element prefix.
+    // Takes ownership of `buf` (a pool block from AllocBuffer); `count` is its
+    // live element prefix.  The writer returns it to the pool once written.
     void Write(size_t b, T* buf, size_t count) {
         Bucket& bk = buckets_[b];
         const size_t bytes = count * sizeof(T);
@@ -215,7 +224,7 @@ public:
                     off += sz;
                 }
                 memset(tail + parked_bytes, 0, tail_bytes - parked_bytes);
-                for (auto& [p, sz] : bk.parked) bucket_allocator::free((BucketData*)p);
+                for (auto& [p, sz] : bk.parked) FreeBuffer((BucketData*)p);
                 CHECK(r->n < IO_VECTOR_SIZE) << "BucketWriter: no iovec left for tail";
                 r->Add(tail, tail_bytes);
                 r->owns_tail = true;   // aligned_alloc'd, not a scatter buffer
@@ -228,47 +237,6 @@ public:
 
         pending_.Close();
         return results_;
-    }
-
-    // Hand a worker a buffer the writer has finished with, or nullptr if none is
-    // available (the caller then falls back to bucket_allocator::alloc()).  Only
-    // meaningful when recycle_workers > 0.  `worker` must be this thread's
-    // parlay::worker_id(): stash_[worker] is private to it, so the common case
-    // is a plain pop with no atomics at all.
-    BucketData* TakeRecycled(size_t worker) {
-        if (recycle_workers_ == 0) return nullptr;
-        std::vector<BucketData*>& s = stash_[worker];
-        if (s.empty()) {
-            // Claim the whole chain in one exchange.  Because a pop never CASes
-            // an individual node -- it only ever takes the entire chain -- this
-            // stack cannot hit ABA, which is why no hazard pointers are needed.
-            BucketData* p = recycled_.exchange(nullptr, std::memory_order_acquire);
-            while (p != nullptr) {
-                BucketData* next = next_of(p);
-                s.push_back(p);
-                p = next;
-            }
-            if (s.empty()) return nullptr;
-        }
-        BucketData* out = s.back();
-        s.pop_back();
-        return out;
-    }
-
-    // Return every deferred buffer to bucket_allocator.  Call once, from a
-    // parlay worker, after the I/O threads have joined (so nothing can still be
-    // pushing) and before bucket_allocator::finish().
-    void DrainRecycled() {
-        for (std::vector<BucketData*>& s : stash_) {
-            for (BucketData* p : s) bucket_allocator::free(p);
-            s.clear();
-        }
-        BucketData* p = recycled_.exchange(nullptr, std::memory_order_acquire);
-        while (p != nullptr) {
-            BucketData* next = next_of(p);
-            bucket_allocator::free(p);
-            p = next;
-        }
     }
 
     // Called after the I/O threads have joined: every write has landed.
@@ -320,40 +288,15 @@ private:
         return r;
     }
 
-    // A free block's first 8 bytes are dead, so the recycle chain is threaded
-    // through the blocks themselves -- no allocation on the I/O thread.
-    static BucketData*& next_of(BucketData* p) {
-        return *reinterpret_cast<BucketData**>(p->data);
-    }
-
-    // Runs on whatever thread drives RunIoThread().  bucket_allocator keys a
-    // per-thread free list by parlay::worker_id(), a thread_local that silently
-    // returns 0 on any thread parlay never spawned -- so a caller whose I/O
-    // threads are plain std::threads must NOT free through it here (they would
-    // alias real worker 0's list and corrupt it).  Such callers pass
-    // recycle_workers > 0 and take the branch below, which only links the
-    // buffers into an atomic chain; a scatter worker later reclaims them via
-    // TakeRecycled().  One compare-exchange per request (~256 buffers), so the
-    // cross-thread cost is well under the per-buffer free it replaces.
+    // Runs on whatever thread drives RunIoThread() -- a plain std::thread for the
+    // primitives count_sort, a parlay worker for direct_sample_sort.  Finished
+    // scatter buffers go back to the writer's own thread-safe pool (FreeBuffer),
+    // which is safe to call from any thread; the tail (an aligned_alloc, not a
+    // pool block) is released with libc free.
     void Recycle(Request* r) {
         const size_t n_bufs = r->n - (r->owns_tail ? 1 : 0);
-        if (recycle_workers_ == 0) {
-            for (size_t i = 0; i < n_bufs; i++)
-                bucket_allocator::free((BucketData*)r->iov[i].iov_base);
-        } else if (n_bufs > 0) {
-            BucketData* head = nullptr;
-            BucketData* tail = nullptr;
-            for (size_t i = 0; i < n_bufs; i++) {
-                BucketData* b = (BucketData*)r->iov[i].iov_base;
-                next_of(b) = head;
-                head = b;
-                if (tail == nullptr) tail = b;
-            }
-            next_of(tail) = recycled_.load(std::memory_order_relaxed);
-            while (!recycled_.compare_exchange_weak(next_of(tail), head,
-                                                    std::memory_order_release,
-                                                    std::memory_order_relaxed)) {}
-        }
+        for (size_t i = 0; i < n_bufs; i++)
+            FreeBuffer((BucketData*)r->iov[i].iov_base);
         if (r->owns_tail) free(r->iov[r->n - 1].iov_base);
         r->Reset();
         free_requests_.Push(r);
@@ -366,10 +309,10 @@ private:
     SimpleQueue<Request*> free_requests_;
     SimpleQueue<Request*> pending_;
 
-    // Deferred recycling; inert (and untouched) when recycle_workers_ == 0.
-    const size_t recycle_workers_ = 0;
-    std::atomic<BucketData*> recycled_{nullptr};
-    std::vector<std::vector<BucketData*>> stash_;   // one per worker, worker-private
+    // Writer-owned scatter-buffer pool (thread-safe; see AllocBuffer/FreeBuffer).
+    std::mutex pool_lock_;
+    std::vector<BucketData*> pool_free_;   // recycled blocks ready to hand out
+    std::vector<BucketData*> pool_all_;    // every block allocated (freed in dtor)
 };
 
 }  // namespace ChunkSequenceOps

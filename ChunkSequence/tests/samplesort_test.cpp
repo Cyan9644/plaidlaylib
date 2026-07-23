@@ -21,8 +21,10 @@
 // an id to. The I/O threads therefore aliased real worker 0's free list,
 // corrupting it under concurrent access once enough alloc/free churn hit a
 // bad interleaving. Confirmed locally: the config below reliably segfaulted
-// before the fix (a plain parlay::internal::block_allocator-backed
-// bucket_allocator) and passes reliably after (a hazptr_stack-backed one).
+// before the fix (scatter buffers freed by the I/O threads through a
+// parlay::internal::block_allocator keyed by worker_id()) and passes reliably
+// after it (BucketWriter now owns a thread-safe buffer pool -- AllocBuffer /
+// FreeBuffer -- safe to free from any thread, including the I/O std::threads).
 //
 // Exits 0 iff the out-of-core output matches parlay::sort element-for-element.
 
