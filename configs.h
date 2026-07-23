@@ -27,15 +27,6 @@ constexpr size_t READER_READ_SIZE = READER_READ_SIZE_BYTES;
 
 constexpr size_t SAMPLE_SORT_BUCKET_SIZE = 4 << 10;
 
-// Target bytes per sample-sort bucket: the pivot count is derived so each bucket
-// holds ~this much data.  Override at build time with -DSS_TARGET_BUCKET_BYTES=<n>
-// to force many buckets at a small input (samplesortTest does this to exercise
-// the scatter/gather many-buckets regime cheaply); default ~128 MiB/bucket.
-#ifndef SS_TARGET_BUCKET_BYTES
-#define SS_TARGET_BUCKET_BYTES (1UL << 27)
-#endif
-constexpr size_t SS_TARGET_BUCKET_BYTES_C = SS_TARGET_BUCKET_BYTES;
-
 constexpr size_t IO_VECTOR_SIZE = 1024;
 
 // This is machine-dependent:

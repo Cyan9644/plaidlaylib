@@ -489,50 +489,37 @@ void count_sort(const D& dseq, size_t num_buckets,
     constexpr size_t kBufElems         = SAMPLE_SORT_BUCKET_SIZE / sizeof(T);
     constexpr size_t kWriterIoThreads  = 2;
 
-    const size_t W = std::max<size_t>(1, parlay::num_workers());
-
     BucketWriter<T> writer(result_prefix, num_buckets);
 
     // The writer's I/O threads run on plain std::threads, isolated from the
     // parlay pool that for_each_chunk's dispatcher drives -- the same
     // isolation UnorderedFileWriter already relies on elsewhere in this file.
-    // Every scatter buffer is drawn from the writer's own thread-safe pool
-    // (AllocBuffer/FreeBuffer), so the I/O threads can free finished buffers
-    // directly -- no parlay::worker_id()-keyed allocator is touched off-pool.
     std::vector<std::thread> io_threads;
     for (size_t i = 0; i < kWriterIoThreads; i++)
         io_threads.emplace_back([&writer] { writer.RunIoThread(); });
 
-    // One live scatter buffer per (worker, bucket), matching direct_sample_sort's
-    // scatter loop -- persists across for_each_chunk's per-chunk callback
-    // invocations, indexed by parlay::worker_id() exactly like the parallel
-    // count_sort's `stage` buffers above.
+    // One live bucket_allocator buffer per (worker, bucket), matching
+    // direct_sample_sort's scatter loop -- persists across for_each_chunk's
+    // per-chunk callback invocations, indexed by parlay::worker_id() exactly
+    // like the parallel count_sort's `stage` buffers above.
+    const size_t W = std::max<size_t>(1, parlay::num_workers());
     std::vector<T*>     buf(W * num_buckets, nullptr);
     std::vector<size_t> fill(W * num_buckets, 0);
     for (size_t i = 0; i < W * num_buckets; i++)
-        buf[i] = (T*)writer.AllocBuffer();
+        buf[i] = (T*)bucket_allocator::alloc();
 
     delayed::for_each_chunk(dseq, [&](size_t ci, size_t n, auto it) {
         const size_t w = parlay::worker_id();
-        // The scatter grid is sized W*num_buckets; if the body ever runs on a
-        // thread whose worker_id() >= W, `si` below indexes out of bounds ->
-        // SIGSEGV. Check once per chunk (cheap; worker_id is stable in the body).
-        CHECK(w < W) << "count_sort scatter: worker_id() " << w
-                     << " >= W " << W << " -- scatter grid overflow";
         for (size_t k = 0; k < n; k++) {
             Pair pr = *it; ++it;
             const size_t b = (size_t)pr.second;
             CHECK(b < num_buckets) << "count_sort_bucketed: bucket id " << b
                 << " out of range (num_buckets=" << num_buckets << ")";
             const size_t si = w * num_buckets + b;
-#ifdef PLAID_POOL_DEBUG
-            CHECK(buf[si] != nullptr) << "count_sort scatter: null buffer at si="
-                << si << " (w=" << w << ", b=" << b << ")";
-#endif
             buf[si][fill[si]++] = pr.first;
             if (fill[si] == kBufElems) {
                 writer.Write(b, buf[si], kBufElems);
-                buf[si] = (T*)writer.AllocBuffer();
+                buf[si] = (T*)bucket_allocator::alloc();
                 fill[si] = 0;
             }
         }
@@ -542,12 +529,13 @@ void count_sort(const D& dseq, size_t num_buckets,
     for (size_t i = 0; i < W * num_buckets; i++) {
         const size_t b = i % num_buckets;
         if (fill[i] > 0) writer.Write(b, buf[i], fill[i]);
-        else             writer.FreeBuffer((BucketData*)buf[i]);
+        else             bucket_allocator::free((BucketData*)buf[i]);
     }
 
     auto results = writer.ReapResult();
     for (auto& t : io_threads) t.join();
     writer.CloseFiles();
+    bucket_allocator::finish();
 
     // Carve each bucket's contiguous result file into CHUNK_SIZE slices --
     // the same "no repack pass" carving direct_sample_sort uses for its

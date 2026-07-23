@@ -83,7 +83,7 @@ n+= seq.chunks[r].used;
   size_t min_sample_size = std::max(1UL, 4 * parlay::num_workers() * filer/ MAIN_MEMORY_SIZE);
 // size_t max_sample_size = std::max(1UL, std::min(n / sizeof(T), filer / O_DIRECT_MULTIPLE));
 size_t max_sample_size = std::max(1UL, std::min(n, filer / O_DIRECT_MULTIPLE));
-  size_t num_samples = std::max(std::min(filer / SS_TARGET_BUCKET_BYTES_C, max_sample_size), min_sample_size);
+  size_t num_samples = std::max(std::min(filer / (1UL << 27), max_sample_size), min_sample_size);
   _pt.mark("size/params");
 
   if (n < num_samples){

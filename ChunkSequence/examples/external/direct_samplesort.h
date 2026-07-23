@@ -140,13 +140,13 @@ constexpr size_t kReaderQueueDepth  = 32;
 constexpr size_t kReaderMaxInFlight = 8;
 constexpr size_t kReaderQueueSize   = 128;  // CHUNK_SIZE buffers held by the reader
 
-// BucketWriter and BucketData now live in
+// BucketWriter, bucket_allocator and BucketData now live in
 // ChunkSequence/ExternalPrimitives/bucketed_file_writer.h (namespace
 // ChunkSequenceOps), shared with the primitives-based partitioner. Pull them
-// into direct_ss so every ds::BucketWriter / ds::BucketData reference below keeps
-// resolving unchanged.  Scatter buffers are drawn from the writer's own pool
-// (writer.AllocBuffer/FreeBuffer) rather than a standalone allocator.
+// into direct_ss so every ds::BucketWriter / ds::bucket_allocator / ds::BucketData
+// reference below keeps resolving unchanged.
 using ChunkSequenceOps::BucketWriter;
+using ChunkSequenceOps::bucket_allocator;
 using ChunkSequenceOps::BucketData;
 
 // Elements per chunk, tolerating a non-dense input (e.g. another sort's output):
@@ -445,7 +445,7 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
                 std::vector<T*> buf(num_buckets);
                 std::vector<size_t> fill(num_buckets, 0);   // elements held per bucket
                 for (size_t b = 0; b < num_buckets; b++)
-                    buf[b] = (T*)writer.AllocBuffer();
+                    buf[b] = (T*)ds::bucket_allocator::alloc();
 
                 while (true) {
                     auto [data, count, index] = reader.Poll();
@@ -456,7 +456,7 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
                         buf[b][fill[b]++] = data[i];
                         if (fill[b] == kBufElems) {
                             writer.Write(b, buf[b], kBufElems);
-                            buf[b] = (T*)writer.AllocBuffer();
+                            buf[b] = (T*)ds::bucket_allocator::alloc();
                             fill[b] = 0;
                         }
                     }
@@ -465,7 +465,7 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
 
                 for (size_t b = 0; b < num_buckets; b++) {
                     if (fill[b] > 0) writer.Write(b, buf[b], fill[b]);
-                    else writer.FreeBuffer((ds::BucketData*)buf[b]);
+                    else ds::bucket_allocator::free((ds::BucketData*)buf[b]);
                 }
             }, /*granularity=*/1);
             // Flush the partial requests and close the pending queue, which is
@@ -474,6 +474,7 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
         });
     reader.Wait();
     writer.CloseFiles();
+    ds::bucket_allocator::finish();
     timer.Next("scatter");
 
     // ── gather  (ScatterGather::WorkerOnlyPhase2) ────────────────────────────

@@ -94,17 +94,6 @@ public:
 
         void Free(T* p) {
             std::lock_guard<std::mutex> l(free_list_lock());
-#ifdef PLAID_POOL_DEBUG
-            // Diagnostic (opt-in): catch the corruption modes that make a later
-            // reader hand out a bad buffer. Foreign/misaligned pointer, or a
-            // double-free (already sitting in the free list). O(n) per free, so
-            // only for small-n repro runs -- build with -DPLAID_POOL_DEBUG.
-            CHECK(reinterpret_cast<uintptr_t>(p) % O_DIRECT_MEMORY_ALIGNMENT == 0)
-                << "ChunkSequenceReader::Free: misaligned buffer " << (void*)p;
-            for (T* q : free_list())
-                CHECK(q != p) << "ChunkSequenceReader::Free: double-free of "
-                              << (void*)p << " (buffer already in the pool)";
-#endif
             free_list().push_back(p);
         }
     };

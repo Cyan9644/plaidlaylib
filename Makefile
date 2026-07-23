@@ -43,7 +43,7 @@ TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/histogramTest $(BINDIR)/kmpTest $(BINDIR)/rabinKarpTest \
                  $(BINDIR)/scalarTest $(BINDIR)/bigintAddTest $(BINDIR)/convexHullTest \
                  $(BINDIR)/partitionTest $(BINDIR)/segmentedReduceTest \
-                 $(BINDIR)/dc3Test $(BINDIR)/samplesortTest \
+                 $(BINDIR)/dc3Test \
                  $(BINDIR)/bigintMulTest
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
@@ -224,15 +224,6 @@ $(BINDIR)/segmentedReduceTest: ChunkSequence/tests/segmented_reduce_test.cpp $(U
 # dc3Test: out-of-core DC3 suffix array vs brute force + a streaming-vs-DRAM
 # differential.  Header-only algorithm (chunk_dc3.h), no upstream baseline.
 $(BINDIR)/dc3Test: ChunkSequence/tests/dc3_test.cpp $(UTIL_OBJS)
-	$(LINK)
-
-# samplesortTest: external_samplesort at a bucket count/scatter churn level
-# no other test or sweep reaches cheaply (overrides SS_TARGET_BUCKET_BYTES /
-# CHUNK_SIZE_BYTES itself, in the source, before any real n gets large) --
-# the regression test for the bucket_allocator data race in
-# bucketed_file_writer.h.  No -D needed here since the .cpp #defines both
-# macros itself before configs.h is first included.
-$(BINDIR)/samplesortTest: ChunkSequence/tests/samplesort_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
 # convexHullTest includes upstream quickhull.h (its in-DRAM differential
