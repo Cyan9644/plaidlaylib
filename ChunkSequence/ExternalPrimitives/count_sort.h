@@ -489,7 +489,15 @@ void count_sort(const D& dseq, size_t num_buckets,
     constexpr size_t kBufElems         = SAMPLE_SORT_BUCKET_SIZE / sizeof(T);
     constexpr size_t kWriterIoThreads  = 2;
 
-    BucketWriter<T> writer(result_prefix, num_buckets);
+    const size_t W = std::max<size_t>(1, parlay::num_workers());
+
+    // W enables the writer's deferred recycling: its I/O threads are plain
+    // std::threads (below), and bucket_allocator is keyed by
+    // parlay::worker_id() -- which silently returns 0 off the parlay pool, so a
+    // std::thread freeing through it corrupts real worker 0's free list.  With
+    // recycling on, the I/O threads only chain finished buffers; this scatter
+    // loop reclaims them via writer.TakeRecycled(w), on a genuine worker.
+    BucketWriter<T> writer(result_prefix, num_buckets, W);
 
     // The writer's I/O threads run on plain std::threads, isolated from the
     // parlay pool that for_each_chunk's dispatcher drives -- the same
@@ -502,7 +510,6 @@ void count_sort(const D& dseq, size_t num_buckets,
     // direct_sample_sort's scatter loop -- persists across for_each_chunk's
     // per-chunk callback invocations, indexed by parlay::worker_id() exactly
     // like the parallel count_sort's `stage` buffers above.
-    const size_t W = std::max<size_t>(1, parlay::num_workers());
     std::vector<T*>     buf(W * num_buckets, nullptr);
     std::vector<size_t> fill(W * num_buckets, 0);
     for (size_t i = 0; i < W * num_buckets; i++)
@@ -519,7 +526,10 @@ void count_sort(const D& dseq, size_t num_buckets,
             buf[si][fill[si]++] = pr.first;
             if (fill[si] == kBufElems) {
                 writer.Write(b, buf[si], kBufElems);
-                buf[si] = (T*)bucket_allocator::alloc();
+                // Reuse a buffer the writer has finished with when one is going
+                // spare; otherwise take a fresh one from the allocator.
+                BucketData* nb = writer.TakeRecycled(w);
+                buf[si] = nb ? (T*)nb : (T*)bucket_allocator::alloc();
                 fill[si] = 0;
             }
         }
@@ -534,6 +544,9 @@ void count_sort(const D& dseq, size_t num_buckets,
 
     auto results = writer.ReapResult();
     for (auto& t : io_threads) t.join();
+    // The I/O threads are gone, so nothing can still be chaining buffers; hand
+    // the deferred ones back before the allocator drops its blocks.
+    writer.DrainRecycled();
     writer.CloseFiles();
     bucket_allocator::finish();
 
