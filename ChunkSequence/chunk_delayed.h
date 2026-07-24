@@ -550,9 +550,14 @@ void for_each_window(const D& d, WindowBody&& wbody, size_t reader_threads = 8) 
 // 10 to match the eager ChunkReduce reader (the config that reaches device-read
 // speed); one reader serves the whole pass, so there is no per-window setup cost.
 template<class D, class Body>
-void for_each_chunk(const D& d, Body&& body, size_t reader_threads = 10) {
+void for_each_chunk(const D& d, Body&& body, size_t reader_threads = 10,
+                    size_t compute_workers = 0) {
     const size_t nc = d.num_chunks();
     if (nc == 0) return;
+    // 0 = "use the whole pool"; callers that share the pool with other tasks
+    // (e.g. count_sort's writer I/O threads) pass P - kWriterIoThreads so the
+    // scatter fork-join matches the available workers instead of oversubscribing.
+    if (compute_workers == 0) compute_workers = parlay::num_workers();
 
     // Plan every chunk up front (metadata only): deduped reads + per-chunk state.
     std::vector<chunk>    refs;                            // .index = global read-id
@@ -615,7 +620,7 @@ void for_each_chunk(const D& d, Body&& body, size_t reader_threads = 10) {
     });
 
     // Workers: build + compute each ready chunk, then free its buffers.
-    parlay::parallel_for(0, parlay::num_workers(), [&](size_t) {
+    parlay::parallel_for(0, compute_workers, [&](size_t) {
         while (true) {
             auto [ci, code] = ready.Poll((size_t)0);
             if (code == QueueCode::FINISH) break;

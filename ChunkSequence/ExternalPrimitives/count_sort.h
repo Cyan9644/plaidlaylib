@@ -491,12 +491,20 @@ void count_sort(const D& dseq, size_t num_buckets,
 
     BucketWriter<T> writer(result_prefix, num_buckets);
 
-    // The writer's I/O threads run on plain std::threads, isolated from the
-    // parlay pool that for_each_chunk's dispatcher drives -- the same
-    // isolation UnorderedFileWriter already relies on elsewhere in this file.
-    std::vector<std::thread> io_threads;
-    for (size_t i = 0; i < kWriterIoThreads; i++)
-        io_threads.emplace_back([&writer] { writer.RunIoThread(); });
+    // INVARIANT: every thread that touches bucket_allocator must be a parlay
+    // worker.  bucket_allocator is backed by parlay::internal::block_allocator,
+    // whose free lists are keyed by parlay::worker_id() -- a thread_local that
+    // silently returns 0 on any thread the scheduler never adopted.  Running
+    // RunIoThread() (-> Recycle() -> bucket_allocator::free()) on a plain
+    // std::thread makes it alias real worker 0's free list, an unsynchronized
+    // race that corrupts the allocator (SIGSEGV at scale) and leaks blocks
+    // (OOM).  So the I/O threads run as parlay tasks, exactly as
+    // direct_samplesort.h and Peter's scatter_gather.h do.  The scatter shares
+    // the pool with them, so it is capped to P - kWriterIoThreads workers
+    // (below) to avoid oversubscribing for_each_chunk's fork-join.
+    CHECK(parlay::num_workers() > kWriterIoThreads)
+        << "count_sort: need > " << kWriterIoThreads << " parlay workers";
+    const size_t scatter_workers = parlay::num_workers() - kWriterIoThreads;
 
     // One live bucket_allocator buffer per (worker, bucket), matching
     // direct_sample_sort's scatter loop -- persists across for_each_chunk's
@@ -508,32 +516,43 @@ void count_sort(const D& dseq, size_t num_buckets,
     for (size_t i = 0; i < W * num_buckets; i++)
         buf[i] = (T*)bucket_allocator::alloc();
 
-    delayed::for_each_chunk(dseq, [&](size_t ci, size_t n, auto it) {
-        const size_t w = parlay::worker_id();
-        for (size_t k = 0; k < n; k++) {
-            Pair pr = *it; ++it;
-            const size_t b = (size_t)pr.second;
-            CHECK(b < num_buckets) << "count_sort_bucketed: bucket id " << b
-                << " out of range (num_buckets=" << num_buckets << ")";
-            const size_t si = w * num_buckets + b;
-            buf[si][fill[si]++] = pr.first;
-            if (fill[si] == kBufElems) {
-                writer.Write(b, buf[si], kBufElems);
-                buf[si] = (T*)bucket_allocator::alloc();
-                fill[si] = 0;
+    // The scatter runs alongside the writer's I/O tasks; ReapResult() stays in
+    // this branch because its pending_.Close() is what lets those tasks return.
+    std::vector<typename BucketWriter<T>::Result> results;
+    parlay::par_do(
+        [&] {
+            parlay::parallel_for(0, kWriterIoThreads, [&](size_t) {
+                writer.RunIoThread();
+            }, /*granularity=*/1);
+        },
+        [&] {
+            delayed::for_each_chunk(dseq, [&](size_t ci, size_t n, auto it) {
+                const size_t w = parlay::worker_id();
+                for (size_t k = 0; k < n; k++) {
+                    Pair pr = *it; ++it;
+                    const size_t b = (size_t)pr.second;
+                    CHECK(b < num_buckets) << "count_sort_bucketed: bucket id " << b
+                        << " out of range (num_buckets=" << num_buckets << ")";
+                    const size_t si = w * num_buckets + b;
+                    buf[si][fill[si]++] = pr.first;
+                    if (fill[si] == kBufElems) {
+                        writer.Write(b, buf[si], kBufElems);
+                        buf[si] = (T*)bucket_allocator::alloc();
+                        fill[si] = 0;
+                    }
+                }
+            }, /*reader_threads=*/10, /*compute_workers=*/scatter_workers);
+
+            // Flush every worker's residual per-bucket buffer.
+            for (size_t i = 0; i < W * num_buckets; i++) {
+                const size_t b = i % num_buckets;
+                if (fill[i] > 0) writer.Write(b, buf[i], fill[i]);
+                else             bucket_allocator::free((BucketData*)buf[i]);
             }
-        }
-    });
 
-    // Flush every worker's residual per-bucket buffer.
-    for (size_t i = 0; i < W * num_buckets; i++) {
-        const size_t b = i % num_buckets;
-        if (fill[i] > 0) writer.Write(b, buf[i], fill[i]);
-        else             bucket_allocator::free((BucketData*)buf[i]);
-    }
+            results = writer.ReapResult();
+        });
 
-    auto results = writer.ReapResult();
-    for (auto& t : io_threads) t.join();
     writer.CloseFiles();
     bucket_allocator::finish();
 
