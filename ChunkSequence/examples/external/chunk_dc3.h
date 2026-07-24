@@ -197,8 +197,9 @@ inline chunk_seq concat(chunk_seq a, const chunk_seq& b) {
     return a;
 }
 
-// ── read a chunk_seq<uint32> fully into DRAM (base case) ──────────────────────
-inline void read_u32(const chunk_seq& seq, size_t n, std::vector<int>& out) {
+// ── read a chunk_seq<uint32> fully into a DRAM parlay sequence (base case) ─────
+inline parlay::sequence<uint32_t> read_u32(const chunk_seq& seq, size_t n) {
+    auto out = parlay::sequence<uint32_t>::uninitialized(n);
     std::vector<const chunk*> ord;
     for (const auto& c : seq.chunks) ord.push_back(&c);
     std::sort(ord.begin(), ord.end(),
@@ -214,68 +215,88 @@ inline void read_u32(const chunk_seq& seq, size_t n, std::vector<int>& out) {
         close(fd);
         const auto* e = (const uint32_t*)buf;
         const size_t cnt = c->used / sizeof(uint32_t);
-        for (size_t i = 0; i < cnt; i++) out[j++] = (int)e[i];
+        for (size_t i = 0; i < cnt; i++) out[j++] = e[i];
     }
     free(buf);
     CHECK(j == n) << "dc3: base-case element count " << j << " != " << n;
+    return out;
 }
 
-// ── in-memory Kärkkäinen–Sanders suffix array (the DRAM base case) ────────────
-// The reference "simple linear work" DC3 on an int array s[0..n-1] with s[i] > 0
-// and three trailing zeros (s[n]=s[n+1]=s[n+2]=0); writes SA[0..n-1].
-inline bool ks_leq(int a1, int a2, int b1, int b2) {
-    return a1 < b1 || (a1 == b1 && a2 <= b2);
-}
-inline bool ks_leq(int a1, int a2, int a3, int b1, int b2, int b3) {
-    return a1 < b1 || (a1 == b1 && ks_leq(a2, a3, b2, b3));
-}
-inline void ks_radix(const int* a, int* b, const int* r, int n, int K) {
-    std::vector<int> c(K + 1, 0);
-    for (int i = 0; i < n; i++) c[r[a[i]]]++;
-    for (int i = 0, sum = 0; i <= K; i++) { int t = c[i]; c[i] = sum; sum += t; }
-    for (int i = 0; i < n; i++) b[c[r[a[i]]]++] = a[i];
-}
-inline void ks_suffix_array(int* s, int* SA, int n, int K) {
-    const int n0 = (n + 2) / 3, n1 = (n + 1) / 3, n2 = n / 3, n02 = n0 + n2;
-    std::vector<int> s12(n02 + 3, 0), SA12(n02 + 3, 0), s0(n0 > 0 ? n0 : 1), SA0(n0 > 0 ? n0 : 1);
-    for (int i = 0, j = 0; i < n + (n0 - n1); i++)
-        if (i % 3 != 0) s12[j++] = i;
-    ks_radix(s12.data(), SA12.data(), s + 2, n02, K);
-    ks_radix(SA12.data(), s12.data(), s + 1, n02, K);
-    ks_radix(s12.data(), SA12.data(), s, n02, K);
-    int name = 0, c0 = -1, c1 = -1, c2 = -1;
-    for (int i = 0; i < n02; i++) {
-        if (s[SA12[i]] != c0 || s[SA12[i] + 1] != c1 || s[SA12[i] + 2] != c2) {
-            name++; c0 = s[SA12[i]]; c1 = s[SA12[i] + 1]; c2 = s[SA12[i] + 2];
-        }
-        if (SA12[i] % 3 == 1) s12[SA12[i] / 3] = name;
-        else s12[SA12[i] / 3 + n0] = name;
+// ── parallel in-memory suffix array over an integer alphabet (the DRAM base
+// case) ───────────────────────────────────────────────────────────────────────
+// A generalization of parlaylib's parallel prefix-doubling suffix_array
+// (deps/parlaylib-examples/suffix_array.h) off its hard-wired byte alphabet: the
+// characters here are uint32 ranks (values in [1, n]; 0 is the past-end
+// sentinel), so we bootstrap the sort on the first *two* uint32 characters packed
+// into one 64-bit key (offset 2) instead of 12 bytes, then run the identical
+// doubling loop — which only ever touches the integer `ranks`, never the
+// characters, so it is alphabet-agnostic.  O(n log n) worst case, parallel; used
+// so the base case saturates all cores rather than the old sequential
+// Kärkkäinen–Sanders.  Returns the n suffix start positions in sorted order.
+inline parlay::sequence<uint32_t> psa_int(const parlay::sequence<uint32_t>& S) {
+    using index = uint32_t;
+    using ulong = unsigned long;
+    struct seg { index start, end; };
+    const index n = (index)S.size();
+    const int granularity = 100;
+    auto s = [&](long i) -> ulong { return (i < (long)n) ? (ulong)S[i] : 0ul; };
+
+    // bootstrap: sort suffixes by their first two characters (s[i], s[i+1]).
+    auto Clx = parlay::delayed_tabulate(n, [&](long i) {
+        return std::pair{(s(i) << 32) | s(i + 1), (ulong)i};
+    });
+    auto Cl = parlay::sort(Clx);
+    auto sorted = parlay::sequence<index>::uninitialized(n);
+    auto ranks = parlay::sequence<index>::uninitialized(n);
+    auto flags = parlay::sequence<bool>::uninitialized(n);
+    parlay::parallel_for(0, n, [&](long j) {
+        sorted[j] = (index)Cl[j].second;
+        flags[j] = (j == 0) || Cl[j].first != Cl[j - 1].first;
+    });
+
+    // Split a segment's flags into new (>1-length) segments and refresh ranks.
+    auto segs_from_flags = [&](parlay::sequence<bool>& fl, index seg_start) {
+        auto offsets = parlay::pack_index(fl);
+        auto segs = parlay::tabulate(offsets.size(), [&](long j) {
+            index start = seg_start + (index)offsets[j];
+            index end = seg_start +
+                (index)((j == (long)offsets.size() - 1) ? fl.size() : offsets[j + 1]);
+            // 1-based ranks: reserve rank 0 for the past-end sentinel so an
+            // off-the-end lookup (returns 0 below) sorts strictly below every
+            // real suffix.  (parlaylib bootstraps on 12 chars, which makes rank 0
+            // unreachable for real suffixes implicitly; our 2-char bootstrap does
+            // not, so we reserve it explicitly — otherwise an all-equal text like
+            // "aaa" never splits its tail segment and the loop spins forever.)
+            parlay::parallel_for(start, end, [&](index i) { ranks[sorted[i]] = start + 1; },
+                                 granularity);
+            return seg{start, end};
+        }, granularity);
+        return parlay::filter(segs, [](seg x) { return (x.end - x.start) > 1; });
+    };
+
+    auto segments = segs_from_flags(flags, 0);
+    index offset = 2;
+    while (segments.size() > 0) {
+        auto fl2 = parlay::map(segments, [&](seg segment) {
+            index st = segment.start, l = segment.end - segment.start;
+            auto p = parlay::tabulate(l, [&](long i) {
+                index k = sorted[st + i];
+                return std::pair{(k + offset >= n) ? (index)0 : ranks[k + offset], k};
+            }, granularity);
+            parlay::sort_inplace(p);
+            parlay::sequence<bool> ff(l);
+            parlay::parallel_for(0, l, [&](long i) {
+                sorted[st + i] = p[i].second;
+                ff[i] = (i == 0) || p[i].first != p[i - 1].first;
+            }, granularity);
+            return ff;
+        }, 1);
+        segments = parlay::flatten(parlay::tabulate(segments.size(), [&](long i) {
+            return segs_from_flags(fl2[i], segments[i].start);
+        }, 1));
+        offset = 2 * offset;
     }
-    if (name < n02) {
-        ks_suffix_array(s12.data(), SA12.data(), n02, name);
-        for (int i = 0; i < n02; i++) s12[SA12[i]] = i + 1;
-    } else {
-        for (int i = 0; i < n02; i++) SA12[s12[i] - 1] = i;
-    }
-    for (int i = 0, j = 0; i < n02; i++)
-        if (SA12[i] < n0) s0[j++] = 3 * SA12[i];
-    ks_radix(s0.data(), SA0.data(), s, n0, K);
-    for (int p = 0, t = n0 - n1, k = 0; k < n; k++) {
-        const int i = SA12[t] < n0 ? SA12[t] * 3 + 1 : (SA12[t] - n0) * 3 + 2;
-        const int j = SA0[p];
-        const bool le = SA12[t] < n0
-            ? ks_leq(s[i], s12[SA12[t] + n0], s[j], s12[j / 3])
-            : ks_leq(s[i], s[i + 1], s12[SA12[t] - n0 + 1], s[j], s[j + 1], s12[j / 3 + n0]);
-        if (le) {
-            SA[k] = i;
-            if (++t == n02) for (k++; p < n0; p++, k++) SA[k] = SA0[p];
-        } else {
-            SA[k] = j;
-            if (++p == n0)
-                for (k++; t < n02; t++, k++)
-                    SA[k] = SA12[t] < n0 ? SA12[t] * 3 + 1 : (SA12[t] - n0) * 3 + 2;
-        }
-    }
+    return sorted;
 }
 
 inline size_t dram_budget() {
@@ -288,14 +309,10 @@ inline size_t dram_budget() {
 // Compute the suffix array of a uint32 text in DRAM, return it as a chunk_seq.
 inline chunk_seq base_case(const chunk_seq& text, size_t n, const std::string& out_prefix) {
     if (n == 1) return tabulate<uint32_t>(1, out_prefix, [](size_t) { return uint32_t{0}; });
-    std::vector<int> s(n + 3, 0);
-    read_u32(text, n, s);   // fills s[0..n-1]; s[n..n+2] stay 0
-    int K = 0;
-    for (size_t i = 0; i < n; i++) K = std::max(K, s[i]);
-    std::vector<int> SA(n);
-    ks_suffix_array(s.data(), SA.data(), (int)n, K);
+    parlay::sequence<uint32_t> s = read_u32(text, n);   // s[0..n-1]; past-end -> 0
+    parlay::sequence<uint32_t> SA = psa_int(s);
     return tabulate<uint32_t>(n, out_prefix,
-                              [&SA](size_t i) { return (uint32_t)SA[i]; });
+                              [&SA](size_t i) { return SA[i]; });
 }
 
 // ── step 1: character triples for every sample R-index ────────────────────────
