@@ -252,11 +252,24 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
         std::cout << "*** out-of-core Bellman-Ford (fast) did not converge within "
                   << n << " rounds ***\n";
 
-    std::cout << "Running in-memory bellman_ford..." << std::flush;
-    t0 = Clock::now();
-    auto d_mem_opt = bellman_ford<long double>(start, WG);
-    const double inmem_op_s = elapsed(t0);
-    std::cout << " done (" << std::setprecision(4) << inmem_op_s << "s)\n";
+    // Skipped under PLAID_TRACE: the in-memory baseline is pure CPU/no-disk
+    // work that has nothing to do with the out-of-core algorithm being
+    // profiled, and its correctness role (cross-checking d_ext/d_fast below)
+    // isn't needed for a profiling run -- make test / make bench-examples
+    // (run without PLAID_TRACE) already cover that. Leaving it out keeps a
+    // trace capture limited to the out-of-core algorithm's own I/O/CPU
+    // pattern instead of appending an unrelated CPU-only phase after it.
+    std::optional<parlay::sequence<long double>> d_mem_opt;
+    double inmem_op_s = 0;
+    if (!trace_enabled()) {
+        std::cout << "Running in-memory bellman_ford..." << std::flush;
+        t0 = Clock::now();
+        d_mem_opt = bellman_ford<long double>(start, WG);
+        inmem_op_s = elapsed(t0);
+        std::cout << " done (" << std::setprecision(4) << inmem_op_s << "s)\n";
+    } else {
+        std::cout << "Running in-memory bellman_ford: skipped (PLAID_TRACE)\n";
+    }
 
     // Cross-check one out-of-core result against the in-memory baseline
     // (unreached-aware: the two sides use different "unreached" sentinels).
@@ -292,19 +305,23 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
     };
 
     // Skip the cross-check for a budget-skipped per-vertex run -- there's no
-    // result to compare.
-    const bool agree = !per_vertex_ok || compare_to_mem("out-of-core", d_ext, ext_converged);
-    const bool fast_agree = compare_to_mem("out-of-core (fast)", d_fast, fast_converged);
+    // result to compare. Also skip entirely under PLAID_TRACE, where
+    // d_mem_opt was never computed (see above).
+    const bool agree = trace_enabled() || !per_vertex_ok ||
+                        compare_to_mem("out-of-core", d_ext, ext_converged);
+    const bool fast_agree = trace_enabled() ||
+                             compare_to_mem("out-of-core (fast)", d_fast, fast_converged);
 
     // Machine-readable line for benchmarks/run_benches.py.
     // Columns: case,n,m,build_s,op_s,inmem_op_s,reachable,throughput_gb_s,
     //          fast_op_s,fast_reachable,fast_throughput_gb_s
     // (op_s/reachable/throughput_gb_s blank when the per-vertex method is
-    // skipped past the byte budget, so the plotted per-vertex line stops.)
+    // skipped past the byte budget, so the plotted per-vertex line stops;
+    // inmem_op_s blank under PLAID_TRACE, where it was never run.)
     auto f9 = [](double v) { std::ostringstream o; o << std::setprecision(9) << v; return o.str(); };
     std::cout << "CSV," << label << ',' << n << ',' << m << ',' << f9(build_s)
               << ',' << (per_vertex_ok ? f9(op_s) : std::string())
-              << ',' << f9(inmem_op_s)
+              << ',' << (trace_enabled() ? std::string() : f9(inmem_op_s))
               << ',' << (per_vertex_ok ? std::to_string(reachable) : std::string())
               << ',' << (per_vertex_ok ? f9(gb_s) : std::string())
               << ',' << f9(fast_op_s) << ',' << fast_reachable
