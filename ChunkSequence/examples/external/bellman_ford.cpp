@@ -48,8 +48,8 @@
 // env-overridable) -- past that point RMAT generation + bellman_ford's O(n)
 // `long double` distance arrays (and, for the "dense" case, its n^2/2-scaling
 // edge count) stop being a useful DRAM baseline and are just wall-clock/memory
-// cost -- and under PLAID_TRACE, where it's irrelevant to the I/O/CPU profile
-// being captured (see run_case()).
+// cost.  It runs regardless of PLAID_TRACE (raise the env var on a box with
+// enough DRAM to still want the comparison at larger n; see run_case()).
 //
 //   usage: bellman_fordExample [global --flags] [n] [balanced_avg_degree] [case]
 //     n                    requested vertex count, rounded up to a power of
@@ -72,7 +72,7 @@
 //   the same fields for external_bellman_ford_fast).  op_s/reachable/
 //   throughput_gb_s are blank when the per-vertex method is skipped past its
 //   byte budget; inmem_op_s is blank when the in-memory baseline is skipped
-//   (n past BELLMAN_FORD_INMEM_MAX_N, or PLAID_TRACE).
+//   (n past BELLMAN_FORD_INMEM_MAX_N).
 
 #include <chrono>
 #include <cstdint>
@@ -259,22 +259,17 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
         std::cout << "*** out-of-core Bellman-Ford (fast) did not converge within "
                   << n << " rounds ***\n";
 
-    // Skipped under PLAID_TRACE: the in-memory baseline is pure CPU/no-disk
-    // work that has nothing to do with the out-of-core algorithm being
-    // profiled, and its correctness role (cross-checking d_ext/d_fast below)
-    // isn't needed for a profiling run -- make test / make bench-examples
-    // (run without PLAID_TRACE) already cover that. Leaving it out keeps a
-    // trace capture limited to the out-of-core algorithm's own I/O/CPU
-    // pattern instead of appending an unrelated CPU-only phase after it.
-    //
-    // Also skipped past inmem_max_n vertices regardless of tracing: unlike
-    // io_trace.py's largest sweep point (the only one traced), every smaller
-    // point in a sweep runs this binary WITHOUT PLAID_TRACE, so a sweep whose
-    // smaller points still exceed a couple billion vertices would otherwise
-    // pay full DRAM cost (RMAT generation + bellman_ford<long double>, i.e.
-    // O(n) `long double` distance arrays with an n^2/2-edge "dense" case) on
-    // every one of them, not just the largest. Default matches the size at
-    // which that DRAM cost stops being a useful baseline point.
+    // Skipped past inmem_max_n vertices: a sweep's smaller points all run
+    // this binary WITHOUT PLAID_TRACE (io_trace.py traces only the largest by
+    // default), so a sweep whose smaller points still exceed a couple billion
+    // vertices would otherwise pay full DRAM cost (RMAT generation +
+    // bellman_ford<long double>, i.e. O(n) `long double` distance arrays with
+    // an n^2/2-edge "dense" case) on every one of them, not just the largest.
+    // Default matches the size at which that DRAM cost stops being a useful
+    // baseline point; raise BELLMAN_FORD_INMEM_MAX_N on a box with enough
+    // DRAM to still want the comparison at larger n (the baseline runs
+    // regardless of PLAID_TRACE -- it appends a CPU-only, disk-idle tail to
+    // a trace capture after fast_op_end, which is expected).
     size_t inmem_max_n = 1ull << 30;
     if (const char* e = getenv("BELLMAN_FORD_INMEM_MAX_N"))
         inmem_max_n = std::stoull(e);
@@ -282,9 +277,7 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
 
     std::optional<parlay::sequence<long double>> d_mem_opt;
     double inmem_op_s = 0;
-    if (trace_enabled()) {
-        std::cout << "Running in-memory bellman_ford: skipped (PLAID_TRACE)\n";
-    } else if (!inmem_ok) {
+    if (!inmem_ok) {
         std::cout << "Running in-memory bellman_ford: skipped (n " << n
                   << " exceeds inmem_max_n " << inmem_max_n << ")\n";
     } else {
@@ -319,7 +312,7 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
                     }
                 }
             }
-        } else if (!d_mem_opt.has_value() && (trace_enabled() || !inmem_ok)) {
+        } else if (!d_mem_opt.has_value() && !inmem_ok) {
             std::cout << name << " result skipped comparison (in-mem bellman_ford "
                       << "not run)\n";
         } else if (!d_mem_opt.has_value()) {
@@ -333,8 +326,8 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
 
     // Skip the cross-check for a budget-skipped per-vertex run -- there's no
     // result to compare. Also skip entirely when d_mem_opt was never computed
-    // (PLAID_TRACE, or n past inmem_max_n -- see above).
-    const bool no_inmem = trace_enabled() || !inmem_ok;
+    // (n past inmem_max_n -- see above).
+    const bool no_inmem = !inmem_ok;
     const bool agree = no_inmem || !per_vertex_ok ||
                         compare_to_mem("out-of-core", d_ext, ext_converged);
     const bool fast_agree = no_inmem ||
@@ -345,8 +338,7 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
     //          fast_op_s,fast_reachable,fast_throughput_gb_s
     // (op_s/reachable/throughput_gb_s blank when the per-vertex method is
     // skipped past the byte budget, so the plotted per-vertex line stops;
-    // inmem_op_s blank under PLAID_TRACE or past inmem_max_n vertices, where
-    // it was never run.)
+    // inmem_op_s blank past inmem_max_n vertices, where it was never run.)
     auto f9 = [](double v) { std::ostringstream o; o << std::setprecision(9) << v; return o.str(); };
     std::cout << "CSV," << label << ',' << n << ',' << m << ',' << f9(build_s)
               << ',' << (per_vertex_ok ? f9(op_s) : std::string())
