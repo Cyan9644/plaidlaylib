@@ -419,8 +419,8 @@ def plot_trace(ser, markers, devices, t0, path):
 
     # A — aggregate throughput (read/write asymmetry).
     fig, ax_bw = plt.subplots(figsize=(10, 4.5), constrained_layout=True)
-    ax_bw.plot(xs, ser["agg_read"], "-", color=plot_style.PALETTE["blue"], label="read", linewidth=0.5)
-    ax_bw.plot(xs, ser["agg_write"], "-", color=plot_style.PALETTE["red"], label="write", linewidth=0.5)
+    ax_bw.plot(xs, ser["agg_read"], "-", color=plot_style.PALETTE["blue"], label="read", 0.7)
+    ax_bw.plot(xs, ser["agg_write"], "-", color=plot_style.PALETTE["red"], label="write", 0.7)
     ax_bw.set_ylabel("Aggregate MB/s")
     ax_bw.set_xlabel("Seconds Since Initial Sample", labelpad=XLABEL_PAD)
     ax_bw.set_title("Aggregate Throughput Over All Drives")
@@ -434,9 +434,9 @@ def plot_trace(ser, markers, devices, t0, path):
 
     # B — CPU/disk utilization (io-bound vs cpu-bound).
     fig, ax_bn = plt.subplots(figsize=(10, 4.5), constrained_layout=True)
-    ax_bn.plot(xs, ser["mean_util"], "-", color=plot_style.PALETTE["violet"], label="mean drive %util", linewidth=0.5)
-    ax_bn.plot(xs, ser["cpu"], "-", color=plot_style.PALETTE["green"], label="CPU %", linewidth=0.5)
-    ax_bn.plot(xs, ser["iowait"], "-", color=plot_style.PALETTE["orange"], label="iowait %", linewidth=0.5)
+    ax_bn.plot(xs, ser["mean_util"], "-", color=plot_style.PALETTE["violet"], label="mean drive %util", 0.7)
+    ax_bn.plot(xs, ser["cpu"], "-", color=plot_style.PALETTE["green"], label="CPU %", 0.7)
+    ax_bn.plot(xs, ser["iowait"], "-", color=plot_style.PALETTE["orange"], label="iowait %", 0.7)
     ax_bn.set_ylabel("Percent")
     ax_bn.set_xlabel("Seconds Since Initial Sample", labelpad=XLABEL_PAD)
     ax_bn.set_ylim(0, 105)

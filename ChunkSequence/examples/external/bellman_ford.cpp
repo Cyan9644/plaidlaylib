@@ -42,8 +42,14 @@
 // skips the per-vertex method once a case's edge bytes exceed
 // BELLMAN_FORD_PER_VERTEX_MAX_BYTES (default 512 KiB, env-overridable) --
 // past that it isn't useful benchmark data, just wall-clock cost -- and
-// leaves its CSV fields blank for that point.  external_bellman_ford_fast and
-// the in-memory baseline are never gated and always run at every size.
+// leaves its CSV fields blank for that point.  external_bellman_ford_fast is
+// never gated and always runs at every size; the in-memory baseline is
+// skipped past BELLMAN_FORD_INMEM_MAX_N vertices (default 2^30,
+// env-overridable) -- past that point RMAT generation + bellman_ford's O(n)
+// `long double` distance arrays (and, for the "dense" case, its n^2/2-scaling
+// edge count) stop being a useful DRAM baseline and are just wall-clock/memory
+// cost -- and under PLAID_TRACE, where it's irrelevant to the I/O/CPU profile
+// being captured (see run_case()).
 //
 //   usage: bellman_fordExample [global --flags] [n] [balanced_avg_degree] [case]
 //     n                    requested vertex count, rounded up to a power of
@@ -65,7 +71,8 @@
 //   throughput = edge bytes (m * sizeof(weighted_edge)) / op_s (fast_* are
 //   the same fields for external_bellman_ford_fast).  op_s/reachable/
 //   throughput_gb_s are blank when the per-vertex method is skipped past its
-//   byte budget.
+//   byte budget; inmem_op_s is blank when the in-memory baseline is skipped
+//   (n past BELLMAN_FORD_INMEM_MAX_N, or PLAID_TRACE).
 
 #include <chrono>
 #include <cstdint>
@@ -259,16 +266,33 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
     // (run without PLAID_TRACE) already cover that. Leaving it out keeps a
     // trace capture limited to the out-of-core algorithm's own I/O/CPU
     // pattern instead of appending an unrelated CPU-only phase after it.
+    //
+    // Also skipped past inmem_max_n vertices regardless of tracing: unlike
+    // io_trace.py's largest sweep point (the only one traced), every smaller
+    // point in a sweep runs this binary WITHOUT PLAID_TRACE, so a sweep whose
+    // smaller points still exceed a couple billion vertices would otherwise
+    // pay full DRAM cost (RMAT generation + bellman_ford<long double>, i.e.
+    // O(n) `long double` distance arrays with an n^2/2-edge "dense" case) on
+    // every one of them, not just the largest. Default matches the size at
+    // which that DRAM cost stops being a useful baseline point.
+    size_t inmem_max_n = 1ull << 30;
+    if (const char* e = getenv("BELLMAN_FORD_INMEM_MAX_N"))
+        inmem_max_n = std::stoull(e);
+    const bool inmem_ok = n <= inmem_max_n;
+
     std::optional<parlay::sequence<long double>> d_mem_opt;
     double inmem_op_s = 0;
-    if (!trace_enabled()) {
+    if (trace_enabled()) {
+        std::cout << "Running in-memory bellman_ford: skipped (PLAID_TRACE)\n";
+    } else if (!inmem_ok) {
+        std::cout << "Running in-memory bellman_ford: skipped (n " << n
+                  << " exceeds inmem_max_n " << inmem_max_n << ")\n";
+    } else {
         std::cout << "Running in-memory bellman_ford..." << std::flush;
         t0 = Clock::now();
         d_mem_opt = bellman_ford<long double>(start, WG);
         inmem_op_s = elapsed(t0);
         std::cout << " done (" << std::setprecision(4) << inmem_op_s << "s)\n";
-    } else {
-        std::cout << "Running in-memory bellman_ford: skipped (PLAID_TRACE)\n";
     }
 
     // Cross-check one out-of-core result against the in-memory baseline
@@ -295,6 +319,9 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
                     }
                 }
             }
+        } else if (!d_mem_opt.has_value() && (trace_enabled() || !inmem_ok)) {
+            std::cout << name << " result skipped comparison (in-mem bellman_ford "
+                      << "not run)\n";
         } else if (!d_mem_opt.has_value()) {
             std::cout << "in-mem bellman_ford: did not converge within " << n
                       << " rounds; skipped comparison\n";
@@ -305,11 +332,12 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
     };
 
     // Skip the cross-check for a budget-skipped per-vertex run -- there's no
-    // result to compare. Also skip entirely under PLAID_TRACE, where
-    // d_mem_opt was never computed (see above).
-    const bool agree = trace_enabled() || !per_vertex_ok ||
+    // result to compare. Also skip entirely when d_mem_opt was never computed
+    // (PLAID_TRACE, or n past inmem_max_n -- see above).
+    const bool no_inmem = trace_enabled() || !inmem_ok;
+    const bool agree = no_inmem || !per_vertex_ok ||
                         compare_to_mem("out-of-core", d_ext, ext_converged);
-    const bool fast_agree = trace_enabled() ||
+    const bool fast_agree = no_inmem ||
                              compare_to_mem("out-of-core (fast)", d_fast, fast_converged);
 
     // Machine-readable line for benchmarks/run_benches.py.
@@ -317,11 +345,12 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
     //          fast_op_s,fast_reachable,fast_throughput_gb_s
     // (op_s/reachable/throughput_gb_s blank when the per-vertex method is
     // skipped past the byte budget, so the plotted per-vertex line stops;
-    // inmem_op_s blank under PLAID_TRACE, where it was never run.)
+    // inmem_op_s blank under PLAID_TRACE or past inmem_max_n vertices, where
+    // it was never run.)
     auto f9 = [](double v) { std::ostringstream o; o << std::setprecision(9) << v; return o.str(); };
     std::cout << "CSV," << label << ',' << n << ',' << m << ',' << f9(build_s)
               << ',' << (per_vertex_ok ? f9(op_s) : std::string())
-              << ',' << (trace_enabled() ? std::string() : f9(inmem_op_s))
+              << ',' << (no_inmem ? std::string() : f9(inmem_op_s))
               << ',' << (per_vertex_ok ? std::to_string(reachable) : std::string())
               << ',' << (per_vertex_ok ? f9(gb_s) : std::string())
               << ',' << f9(fast_op_s) << ',' << fast_reachable
