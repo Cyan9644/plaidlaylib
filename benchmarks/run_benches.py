@@ -187,6 +187,21 @@ EXAMPLES = [
      "xlabel": "input size",
      "title": "Suffix array: out-of-core (DC3 / skew) vs in-mem parlaylib",
      "data_globs": ["dc3_text*", "dc3_out*"]},
+    # fftExample sweeps N (16-byte complex<double>); the plotted time is total_s
+    # (streaming length-A pass + random length-B pass; input build excluded).  Its
+    # value is the streaming-vs-random I/O contrast (trace it with io_trace.py, and
+    # the two stages are separately timed in the CSV).  The in-mem baseline is the
+    # SAME transpose-free four-step FFT run in DRAM (same kernel), so the comparison
+    # isolates I/O cost; it is kept OUT of the aggregate bench-examples list -- run
+    # standalone via `--example fft`.  Input lives under fft_in, stage-1 out fft_s1.
+    {"name": "fft", "target": "bin/fftExample",
+     "cols": ["n", "build_s", "stage1_s", "stage2_s", "total_s", "inmem_s",
+              "count", "throughput_gb_s"],
+     "time_col": "total_s", "inmem_col": "inmem_s",
+     "elem_bytes": 16, "input_seqs": 1,
+     "xlabel": "input size",
+     "title": "FFT: out-of-core vs in-mem (same transpose-free four-step)",
+     "data_globs": ["fft_in*", "fft_s1*"]},
     # kth_smallestExample sweeps n with k at the median (n/2); the plotted time
     # is the selection pass only (input build excluded).  Its recursion leaves
     # id_/flags_/next_ intermediates in addition to the kth_in input.

@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include "parlay/primitives.h"
 #include "configs.h"
@@ -362,6 +363,121 @@ chunk_seq tabulate(size_t n, const std::string& result_prefix, F f,
 
 chunk_seq iota(size_t n) {
     return tabulate<uint64_t>(n, "iota", [](size_t i) { return (uint64_t)i; });
+}
+
+/**
+ * Read a single local file into an out-of-core chunk_seq.  This is the inverse
+ * of chunk_seq::consolidate(): consolidate() streams a chunk_seq's chunks in
+ * index order into one contiguous file; from_file() slices one contiguous file
+ * back into CHUNK_SIZE chunks spread balls-in-bins across the SSD drives.
+ *
+ * The input is treated as a flat array of T (its byte length must be a whole
+ * number of elements).  The read side uses ordinary buffered I/O (no O_DIRECT):
+ * like consolidate's output file it needs no alignment, and pread with an
+ * explicit offset is safe to issue from many threads on one shared fd, so a
+ * pool of generator threads reads strided chunk slices in parallel while the
+ * io_uring writer pool (one ring per drive) lands them on the SSDs.  Peak DRAM
+ * stays bounded by (num_gen_threads + queue_size) * CHUNK_SIZE regardless of
+ * how large the input is, so the file may exceed DRAM.
+ */
+template<typename T = uint64_t>
+chunk_seq from_file(const std::string& input_path,
+                    const std::string& result_prefix = "chunkseq") {
+    static_assert(CHUNK_SIZE % sizeof(T) == 0,
+        "sizeof(T) must divide CHUNK_SIZE for O_DIRECT alignment");
+
+    int in_fd = open(input_path.c_str(), O_RDONLY);
+    SYSCALL(in_fd);
+    struct stat st;
+    SYSCALL(fstat(in_fd, &st));
+    const size_t nbytes = (size_t)st.st_size;
+    CHECK(nbytes % sizeof(T) == 0)
+        << "from_file: file size " << nbytes << " not a multiple of sizeof(T)";
+    const size_t n = nbytes / sizeof(T);
+
+    const size_t ept = CHUNK_SIZE / sizeof(T);
+    const size_t num_chunks = (n + ept - 1) / ept;
+    if (num_chunks == 0) { close(in_fd); return {}; }
+    const size_t num_drives = GetSSDList().size();
+
+    // Balls-in-bins drive assignment + per-drive slot index, exactly as tabulate.
+    std::vector<size_t> drive_of(num_chunks);
+    {
+        std::mt19937_64 rng(std::random_device{}());
+        std::uniform_int_distribution<size_t> dist(0, num_drives - 1);
+        for (size_t i = 0; i < num_chunks; i++) drive_of[i] = dist(rng);
+    }
+    std::vector<std::vector<size_t>> drive_chunks(num_drives);
+    for (size_t i = 0; i < num_chunks; i++) drive_chunks[drive_of[i]].push_back(i);
+    std::vector<size_t> slot_of(num_chunks);
+    for (size_t d = 0; d < num_drives; d++)
+        for (size_t s = 0; s < drive_chunks[d].size(); s++)
+            slot_of[drive_chunks[d][s]] = s;
+
+    // Create + size each destination drive file so io_uring can write any slot.
+    std::vector<std::string> filenames(num_drives);
+    parlay::parallel_for(0, num_drives, [&](size_t d) {
+        filenames[d] = GetFileName(result_prefix, d);
+        const size_t file_size = drive_chunks[d].size() * CHUNK_SIZE;
+        if (file_size == 0) return;
+        int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        SYSCALL(fd);
+        if (fallocate(fd, 0, 0, (off_t)file_size) != 0)
+            SYSCALL(ftruncate(fd, (off_t)file_size));
+        SYSCALL(close(fd));
+    }, /*granularity=*/1);
+
+    // Output descriptors: fresh file + slot offset; last chunk may be partial.
+    std::vector<chunk> chunks(num_chunks);
+    for (size_t i = 0; i < num_chunks; i++) {
+        const size_t start = i * ept;
+        const size_t count = std::min(ept, n - start);
+        chunks[i] = {filenames[drive_of[i]], slot_of[i] * CHUNK_SIZE,
+                     count * sizeof(T), i};
+    }
+
+    UnorderedWriterConfig wcfg;
+    wcfg.num_threads   = num_drives;
+    wcfg.io_uring_size = 32;
+    wcfg.queue_size    = 64;
+    wcfg.num_files     = num_drives;
+    UnorderedFileWriter<T> writer;
+    writer.Start(filenames, wcfg);
+
+    // Generator pool: each thread walks a strided slice of chunk indices,
+    // preads that chunk's bytes from the input file (explicit offset, so the
+    // shared fd is safe across threads), zero-pads a partial tail, and hands the
+    // buffer to the writer.  Push blocks when the writer queue is full, so the
+    // readers throttle to write throughput.
+    const size_t num_gen_threads = std::min((size_t)parlay::num_workers(), num_chunks);
+    parlay::parallel_for(0, num_gen_threads, [&](size_t t) {
+        for (size_t i = t; i < num_chunks; i += num_gen_threads) {
+            const size_t start = i * ept;
+            const size_t count = std::min(ept, n - start);
+            const size_t bytes = count * sizeof(T);
+
+            T* buf = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
+            CHECK(buf != nullptr) << "from_file: buffer allocation failed";
+            size_t got = 0;
+            while (got < bytes) {
+                ssize_t r = pread(in_fd, (char*)buf + got, bytes - got,
+                                  (off_t)(start * sizeof(T) + got));
+                SYSCALL(r);
+                CHECK(r > 0) << "from_file: unexpected EOF reading " << input_path;
+                got += (size_t)r;
+            }
+            if (bytes < CHUNK_SIZE)
+                memset((char*)buf + bytes, 0, CHUNK_SIZE - bytes);
+
+            writer.Push(std::shared_ptr<T>(buf, free),
+                        CHUNK_SIZE / sizeof(T), drive_of[i],
+                        slot_of[i] * CHUNK_SIZE);
+        }
+    }, /*granularity=*/1);
+
+    writer.Wait();
+    close(in_fd);
+    return {chunks};
 }
 
 

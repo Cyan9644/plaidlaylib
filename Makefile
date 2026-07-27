@@ -59,6 +59,7 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/samplesort_three_wayExample \
                     $(BINDIR)/external_random_shuffleExample \
                     $(BINDIR)/convex_hullExample \
+                    $(BINDIR)/fftExample \
                     $(BINDIR)/bellman_fordExample \
 
 # Peter's external sample sort (the second contestant in the
