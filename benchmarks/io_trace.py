@@ -353,34 +353,54 @@ def write_trace_csv(path, ser, devices, t0):
     print(f"  wrote {path}", flush=True)
 
 
-PHASE_STYLE = {"build_start": ("tab:orange", "Setup"),
-               "build_end": ("tab:gray", "Settling"),
-               "op_start": ("tab:green", "Begin"),
-               "op_end": ("tab:red", "End")}
+# (kind, edge) -> (color, short label). No magenta -- kept to a neutral,
+# print-appropriate set. build/op are the pair that appears together on one
+# trace; fast_op is a different algorithm's kind (never co-occurs with
+# build/op on the same trace) so its colors can be picked independently.
+PHASE_STYLE = {
+    ("build", "start"): ("blue", "Setup"),
+    ("build", "end"): ("yellow", "Settling"),
+    ("op", "start"): ("red", "Begin"),
+    ("op", "end"): ("aqua", "End"),
+    ("fast_op", "start"): ("green", "Fast"),
+    ("fast_op", "end"): ("orange", "Fast End"),
+}
+
+# Fixed POINT offsets below the axis (not axes-fraction) for the triangle /
+# its label, so the gap stays the same size regardless of figure/axes size --
+# axes-fraction offsets grow with the axes, which is what made the icons read
+# as "too far from the graph" floating in a big blank band. Tick marks +
+# numbers occupy roughly the first ~17pt below the axis (mpl's default
+# xtick.major.pad plus the tick-label font), so the marker sits at 22pt (a
+# few pt of clearance) and its label right below that; XLABEL_PAD below
+# pushes the "Seconds Since..." axis title past both so nothing overlaps.
+_MARKER_PT = 22
+_LABEL_PT = 34
+XLABEL_PAD = 34  # pass to ax.set_xlabel(..., labelpad=XLABEL_PAD)
 
 
-def _overlay_phases(ax, markers, t0):
+def _mark_phases(ax, markers, t0):
+    """Small triangle + direct label at each phase marker, pinned a fixed
+    distance below the axes, instead of a full-height dashed line + legend."""
+    import matplotlib.transforms as mtransforms
+    import plot_style
+    fig = ax.figure
+    marker_trans = mtransforms.offset_copy(ax.get_xaxis_transform(), fig=fig,
+                                            x=0, y=-_MARKER_PT, units="points")
+    label_trans = mtransforms.offset_copy(ax.get_xaxis_transform(), fig=fig,
+                                           x=0, y=-_LABEL_PT, units="points")
     for label, mono in markers:
-        color, _ = PHASE_STYLE.get(label, ("k", label))
-        ax.axvline(mono - t0, color=color, linestyle="--", linewidth=1.0, alpha=0.8)
-
-
-def _phase_legend(fig, markers):
-    """Bottom phase-boundary legend, if any markers fall on this panel."""
-    seen = {}
-    for label, _ in markers:
-        color, name = PHASE_STYLE.get(label, ("k", label))
-        seen[name] = color
-    if not seen:
-        return
-    from matplotlib.lines import Line2D
-    handles = [Line2D([0], [0], color=c, linestyle="--", label=n)
-               for n, c in seen.items()]
-    # Below the x-axis label (not just the axes) so it doesn't collide with
-    # it now that each panel is its own standalone figure; bbox_inches="tight"
-    # keeps it in frame.
-    fig.legend(handles=handles, loc="lower center", ncol=len(handles),
-               bbox_to_anchor=(0.5, -0.15), title="Phase Boundaries")
+        parsed = split_marker(label)
+        if parsed is None:
+            continue
+        kind, edge, _ = parsed
+        color_name, text = PHASE_STYLE.get((kind, edge), ("blue", f"{kind}_{edge}"))
+        color = plot_style.PALETTE[color_name]
+        x = mono - t0
+        ax.plot([x], [0], marker="^", markersize=7, color=color,
+                transform=marker_trans, clip_on=False, linestyle="none")
+        ax.text(x, 0, text, transform=label_trans,
+                ha="center", va="top", fontsize=9, color=color, clip_on=False)
 
 
 def plot_trace(ser, markers, devices, t0, path):
@@ -402,12 +422,11 @@ def plot_trace(ser, markers, devices, t0, path):
     ax_bw.plot(xs, ser["agg_read"], "-", color=plot_style.PALETTE["blue"], label="read")
     ax_bw.plot(xs, ser["agg_write"], "-", color=plot_style.PALETTE["red"], label="write")
     ax_bw.set_ylabel("Aggregate MB/s")
-    ax_bw.set_xlabel("Seconds Since Initial Sample")
+    ax_bw.set_xlabel("Seconds Since Initial Sample", labelpad=XLABEL_PAD)
     ax_bw.set_title("Aggregate Throughput Over All Drives")
     ax_bw.grid(True)
-    _overlay_phases(ax_bw, markers, t0)
+    _mark_phases(ax_bw, markers, t0)
     ax_bw.legend(loc="upper right", fontsize=9)
-    _phase_legend(fig, markers)
     throughput_path = f"{base}_throughput{ext}"
     fig.savefig(throughput_path, dpi=140, bbox_inches="tight")
     plt.close(fig)
@@ -419,13 +438,12 @@ def plot_trace(ser, markers, devices, t0, path):
     ax_bn.plot(xs, ser["cpu"], "-", color=plot_style.PALETTE["green"], label="CPU %")
     ax_bn.plot(xs, ser["iowait"], "-", color=plot_style.PALETTE["orange"], label="iowait %")
     ax_bn.set_ylabel("Percent")
-    ax_bn.set_xlabel("Seconds Since Initial Sample")
+    ax_bn.set_xlabel("Seconds Since Initial Sample", labelpad=XLABEL_PAD)
     ax_bn.set_ylim(0, 105)
     ax_bn.set_title("CPU/Disk Utilization")
     ax_bn.grid(True)
-    _overlay_phases(ax_bn, markers, t0)
+    _mark_phases(ax_bn, markers, t0)
     ax_bn.legend(loc="upper left", fontsize=9)
-    _phase_legend(fig, markers)
     cpu_path = f"{base}_cpu{ext}"
     fig.savefig(cpu_path, dpi=140, bbox_inches="tight")
     plt.close(fig)
@@ -447,9 +465,8 @@ def plot_trace(ser, markers, devices, t0, path):
         ax_hm.text(0.5, 0.5, "no block-device traffic\n(tmpfs? wrong --mount-glob?)",
                    ha="center", va="center", transform=ax_hm.transAxes)
     ax_hm.set_title("Drive Access (MB/s)")
-    ax_hm.set_xlabel("Seconds Since Initial Sample")
-    _overlay_phases(ax_hm, markers, t0)
-    _phase_legend(fig, markers)
+    ax_hm.set_xlabel("Seconds Since Initial Sample", labelpad=XLABEL_PAD)
+    _mark_phases(ax_hm, markers, t0)
     drives_path = f"{base}_drives{ext}"
     fig.savefig(drives_path, dpi=140, bbox_inches="tight")
     plt.close(fig)

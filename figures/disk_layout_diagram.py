@@ -11,7 +11,7 @@ matplotlib.use("Agg")
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import LinearSegmentedColormap, hsv_to_rgb, rgb_to_hsv
+from matplotlib.colors import hsv_to_rgb, rgb_to_hsv, to_rgba
 from matplotlib.lines import Line2D
 
 # Light-mode chart palette (see the dataviz skill's reference palette).
@@ -22,16 +22,27 @@ INK_MUTED = "#898781"
 BASELINE = "#c3c2b7"
 
 # Color encodes a chunk/range's original position in the logical sequence,
-# consistently across both images. A red-to-blue ramp (through dusty rose,
-# mauve, plum, and indigo) shifts noticeably from end to end, but stays
-# low-chroma throughout -- no saturated/neon stop anywhere on the ramp -- so
-# it stays easy on the eyes.
-_RED_BLUE_STEPS = [
-    "#e6c2c0", "#d8a6a6", "#c78d94", "#b17587", "#976480",
-    "#7c5678", "#614d6e", "#4a4869", "#3a4568", "#2f4166",
-    "#293c60", "#243655", "#1f2f48",
+# consistently across both images: a discrete monochrome blue ramp, light to
+# dark, so lighter == earlier and darker == later -- a genuinely
+# sequential/ordinal encoding rather than a decorative multi-hue one,
+# matching the blue steps in the dataviz skill's reference palette.
+DISCRETE_STEPS = [
+    "#86b6ef",  # step 250 -- lightest (earliest position)
+    "#5598e7",  # step 350
+    "#2a78d6",  # step 450
+    "#1c5cab",  # step 550
+    "#104281",  # step 650
+    "#0d366b",  # step 700 -- darkest (latest position)
 ]
-SEQ_CMAP = LinearSegmentedColormap.from_list("seq_red_blue", _RED_BLUE_STEPS)
+N_DISCRETE = len(DISCRETE_STEPS)
+
+
+def seq_color(i, n):
+    """Discrete academic-palette color for element i of n, bucketed into
+    N_DISCRETE equal-width buckets of the logical sequence (monotonic, so
+    elements far apart in i land in different/ordered buckets)."""
+    bucket = min(int(i / n * N_DISCRETE), N_DISCRETE - 1)
+    return DISCRETE_STEPS[bucket]
 
 N_DISKS = 6
 CHUNKS_PER_DISK = 5
@@ -78,19 +89,18 @@ def style_panel(ax, caption, ylim=(-0.85, 1.34)):
 def draw_peter_panel(ax):
     rows = 200
     # Lighter near the top of a disk, darker near the bottom -- an HSV "V"
-    # ramp layered on top of the position-based hue, so the within-disk
-    # gradient reads clearly even though a single disk only spans 1/N_DISKS
-    # of SEQ_CMAP's (deliberately gradual) hue range. Scaling only V leaves
-    # hue/saturation -- i.e. the red-to-blue color scheme -- untouched.
+    # ramp layered on top of the disk's flat hue, so the within-disk gradient
+    # reads clearly. Scaling only V leaves hue/saturation -- i.e. the
+    # red-to-blue color scheme -- untouched.
     depth = np.linspace(0, 1, rows)
     v_scale = (1.25 - 0.55 * depth).reshape(rows, 1)
     for d in range(N_DISKS):
         x0 = col_x0(d)
         # This disk holds the d-th contiguous 1/N_DISKS slice of the logical
         # sequence, so its column continues exactly where the previous disk's
-        # column left off -- position order == disk order.
-        seg = np.linspace(d / N_DISKS, (d + 1) / N_DISKS, rows)
-        rgba = SEQ_CMAP(seg)
+        # column left off -- position order == disk order. N_DISKS ==
+        # N_DISCRETE, so each disk gets exactly one discrete hue.
+        rgba = np.tile(np.array(to_rgba(DISCRETE_STEPS[d])), (rows, 1))
         hsv = rgb_to_hsv(rgba[:, :3])
         hsv[:, 2:3] = np.clip(hsv[:, 2:3] * v_scale, 0, 1)
         rgba[:, :3] = hsv_to_rgb(hsv)
@@ -112,17 +122,18 @@ def draw_chunkseq_panel(ax):
     order = np.random.default_rng(7).permutation(N_CHUNKS)
     disks = [[] for _ in range(N_DISKS)]
     for i, chunk_idx in enumerate(order):
-        disks[i % N_DISKS].append(chunk_idx / N_CHUNKS)
+        disks[i % N_DISKS].append(chunk_idx)
 
     tile_gap = 0.025
     tile_h = (1.0 - tile_gap * (CHUNKS_PER_DISK - 1)) / CHUNKS_PER_DISK
     for d in range(N_DISKS):
         x0 = col_x0(d)
-        for t, val in enumerate(disks[d]):
+        for t, chunk_idx in enumerate(disks[d]):
             y0 = 1 - (t + 1) * tile_h - t * tile_gap
             ax.add_patch(mpatches.Rectangle(
                 (x0, y0), COL_WIDTH, tile_h,
-                facecolor=SEQ_CMAP(val), edgecolor=SURFACE, linewidth=0.8,
+                facecolor=seq_color(chunk_idx, N_CHUNKS), edgecolor=SURFACE,
+                linewidth=0.8,
                 zorder=1,
             ))
         draw_disk_frame(ax, x0, f"Disk {d}")
@@ -157,7 +168,7 @@ def draw_chunks_array(ax):
         x0 = i * cell_w
         ax.add_patch(mpatches.Rectangle(
             (x0, array_bot), cell_w, array_top - array_bot,
-            facecolor=SEQ_CMAP(i / N_CHUNKS), edgecolor=SURFACE,
+            facecolor=seq_color(i, N_CHUNKS), edgecolor=SURFACE,
             linewidth=0.8, zorder=2,
         ))
     ax.add_patch(mpatches.Rectangle(
@@ -177,9 +188,12 @@ def draw_chunks_array(ax):
 
 
 def draw_colorbar(ax):
-    gradient = np.linspace(0, 1, 256).reshape(1, -1)
-    ax.imshow(gradient, cmap=SEQ_CMAP, aspect="auto",
-              extent=(0, 1, 0, 1))
+    step_w = 1.0 / N_DISCRETE
+    for k, color in enumerate(DISCRETE_STEPS):
+        ax.add_patch(mpatches.Rectangle(
+            (k * step_w, 0), step_w, 1,
+            facecolor=color, edgecolor=SURFACE, linewidth=1.5,
+        ))
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.set_yticks([])

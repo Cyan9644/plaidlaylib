@@ -141,6 +141,7 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
     auto G = vertex_utils::rmat_symmetric_graph((long)n_req, (long)(avg_degree * n_req));
     const size_t n = G.size();   // RMAT rounds n_req up to a power of two
     auto WG = vertex_utils::add_weights<long double>(G, 1.0L, 20.0L);
+    G = decltype(G){};   // fully consumed; drop before flattening/writing WG
 
     // Exclusive degree prefix sum (chunk_csr's `degree_scan`, length n+1). n is
     // small enough (this algorithm's own per-vertex I/O pattern forces that)
@@ -160,9 +161,10 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
     }));
 
     chunk_csr graph;
-    graph.degree_scan = degree_scan;
+    graph.degree_scan = std::move(degree_scan);
     graph.edges = ChunkSequenceOps::tabulate<weighted_edge>(
         m, edge_prefix, [&](size_t i) { return flat[i]; });
+    flat = decltype(flat){};   // fully consumed; drop the flattened copy before running either algorithm
 
     const double build_s = elapsed(t0);
     trace_mark(("build_end_" + label).c_str());

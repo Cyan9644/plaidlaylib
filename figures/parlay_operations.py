@@ -13,8 +13,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
-import numpy as np
-from matplotlib.colors import LinearSegmentedColormap
 
 # Light-mode chart palette (see the dataviz skill's reference palette;
 # matches figures/disk_layout_diagram.py).
@@ -25,16 +23,27 @@ INK_MUTED = "#898781"
 BASELINE = "#c3c2b7"
 
 # Color encodes an element's original position in the logical sequence,
-# consistently across panels. A red-to-blue ramp (through dusty rose, mauve,
-# plum, and indigo) shifts noticeably from end to end, but stays low-chroma
-# throughout -- no saturated/neon stop anywhere on the ramp -- so it stays
-# easy on the eyes.
-_RED_BLUE_STEPS = [
-    "#e6c2c0", "#d8a6a6", "#c78d94", "#b17587", "#976480",
-    "#7c5678", "#614d6e", "#4a4869", "#3a4568", "#2f4166",
-    "#293c60", "#243655", "#1f2f48",
+# consistently across panels: a discrete monochrome blue ramp, light to dark,
+# so lighter == earlier and darker == later -- a genuinely sequential/ordinal
+# encoding rather than a decorative multi-hue one, matching the blue steps in
+# the dataviz skill's reference palette.
+DISCRETE_STEPS = [
+    "#86b6ef",  # step 250 -- lightest (earliest position)
+    "#5598e7",  # step 350
+    "#2a78d6",  # step 450
+    "#1c5cab",  # step 550
+    "#104281",  # step 650
+    "#0d366b",  # step 700 -- darkest (latest position)
 ]
-SEQ_CMAP = LinearSegmentedColormap.from_list("seq_red_blue", _RED_BLUE_STEPS)
+N_DISCRETE = len(DISCRETE_STEPS)
+
+
+def seq_color(i, n):
+    """Discrete academic-palette color for element i of n, bucketed into
+    N_DISCRETE equal-width buckets of the logical sequence (monotonic, so
+    elements far apart in i land in different/ordered buckets)."""
+    bucket = min(int(i / n * N_DISCRETE), N_DISCRETE - 1)
+    return DISCRETE_STEPS[bucket]
 
 
 def dram_box(ax, x0, y0, w, h, label):
@@ -64,7 +73,7 @@ def style_panel(ax, caption, ylim):
 
 
 def draw_parlay_panel(ax):
-    ax.set_title("parlay::sequence<T>", fontsize=13.5,
+    ax.set_title("ParlayLib Sequence Type", fontsize=13.5,
                  color=INK_PRIMARY, pad=16, fontweight="bold")
 
     box_x0, box_y0, box_w, box_h = 0.08, -0.30, 0.84, 0.60
@@ -77,7 +86,7 @@ def draw_parlay_panel(ax):
         x0 = box_x0 + 0.03 + i * cell_w
         ax.add_patch(mpatches.Rectangle(
             (x0, y0), cell_w, cell_h,
-            facecolor=SEQ_CMAP(i / n_cells), edgecolor=SURFACE,
+            facecolor=seq_color(i, n_cells), edgecolor=SURFACE,
             linewidth=0.4, zorder=2,
         ))
     ax.add_patch(mpatches.Rectangle(
@@ -94,7 +103,7 @@ def draw_parlay_panel(ax):
 
 
 def draw_map_panel(ax):
-    ax.set_title("parlay::map", fontsize=13, color=INK_PRIMARY, pad=12,
+    ax.set_title("Map on Collection", fontsize=13, color=INK_PRIMARY, pad=12,
                  fontweight="bold")
 
     n = 12
@@ -105,12 +114,12 @@ def draw_map_panel(ax):
         x0 = x0s + i * cell_w
         ax.add_patch(mpatches.Rectangle(
             (x0, in_y), cell_w * 0.9, cell_h,
-            facecolor=SEQ_CMAP(i / n), edgecolor=SURFACE,
+            facecolor=seq_color(i, n), edgecolor=SURFACE,
             linewidth=0.5, zorder=2,
         ))
         ax.add_patch(mpatches.Rectangle(
             (x0, out_y), cell_w * 0.9, cell_h,
-            facecolor=SEQ_CMAP(i / n), edgecolor=SURFACE,
+            facecolor=seq_color(i, n), edgecolor=SURFACE,
             linewidth=0.5, zorder=2,
         ))
     ax.text(0.03, in_y + cell_h / 2, "in", ha="right", va="center",
@@ -144,9 +153,12 @@ def draw_map_panel(ax):
 
 
 def draw_colorbar(ax):
-    gradient = np.linspace(0, 1, 256).reshape(1, -1)
-    ax.imshow(gradient, cmap=SEQ_CMAP, aspect="auto",
-              extent=(0, 1, 0, 1))
+    step_w = 1.0 / N_DISCRETE
+    for k, color in enumerate(DISCRETE_STEPS):
+        ax.add_patch(mpatches.Rectangle(
+            (k * step_w, 0), step_w, 1,
+            facecolor=color, edgecolor=SURFACE, linewidth=1.5,
+        ))
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.set_yticks([])
@@ -182,7 +194,7 @@ def build_sequence_figure():
 
 def build_map_figure():
     return build_single_panel_figure(
-        "The Map Primitive", draw_map_panel, figsize=(7.5, 4.4))
+        "Example Operation", draw_map_panel, figsize=(7.5, 4.4))
 
 
 def main():

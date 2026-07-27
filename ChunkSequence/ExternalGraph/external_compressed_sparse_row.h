@@ -26,23 +26,6 @@ struct weighted_edge {
     weight edge_weight;
 };
 
-// Small fast field parsers for from_file(): advance p past one whitespace-separated
-// token (and any leading whitespace) and return its parsed value.
-inline vertex parse_vertex(const char*& p) {
-    while (*p == ' ' || *p == '\t') p++;
-    char* end;
-    vertex v = (vertex)strtoull(p, &end, 10);
-    p = end;
-    return v;
-}
-inline weight parse_weight(const char*& p) {
-    while (*p == ' ' || *p == '\t') p++;
-    char* end;
-    weight w = strtold(p, &end);
-    p = end;
-    return w;
-}
-
 //the compressed sparse row represents a graph with two arrays: N and F
 //N is the exclusive prefix sum of node degrees, while F is the actual list of adjacency nodes
 //we are assuming that the degree prefix sum can fit in-memory -- the edges are the memory bottleneck
@@ -175,7 +158,22 @@ struct chunk_csr{
     }
 
     //one thing that might be useful is conversion to compressed sparse column format
-
+// Small fast field parsers for from_file(): advance p past one whitespace-separated
+// token (and any leading whitespace) and return its parsed value.
+inline vertex parse_vertex(const char*& p) {
+    while (*p == ' ' || *p == '\t') p++;
+    char* end;
+    vertex v = (vertex)strtoull(p, &end, 10);
+    p = end;
+    return v;
+}
+inline weight parse_weight(const char*& p) {
+    while (*p == ' ' || *p == '\t') p++;
+    char* end;
+    weight w = strtold(p, &end);
+    p = end;
+    return w;
+}
     //now the big question is how we actually get a compressed sparse row graph in the first place. considering that we have the edges with vertices and weights stored on disk
 //in the actual struct, I think the best way to do this is a streaming approach that reads edges from the given file and reconstructs the sparse graph
 //the cleanest way to do this would be in this format:

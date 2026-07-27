@@ -140,12 +140,7 @@ unsigned int sample_size = std::max<size_t>(1, num_samples);
     auto num_buckets = sample_size + 1;
 
 
-// heap_tree requires exactly 2^k-1 entries (see deps/parlaylib's heap_tree.h),
-// but num_buckets above must stay the raw, unrounded pivot count to keep the
-// scatter-phase buffer pools (count_sort / BucketWriter) from ~doubling at
-// large n. So pad only the tree's internal array, with a sentinel pivot that
-// no real element can rank past -- rank() stays in [0, sample_size] exactly
-// as if the array had not been padded.
+///heap tree pad internal array with sentinel
 const size_t heap_size = (size_t{1} << parlay::log2_up(sample_size + 1)) - 1;
 parlay::sequence<T> seconds(heap_size, std::numeric_limits<T>::max());
 parlay::parallel_for(0, sample_size, [&](size_t i){ seconds[i] = pivots[i].second; });
@@ -205,6 +200,7 @@ _pt.mark("count_sort");
 // });
 
 //we can replace this with a more general pass method once we figure out a framework for streaming
+//or perhaps a bucket-operation method
 //still, this is a useful-ish method so I don't feel like it's cheating too badly
 ChunkSequenceOps::sort_buckets_inplace<T>(externalSequenceVector, less1);
 _pt.mark("bucket_sort");

@@ -1,36 +1,18 @@
 #!/usr/bin/env python3
 """Conceptual diagram: overlapping reads, compute, and writes in
-ExternalTransform (ChunkSequence/external_engine.h). Not data-driven (no CSV
-input, no CLI sweep) -- it renders a fully abstracted schematic. DRAM holds
-two zones, not three: a **read-buffer pool** and a **write-buffer pool**,
-joined by a "compute" transform arrow rather than a third same-kind zone.
-This matches the real engine, not just a simplification of it: the read pool
-is one process-wide, shared, growable free-list of reused buffers
-(ChunkSequenceReader<T>::Allocator, ChunkSequence/chunk_seq_reader.h:39-53);
-ExternalTransform's body() reads an input buffer and copies/transforms into a
-freshly allocated output buffer -- it does not compute in place (the
-ownership rule and "drops the old in-place T==R buffer reuse" note are in
-ChunkSequence/external_engine.h:43-48, the read-then-free loop at :163-170,
-the fresh alloc at ChunkEmitter::alloc(), :70-74); the write pool is a
-hard-capped queue of individually-allocated (non-reused) output buffers
-(UnorderedFileWriter's wait_queue, utils/unordered_file_writer.h:69, capped
-to 64 buffers = 256 MB in ExternalTransform, ChunkSequence/external_engine.h:
-144-149). So the compute arrow -- which stays inside the dashed DRAM
-boundary, unlike the read/write arrows that cross it -- is literally that
-copy, not a stand-in for a third memory region. Each side of the DRAM box is
-flanked by a small stack of SSDs (a stand-in for the real machine's many
-drives, not a literal per-drive count), with read arrows fanning in from the
-left stack and write arrows fanning out to the right stack. All three
-arrows (read, compute, write) are drawn in the same static frame as the
-active cells they connect -- that simultaneity is the entire point: every
-stage stays busy at once, not one piece of data moving through an
-otherwise-empty pipeline. Idle/available cells are a pale tint of their
-zone's role color (never pure white, never hatched) so "available capacity"
-reads as a quieter version of "occupied," not "empty." Shares its palette
-conventions (SURFACE/INK_*/BASELINE roles) with figures/disk_layout_diagram.py
-and figures/parlay_operations.py, reusing two steps of their blue ramp as
-fixed role colors rather than an ordered ramp, since this figure has no
-"position" to encode.
+ExternalTransform (ChunkSequence/external_engine.h). Compact/narrow variant
+of io_compute_overlap.py for slide layouts that can't fit the wide
+left-SSDs/DRAM/right-SSDs original: the DRAM content is identical (same two
+zones, same compute arrow, same role colors), but the two SSD stacks move
+from flanking the DRAM box to sitting **above** it -- read-source drives over
+the read-buffer zone, write-destination drives over the write-buffer zone --
+with the read/write arrows running vertically instead of horizontally. That
+trades width for height, which is the right trade when the constraint is
+slide width rather than slide height. See io_compute_overlap.py's docstring
+for the underlying conceptual rationale (two zones not three, why the
+compute arrow stays inside the dashed DRAM box, source references into
+external_engine.h/chunk_seq_reader.h/unordered_file_writer.h) -- none of
+that changes here, only the SSD placement and the figure's aspect ratio.
 """
 import argparse
 
@@ -56,8 +38,8 @@ BASELINE = "#c3c2b7"
 STAGING_COLOR = "#86b6ef"  # step 250 -- light blue, both buffer pools
 COMPUTE_COLOR = "#1c5cab"  # step 550 -- stronger blue, actively being read
 
-BAR_X0, BAR_X1 = 0.195, 0.805
-BAR_Y0, BAR_Y1 = 0.46, 0.70
+BAR_X0, BAR_X1 = 0.14, 0.86
+BAR_Y0, BAR_Y1 = 0.10, 0.34
 CELL_GAP = 0.014
 
 # Two zones, not three: read-buffer pool | (compute arrow) | write-buffer
@@ -73,25 +55,21 @@ WRITE_ZONE_W = ZONE_CELLS_W * WRITE_CELLS / (READ_CELLS + WRITE_CELLS)
 READ_CELL_W = (READ_ZONE_W - CELL_GAP * (READ_CELLS - 1)) / READ_CELLS
 WRITE_CELL_W = (WRITE_ZONE_W - CELL_GAP * (WRITE_CELLS - 1)) / WRITE_CELLS
 
-# SSDs flank the DRAM bar left/right (read sources on the left, write
-# destinations on the right) rather than sitting below it, so the figure
-# reads as one left-to-right pipeline instead of two arrows crossing beneath
-# a single drive. Each side is a small vertical stack of drives (standing in
-# for the real machine's many SSDs) instead of one, with per-drive arrows
-# fanning into/out of the DRAM bar's midline.
+# SSDs sit above the DRAM bar instead of flanking it -- a short row of
+# drives over each zone (read sources over the read zone, write
+# destinations over the write zone) rather than a tall column to either
+# side. This is the one structural change from io_compute_overlap.py: it
+# frees the width the side columns used to take, at the cost of height,
+# which is the trade slides want.
 SSD_PER_SIDE = 3
-SSD_STACK_GAP = 0.02
-SSD_W, SSD_H = 0.11, (BAR_Y1 - BAR_Y0) + 0.06  # matches the DRAM box's outer height
-SSD_ITEM_H = (SSD_H - SSD_STACK_GAP * (SSD_PER_SIDE - 1)) / SSD_PER_SIDE
-SSD_MID_Y = (BAR_Y0 + BAR_Y1) / 2
-SSD_Y0 = SSD_MID_Y - SSD_H / 2
-SSD_LEFT_X0 = 0.02
-SSD_RIGHT_X0 = 1 - 0.02 - SSD_W
-
-
-def ssd_item_ys():
-    """Bottom y of each stacked drive, bottom-to-top."""
-    return [SSD_Y0 + i * (SSD_ITEM_H + SSD_STACK_GAP) for i in range(SSD_PER_SIDE)]
+SSD_STACK_GAP = 0.018
+SSD_H = 0.11
+READ_ZONE_HI = READ_ZONE_X0 + READ_ZONE_W
+WRITE_ZONE_HI = WRITE_ZONE_X0 + WRITE_ZONE_W
+READ_SSD_W = (READ_ZONE_W - SSD_STACK_GAP * (SSD_PER_SIDE - 1)) / SSD_PER_SIDE
+WRITE_SSD_W = (WRITE_ZONE_W - SSD_STACK_GAP * (SSD_PER_SIDE - 1)) / SSD_PER_SIDE
+SSD_Y0 = 0.62
+SSD_LABEL_Y = SSD_Y0 + SSD_H + 0.03
 
 
 def read_cell_x0(i):
@@ -100,6 +78,14 @@ def read_cell_x0(i):
 
 def write_cell_x0(i):
     return WRITE_ZONE_X0 + i * (WRITE_CELL_W + CELL_GAP)
+
+
+def read_ssd_x0(i):
+    return READ_ZONE_X0 + i * (READ_SSD_W + SSD_STACK_GAP)
+
+
+def write_ssd_x0(i):
+    return WRITE_ZONE_X0 + i * (WRITE_SSD_W + SSD_STACK_GAP)
 
 
 def draw_drive(ax, x0, y0, w, h, label=None):
@@ -231,63 +217,65 @@ def build_panel(ax):
     # copy, not travel through a third memory zone. It stays inside the
     # dashed DRAM box (unlike the read/write arrows below, which cross it)
     # since the transform never touches disk.
-    curved_arrow(ax, (read_zone_hi, SSD_MID_Y), (write_zone_lo, SSD_MID_Y),
+    compute_y = (BAR_Y0 + BAR_Y1) / 2
+    curved_arrow(ax, (read_zone_hi, compute_y), (write_zone_lo, compute_y),
                  INK_SECONDARY, rad=0.0)
-    ax.text((read_zone_hi + write_zone_lo) / 2, SSD_MID_Y + 0.035, "compute",
+    ax.text((read_zone_hi + write_zone_lo) / 2, compute_y + 0.035, "compute",
             ha="center", va="bottom", fontsize=9.5, color=INK_SECONDARY,
             fontstyle="italic")
 
-    # A small stack of SSDs flanks each side of the DRAM bar -- read sources
-    # on the left feeding the read-buffer pool, write destinations on the
-    # right fed by the write-buffer pool -- so the whole figure reads as a
-    # single left-to-right pipeline (many drives in, one DRAM region, many
-    # drives out) instead of two arrows crossing beneath one drive. Per-drive
-    # arrows fan into/out of the DRAM bar's midline; one shared label per
-    # stack (not per drive) keeps the caption from repeating three times.
-    dram_left = BAR_X0 - 0.015
-    dram_right = BAR_X1 + 0.015
-    read_to = (dram_left, SSD_MID_Y)
-    write_from = (dram_right, SSD_MID_Y)
+    # A short row of SSDs sits above each zone -- read sources above the
+    # read-buffer zone, write destinations above the write-buffer zone --
+    # instead of a tall column flanking the DRAM bar. This is the one
+    # structural difference from io_compute_overlap.py: it turns the
+    # left-DRAM-right triptych into a top-DRAM stack, trading width for
+    # height. Per-drive arrows run straight down into the read zone's top
+    # edge / up from the write zone's top edge; one shared label per row
+    # (not per drive) keeps the caption from repeating three times.
+    dram_top = BAR_Y1 + 0.03
+    read_to = (READ_ZONE_X0 + READ_ZONE_W / 2, dram_top)
+    write_from = (WRITE_ZONE_X0 + WRITE_ZONE_W / 2, dram_top)
 
-    for y0 in ssd_item_ys():
-        mid_y = y0 + SSD_ITEM_H / 2
-        draw_drive(ax, SSD_LEFT_X0, y0, SSD_W, SSD_ITEM_H)
-        draw_drive(ax, SSD_RIGHT_X0, y0, SSD_W, SSD_ITEM_H)
-        curved_arrow(ax, (SSD_LEFT_X0 + SSD_W, mid_y), read_to,
-                     INK_SECONDARY, rad=0.0)
-        curved_arrow(ax, write_from, (SSD_RIGHT_X0, mid_y),
-                     INK_SECONDARY, rad=0.0)
+    for i in range(SSD_PER_SIDE):
+        rx0 = read_ssd_x0(i)
+        wx0 = write_ssd_x0(i)
+        mid_x_r = rx0 + READ_SSD_W / 2
+        mid_x_w = wx0 + WRITE_SSD_W / 2
+        draw_drive(ax, rx0, SSD_Y0, READ_SSD_W, SSD_H)
+        draw_drive(ax, wx0, SSD_Y0, WRITE_SSD_W, SSD_H)
+        curved_arrow(ax, (mid_x_r, SSD_Y0), read_to, INK_SECONDARY, rad=0.0)
+        curved_arrow(ax, write_from, (mid_x_w, SSD_Y0), INK_SECONDARY,
+                     rad=0.0)
 
-    ax.text(SSD_LEFT_X0 + SSD_W / 2, SSD_Y0 - 0.022, "SSDs",
-            ha="center", va="top", fontsize=10, color=INK_SECONDARY,
+    ax.text(READ_ZONE_X0 + READ_ZONE_W / 2, SSD_LABEL_Y, "SSDs",
+            ha="center", va="bottom", fontsize=10, color=INK_SECONDARY,
             fontweight="bold")
-    ax.text(SSD_RIGHT_X0 + SSD_W / 2, SSD_Y0 - 0.022, "SSDs",
-            ha="center", va="top", fontsize=10, color=INK_SECONDARY,
+    ax.text(WRITE_ZONE_X0 + WRITE_ZONE_W / 2, SSD_LABEL_Y, "SSDs",
+            ha="center", va="bottom", fontsize=10, color=INK_SECONDARY,
             fontweight="bold")
 
-    read_mid_x = (SSD_LEFT_X0 + SSD_W + dram_left) / 2
-    write_mid_x = (dram_right + SSD_RIGHT_X0) / 2
-    ax.text(read_mid_x, SSD_MID_Y + 0.10, "read",
-            ha="center", va="bottom", fontsize=9.5, color=INK_SECONDARY,
+    arrow_mid_y = (SSD_Y0 + dram_top) / 2
+    ax.text(READ_ZONE_X0 - 0.05, arrow_mid_y, "read",
+            ha="center", va="center", fontsize=9.5, color=INK_SECONDARY,
             fontstyle="italic")
-    ax.text(write_mid_x, SSD_MID_Y + 0.10, "write",
-            ha="center", va="bottom", fontsize=9.5, color=INK_SECONDARY,
+    ax.text(WRITE_ZONE_HI + 0.05, arrow_mid_y, "write",
+            ha="center", va="center", fontsize=9.5, color=INK_SECONDARY,
             fontstyle="italic")
 
     ax.text(
-        0.5, 0.97,
-        "Overlapping I/O and Computation to Hide Latency",
+        0.5, 0.99,
+        "Overlapping I/O and\nComputation to Hide Latency",
         ha="center", va="top", fontsize=15.5, color=INK_PRIMARY,
         fontweight="bold",
     )
     ax.text(
-        0.5, 0.905,
-        "Separate Read/Computation Area and Write Staging Section",
+        0.5, 0.855,
+        "Separate Read/Computation Area and\nWrite Staging Section",
         ha="center", va="top", fontsize=10.5, color=INK_SECONDARY,
     )
 
     ax.set_xlim(0, 1)
-    ax.set_ylim(0.32, 1.02)
+    ax.set_ylim(0.0, 1.02)
     ax.set_xticks([])
     ax.set_yticks([])
     ax.set_facecolor(SURFACE)
@@ -296,7 +284,7 @@ def build_panel(ax):
 
 
 def build_figure():
-    fig = plt.figure(figsize=(12.4, 4.3), constrained_layout=True)
+    fig = plt.figure(figsize=(7.6, 7.4), constrained_layout=True)
     fig.patch.set_facecolor(SURFACE)
     ax = fig.add_subplot(111)
     build_panel(ax)
@@ -306,7 +294,7 @@ def build_figure():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--out-prefix", default="io_compute_overlap",
+        "--out-prefix", default="io_compute_overlap_compact",
         help="output PNG basename prefix; writes <prefix>.png "
              "(default: %(default)s)")
     args = parser.parse_args()

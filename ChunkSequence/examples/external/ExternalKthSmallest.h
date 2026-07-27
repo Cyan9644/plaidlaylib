@@ -25,6 +25,10 @@ size_t n = 0;
   for(size_t r = 0; r < seq.chunks.size(); r++){
 n+= seq.chunks[r].used; //add the used size of each chunk to the n; this tells us the number of total elements in the sequence
   }
+    size_t min_sample_size = std::max(1UL, 4 * parlay::num_workers() * filer/ MAIN_MEMORY_SIZE);
+// size_t max_sample_size = std::max(1UL, std::min(n / sizeof(T), filer / O_DIRECT_MULTIPLE));
+size_t max_sample_size = std::max(1UL, std::min(n, filer / O_DIRECT_MULTIPLE));
+  size_t num_samples = std::max(std::min(filer / (1UL << 27), max_sample_size), min_sample_size);
   n/=sizeof(T);
 //   long n = seq.chunks.size();
   
@@ -110,8 +114,9 @@ auto sums = ChunkSequenceOps::ChunkHistogramByIndex<unsigned char>(ids, sample_s
 auto next = ChunkSequenceOps::pack_if<T, unsigned char>(
     seq, "next_" + std::to_string(n), ids,
     [id](unsigned char b){ return b == id; });
-  // recur on much smaller set, adjusting k as needed
-  return kth_smallest<T>(next, k - offsets[id], less1);
+  // recur on much smaller set, adjusting k as needed... or not because this is slow
+  // return kth_smallest<T>(next, k - offsets[id], less1);
+  return kth_smallest(ChunkSequenceOps::materialize(next), k-offsets[id], less1);
 }
 
 }
