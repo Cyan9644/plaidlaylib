@@ -103,6 +103,19 @@ deps/parlaylib:
 	cd deps/parlaylib-full && git checkout 6b4a4cdbfeb3c481608a42db0230eb6ebb87bf8d
 	mv deps/parlaylib-full/include deps/parlaylib
 	rm -rf deps/parlaylib-full
+	# Upstream bug: group_by_index/group_by_index_ pick their bucketing strategy
+	# via `num_buckets*num_buckets`, computed in size_t with no overflow check.
+	# Once num_buckets reaches 2^32 the square wraps to 0 (2^64 / 2^68 mod 2^64),
+	# so the comparison always takes the group_by_small_int branch regardless of
+	# the real size relationship -- confirmed to misroute large-vertex-count RMAT
+	# graphs (external_bellman_ford at n=2^32+) into that far more memory-hungry
+	# path, tripping its internal `assert(k < num_buckets)`. Fixed by comparing
+	# via division instead of squaring (no wider standard integer type than
+	# size_t exists to widen into here).
+	sed -i 's/if (A.size() > static_cast<size_t>(num_buckets)\*num_buckets) {/if (A.size() \/ static_cast<size_t>(num_buckets) > static_cast<size_t>(num_buckets)) {/' \
+	    deps/parlaylib/parlay/internal/group_by.h
+	sed -i 's/if (n > static_cast<size_t>(num_buckets)\*num_buckets) {/if (n \/ static_cast<size_t>(num_buckets) > static_cast<size_t>(num_buckets)) {/' \
+	    deps/parlaylib/parlay/internal/group_by.h
 
 # Upstream parlaylib example algorithms (knuth_morris_pratt.h, rabin_karp.h,
 # primes.h, …), used as the in-memory comparison baselines by the examples.
