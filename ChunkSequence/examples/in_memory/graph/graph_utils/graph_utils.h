@@ -102,7 +102,7 @@ struct graph_utils {
   static edge rmat_edge(int logn, double a, double b, double c, double r, gen g) {
     if (logn == 0) return edge(0,0);
     else {
-      long no2 = 1 << (logn-1);
+      long no2 = 1L << (logn-1);
       r = g();
       if (r < a) {
         auto [u,v] = rmat_edge(logn-1,a,b,c,r/a,g);
@@ -135,13 +135,13 @@ struct graph_utils {
   static graph rmat_graph(long n, long m, double a=.5, double b=.15, double c=.15) {
     int logn = round(log2(n));
     auto edges = rmat_edges_(logn, m, a, b, c);
-    return parlay::group_by_index(edges, 1 << logn);
+    return parlay::group_by_index(edges, 1L << logn);
   }
 
   static graph rmat_symmetric_graph(long n, long m, double a=.5, double b=.15, double c=.15) {
     int logn = round(log2(n));
     auto edges = rmat_edges_(logn, m/2, a, b, c);
-    return symmetrize(edges, 1 << logn);
+    return symmetrize(edges, 1L << logn);
   }
 
   static graph grid_graph(long n) {
