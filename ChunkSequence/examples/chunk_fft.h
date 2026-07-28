@@ -128,21 +128,26 @@ struct FFTPlan {
     }
 };
 
-// Forward transform: out[k] = SUM_j a[j] * exp(-2*pi*i*j*k/n).  In place, input in
-// natural order (bit-reversal done here).  p.n must be a power of two.
-inline void fft_inplace(cd* a, const FFTPlan& p) {
-    const size_t n = p.n;
+// Below this transform length a whole FFT is cache-resident, so the tight
+// iterative loop wins; above it we recurse (see fft_inplace) to keep the working
+// set small.  ~128 KiB (2^13 complex) comfortably fits L2 on the target boxes.
+constexpr size_t FFT_BASE = size_t(1) << 13;
+
+// In-place iterative radix-2 FFT on a contiguous, natural-order array of length n
+// (a power of two, n <= its plan size).  Uses raw-double butterflies and the
+// precomputed twiddles W[k * (n/len)] = exp(-2*pi*i*k/len).  This is the small
+// base case; fft_inplace dispatches large transforms to the recursive kernel.
+inline void fft_iter_inplace(cd* a, size_t n, const cd* W) {
     for (size_t i = 1, j = 0; i < n; i++) {          // bit-reversal permutation
         size_t bit = n >> 1;
         for (; j & bit; bit >>= 1) j ^= bit;
         j ^= bit;
         if (i < j) std::swap(a[i], a[j]);
     }
-    const cd* W = p.w.data();
     for (size_t len = 2; len <= n; len <<= 1) {
         const size_t h = len >> 1;
         const size_t step = n / len;                 // W[k*step] = exp(-2*pi*i*k/len)
-        for (size_t i = 0; i < n; i += len) {
+        for (size_t i = 0; i < n; i += len)
             for (size_t k = 0; k < h; k++) {
                 const cd& wk = W[k * step];
                 const double wr = wk.real(), wi = wk.imag();
@@ -155,8 +160,83 @@ inline void fft_inplace(cd* a, const FFTPlan& p) {
                 *lo = cd(ur + vr, ui + vi);
                 *hi = cd(ur - vr, ui - vi);
             }
-        }
     }
+}
+
+inline size_t fft_bitrev(size_t x, int bits) {
+    size_t r = 0;
+    for (int i = 0; i < bits; i++) { r = (r << 1) | (x & 1); x >>= 1; }
+    return r;
+}
+
+// Recursive divide-and-conquer Cooley-Tukey (decimation-in-time).  Writes out[0..n)
+// = DFT of the strided samples in[0], in[s], ..., in[(n-1)*s].  Because the top-level
+// size M = n*s is fixed, a sub-FFT of size n at stride s indexes the SAME plan
+// twiddle table as W[k*s] (top butterfly) / W[k*s*(n/len)] (base butterfly), so one
+// table serves every level.  Splitting depth-first keeps each subproblem's working
+// set small: only O(log(n/FFT_BASE)) full passes over out (vs the iterative kernel's
+// O(log n)), which removes the cache cliff once a row/column exceeds L2 (n >= 2^18).
+//
+// NOTE: the recursion *structure* is cache-oblivious (it self-tunes to any cache by
+// halving), but this is NOT a strictly cache-oblivious algorithm -- the FFT_BASE
+// cutoff is hardcoded to L2, making the implementation cache-AWARE.  A truly
+// cache-oblivious variant would recurse to a constant base (n=2) with no FFT_BASE,
+// at higher constant-factor overhead; the tuned base is a deliberate speed tradeoff.
+inline void fft_rec(size_t n, size_t s, const cd* in, cd* out, const cd* W) {
+    if (n <= FFT_BASE) {
+        int bits = 0;
+        while ((size_t(1) << bits) < n) bits++;      // log2 n
+        for (size_t i = 0; i < n; i++)               // gather strided input, bit-reversed
+            out[fft_bitrev(i, bits)] = in[i * s];
+        for (size_t len = 2; len <= n; len <<= 1) {
+            const size_t h = len >> 1;
+            const size_t step = s * (n / len);       // W[k*step] = exp(-2*pi*i*k/len)
+            for (size_t i = 0; i < n; i += len)
+                for (size_t k = 0; k < h; k++) {
+                    const cd& wk = W[k * step];
+                    const double wr = wk.real(), wi = wk.imag();
+                    cd* lo = &out[i + k];
+                    cd* hi = &out[i + k + h];
+                    const double xr = hi->real(), xi = hi->imag();
+                    const double vr = xr * wr - xi * wi;
+                    const double vi = xr * wi + xi * wr;
+                    const double ur = lo->real(), ui = lo->imag();
+                    *lo = cd(ur + vr, ui + vi);
+                    *hi = cd(ur - vr, ui - vi);
+                }
+        }
+        return;
+    }
+    const size_t h = n >> 1;
+    fft_rec(h, s << 1, in,     out,     W);           // even samples -> out[0..h)
+    fft_rec(h, s << 1, in + s, out + h, W);           // odd samples  -> out[h..n)
+    for (size_t k = 0; k < h; k++) {                  // combine with W[k*s]
+        const cd& wk = W[k * s];
+        const double wr = wk.real(), wi = wk.imag();
+        cd* lo = &out[k];
+        cd* hi = &out[k + h];
+        const double xr = hi->real(), xi = hi->imag();
+        const double vr = xr * wr - xi * wi;
+        const double vi = xr * wi + xi * wr;
+        const double ur = lo->real(), ui = lo->imag();
+        *lo = cd(ur + vr, ui + vi);
+        *hi = cd(ur - vr, ui - vi);
+    }
+}
+
+// Forward transform: out[k] = SUM_j a[j] * exp(-2*pi*i*j*k/n).  In place, natural
+// order in and out.  Small transforms run the iterative kernel directly; large ones
+// use the recursive (cache-aware) kernel into a per-worker scratch, then copy back.
+inline void fft_inplace(cd* a, const FFTPlan& p) {
+    const size_t n = p.n;
+    if (n <= FFT_BASE) {
+        fft_iter_inplace(a, n, p.w.data());
+        return;
+    }
+    thread_local std::vector<cd> scratch;
+    scratch.resize(n);
+    fft_rec(n, 1, a, scratch.data(), p.w.data());
+    std::memcpy(a, scratch.data(), n * sizeof(cd));
 }
 
 // ---- stage 1: streaming length-A block FFTs (reuse ExternalTransform) -------
