@@ -202,6 +202,19 @@ EXAMPLES = [
      "xlabel": "input size",
      "title": "FFT: out-of-core vs in-mem (same transpose-free four-step)",
      "data_globs": ["fft_in*", "fft_s1*"]},
+    # fft_transposeExample: the counterpart that DOES the on-disk transpose (all
+    # streaming: stage1 + transpose + stage2T = 6N) instead of the random length-B
+    # pass -- the classic external-memory tradeoff to compare against `fft` (4N with
+    # random I/O).  Same in-mem four-step baseline.  Kept OUT of the aggregate list;
+    # run via `--example fft_transpose`.  Leaves fft_in/fft_s1/fft_t/fft_t2 files.
+    {"name": "fft_transpose", "target": "bin/fft_transposeExample",
+     "cols": ["n", "build_s", "stage1_s", "transpose_s", "stage2t_s", "total_s",
+              "inmem_s", "count", "throughput_gb_s"],
+     "time_col": "total_s", "inmem_col": "inmem_s",
+     "elem_bytes": 16, "input_seqs": 1,
+     "xlabel": "input size",
+     "title": "FFT: out-of-core transpose (streaming 6N) vs in-mem four-step",
+     "data_globs": ["fft_in*", "fft_s1*", "fft_t*", "fft_t2*"]},
     # kth_smallestExample sweeps n with k at the median (n/2); the plotted time
     # is the selection pass only (input build excluded).  Its recursion leaves
     # id_/flags_/next_ intermediates in addition to the kth_in input.
