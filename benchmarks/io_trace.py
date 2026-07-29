@@ -45,6 +45,15 @@ trace_<label>.csv, same per-panel breakdown as the combined trace) — the
 per-algorithm breakdown, generated once rather than at every sweep point since
 it's mainly useful at the scale you actually care about.
 
+trace.csv/trace.png cover only the traced window itself: samples from the
+first marker's start through the LAST `..._end_<label>` marker. A driver may
+keep running after that (e.g. bellman_ford.cpp computes an in-memory
+baseline + correctness cross-check after its last marker, fast_op_end) --
+that's real CPU-only work, just not part of the traced algorithm, so any such
+tail (when it has enough samples to matter) is written separately as
+trace_post.csv / trace_post_{throughput,cpu,drives}.png, unmarked and titled
+"(post-algorithm)".
+
 MEANINGFUL ONLY ON REAL BLOCK DEVICES.  On the tmpfs dev box the "SSDs" are
 RAM-backed and generate no /proc/diskstats traffic, so the disk panels come out
 empty (the script warns and still records CPU).  Run it on the 30-SSD machine.
@@ -293,6 +302,19 @@ def pair_windows(markers):
     return windows
 
 
+def last_end_marker_mono(markers):
+    """Latest mono timestamp among all '..._end_...' markers, or None.
+
+    Used to crop a trace to the traced algorithm's own window: work a driver
+    does after its last phase ends (e.g. bellman_ford.cpp's in-memory
+    baseline + cross-check, run after fast_op_end) isn't part of what the
+    trace is showing.
+    """
+    ends = [mono for label, mono in markers
+            if (parsed := split_marker(label)) is not None and parsed[1] == "end"]
+    return max(ends) if ends else None
+
+
 def window_series_stats(ser, t0, start_mono, end_mono):
     """Average agg_read/agg_write/mean_util/cpu over samples inside a window."""
     lo, hi = start_mono - t0, end_mono - t0
@@ -362,8 +384,8 @@ PHASE_STYLE = {
     ("build", "end"): ("yellow", "Settling"),
     ("op", "start"): ("red", "Begin"),
     ("op", "end"): ("aqua", "End"),
-    ("fast_op", "start"): ("green", "Fast"),
-    ("fast_op", "end"): ("orange", "Fast End"),
+    ("fast_op", "start"): ("green", "EBF Start"),
+    ("fast_op", "end"): ("orange", "EBF End"),
 }
 
 # Fixed POINT offsets below the axis (not axes-fraction) for the triangle /
@@ -379,9 +401,13 @@ _LABEL_PT = 34
 XLABEL_PAD = 34  # pass to ax.set_xlabel(..., labelpad=XLABEL_PAD)
 
 
-def _mark_phases(ax, markers, t0):
+def _mark_phases(ax, markers, t0, hide_kinds=frozenset()):
     """Small triangle + direct label at each phase marker, pinned a fixed
-    distance below the axes, instead of a full-height dashed line + legend."""
+    distance below the axes, instead of a full-height dashed line + legend.
+
+    hide_kinds: set of (kind, edge) pairs to skip drawing (e.g. a marker
+    that's redundant because it always lands right next to another one).
+    """
     import matplotlib.transforms as mtransforms
     import plot_style
     fig = ax.figure
@@ -394,6 +420,8 @@ def _mark_phases(ax, markers, t0):
         if parsed is None:
             continue
         kind, edge, _ = parsed
+        if (kind, edge) in hide_kinds:
+            continue
         color_name, text = PHASE_STYLE.get((kind, edge), ("blue", f"{kind}_{edge}"))
         color = plot_style.PALETTE[color_name]
         x = mono - t0
@@ -403,10 +431,13 @@ def _mark_phases(ax, markers, t0):
                 ha="center", va="top", fontsize=9, color=color, clip_on=False)
 
 
-def plot_trace(ser, markers, devices, t0, path):
+def plot_trace(ser, markers, devices, t0, path, hide_kinds=frozenset(), title_suffix=""):
     """Write three standalone panels — throughput / CPU / per-drive access
     pattern — as separate PNGs derived from `path` (<base>_throughput.png,
     <base>_cpu.png, <base>_drives.png) instead of one combined figure.
+
+    hide_kinds/title_suffix are forwarded to _mark_phases / the panel titles
+    (see their callers in main() for when these are used).
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -423,9 +454,9 @@ def plot_trace(ser, markers, devices, t0, path):
     ax_bw.plot(xs, ser["agg_write"], "-", color=plot_style.PALETTE["red"], label="write", linewidth=1.3)
     ax_bw.set_ylabel("Aggregate MB/s")
     ax_bw.set_xlabel("Seconds Since Initial Sample", labelpad=XLABEL_PAD)
-    ax_bw.set_title("Aggregate Throughput Over All Drives")
+    ax_bw.set_title("Aggregate Throughput Over All Drives" + title_suffix)
     ax_bw.grid(True)
-    _mark_phases(ax_bw, markers, t0)
+    _mark_phases(ax_bw, markers, t0, hide_kinds)
     ax_bw.legend(loc="upper right", fontsize=9)
     throughput_path = f"{base}_throughput{ext}"
     fig.savefig(throughput_path, dpi=140, bbox_inches="tight")
@@ -440,9 +471,9 @@ def plot_trace(ser, markers, devices, t0, path):
     ax_bn.set_ylabel("Percent")
     ax_bn.set_xlabel("Seconds Since Initial Sample", labelpad=XLABEL_PAD)
     ax_bn.set_ylim(0, 105)
-    ax_bn.set_title("CPU/Disk Utilization")
+    ax_bn.set_title("CPU/Disk Utilization" + title_suffix)
     ax_bn.grid(True)
-    _mark_phases(ax_bn, markers, t0)
+    _mark_phases(ax_bn, markers, t0, hide_kinds)
     ax_bn.legend(loc="upper left", fontsize=9)
     cpu_path = f"{base}_cpu{ext}"
     fig.savefig(cpu_path, dpi=140, bbox_inches="tight")
@@ -464,9 +495,9 @@ def plot_trace(ser, markers, devices, t0, path):
     else:
         ax_hm.text(0.5, 0.5, "no block-device traffic\n(tmpfs? wrong --mount-glob?)",
                    ha="center", va="center", transform=ax_hm.transAxes)
-    ax_hm.set_title("Drive Access (MB/s)")
+    ax_hm.set_title("Drive Access (MB/s)" + title_suffix)
     ax_hm.set_xlabel("Seconds Since Initial Sample", labelpad=XLABEL_PAD)
-    _mark_phases(ax_hm, markers, t0)
+    _mark_phases(ax_hm, markers, t0, hide_kinds)
     drives_path = f"{base}_drives{ext}"
     fig.savefig(drives_path, dpi=140, bbox_inches="tight")
     plt.close(fig)
@@ -727,8 +758,17 @@ def main():
             print(f"  !!! no (or malformed) CSV, line for {desc}; "
                   "excluded from the performance comparison", flush=True)
 
-        ser = compute_series(samples, devices)
+        ser_full = compute_series(samples, devices)
         t0 = samples[0][0]
+
+        # Crop to the traced algorithm's own window: a driver may keep doing
+        # measurable (CPU-only) work after its last phase marker -- e.g.
+        # bellman_ford.cpp runs an in-memory baseline + correctness
+        # cross-check after fast_op_end -- which isn't part of what "the
+        # trace" is meant to show. That tail, if long enough to matter, gets
+        # written out as its own trace_post.* trio below instead.
+        last_end = last_end_marker_mono(markers)
+        ser = slice_ser(ser_full, devices, t0, last_end) if last_end is not None else ser_full
 
         # point_idx suffix avoids collisions when the same point appears twice
         # in one sweep (e.g. --n "8192 8192" to check run-to-run variance).
@@ -736,8 +776,24 @@ def main():
         os.makedirs(outdir, exist_ok=True)
         print(f"Trace directory: {outdir}", flush=True)
 
+        # "Settling" (build_end) always lands right on top of the next
+        # phase's start marker (one settle_drives() sleep apart) on
+        # bellman_ford's traces specifically -- redundant clutter there, but
+        # kept for other examples (e.g. samplesort_three_way) where it
+        # doesn't collide.
+        hide_kinds = {("build", "end")} if entry["name"].startswith("bellman_ford") else frozenset()
+
         write_trace_csv(os.path.join(outdir, "trace.csv"), ser, devices, t0)
-        plot_trace(ser, markers, devices, t0, os.path.join(outdir, "trace.png"))
+        plot_trace(ser, markers, devices, t0, os.path.join(outdir, "trace.png"),
+                  hide_kinds=hide_kinds)
+
+        if last_end is not None:
+            tail_ser = slice_ser(ser_full, devices, last_end, samples[-1][0])
+            if len(tail_ser["t"]) >= 2:
+                write_trace_csv(os.path.join(outdir, "trace_post.csv"), tail_ser, devices, last_end)
+                plot_trace(tail_ser, [], devices, last_end,
+                          os.path.join(outdir, "trace_post.png"),
+                          title_suffix=" (post-algorithm)")
 
         # tidy the drives before the next point, matching run_benches' hygiene
         rb.clear_bench_data(args.mount_glob, not args.no_clean)
