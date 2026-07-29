@@ -74,6 +74,7 @@
 //   byte budget; inmem_op_s is blank when the in-memory baseline is skipped
 //   (n past BELLMAN_FORD_INMEM_MAX_N).
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -159,19 +160,23 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
         degree_scan[v + 1] = degree_scan[v] + WG[v].size();
     const size_t m = degree_scan[n];
 
-    // Flatten to CSR row order (vertex-major) so the tabulate below can look up
-    // edge i by a single flat index with no cross-vertex search.
-    auto flat = parlay::flatten(parlay::tabulate(n, [&](size_t v) {
-        return parlay::map(WG[v], [](const auto& p) {
+    // Look up edge i's owning vertex via binary search on degree_scan (tiny --
+    // one entry per vertex, easily cache-resident) instead of pre-flattening
+    // WG into a second full-size buffer: for a graph this large, WG plus a
+    // flattened copy can approach the box's DRAM and stall on allocation/page
+    // faults. This reads out CSR row order identically to the old
+    // flatten-then-index path (flat[i] == WG[v][i - degree_scan[v]] for
+    // degree_scan[v] <= i < degree_scan[v+1]), just without ever materializing
+    // `flat`; the in-memory cross-check below still verifies it element-wise.
+    chunk_csr graph;
+    graph.edges = ChunkSequenceOps::tabulate<weighted_edge>(
+        m, edge_prefix, [&](size_t i) {
+            size_t v = std::upper_bound(degree_scan.begin(), degree_scan.end(), i)
+                       - degree_scan.begin() - 1;
+            const auto& p = WG[v][i - degree_scan[v]];
             return weighted_edge{p.first, p.second};
         });
-    }));
-
-    chunk_csr graph;
     graph.degree_scan = std::move(degree_scan);
-    graph.edges = ChunkSequenceOps::tabulate<weighted_edge>(
-        m, edge_prefix, [&](size_t i) { return flat[i]; });
-    flat = decltype(flat){};   // fully consumed; drop the flattened copy before running either algorithm
 
     const double build_s = elapsed(t0);
     trace_mark(("build_end_" + label).c_str());

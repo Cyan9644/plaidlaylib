@@ -85,21 +85,31 @@ public:
         size_t file_bytes = 0;   // bytes on disk (true_bytes rounded up)
     };
 
-    BucketWriter(const std::string& prefix, size_t num_buckets)
-        : num_buckets_(num_buckets), buckets_(num_buckets), results_(num_buckets) {
-        // One accumulating request is permanently held per bucket, so the pool
-        // must exceed num_buckets for a flush to make progress; the surplus caps
-        // how many requests can be in flight (and hence the writer's DRAM).
-        requests_.resize(num_buckets * kRequestsPerBucket);
+    // disk_span spreads each bucket's data across `disk_span` independent
+    // per-drive files instead of one (bucket b shard s -> GetFileName(prefix,
+    // b*disk_span+s), so with disk_span == drive count, shard s of every
+    // bucket lands on drive s -- reading/writing one bucket then touches every
+    // drive instead of a single one).  Default 1 reproduces the original
+    // one-file-per-bucket layout exactly.
+    BucketWriter(const std::string& prefix, size_t num_buckets, size_t disk_span = 1)
+        : num_buckets_(num_buckets), disk_span_(disk_span),
+          buckets_(num_buckets * disk_span), results_(num_buckets * disk_span) {
+        // One accumulating request is permanently held per (bucket,shard), so the
+        // pool must exceed num_buckets*disk_span for a flush to make progress;
+        // the surplus caps how many requests can be in flight (and hence DRAM).
+        requests_.resize(num_buckets * disk_span * kRequestsPerBucket);
         for (Request& r : requests_) free_requests_.Push(&r);
 
         for (size_t b = 0; b < num_buckets; b++) {
-            Bucket& bk = buckets_[b];
-            results_[b].filename = GetFileName(prefix, b);
-            bk.fd = open(results_[b].filename.c_str(),
-                         O_WRONLY | O_DIRECT | O_CREAT | O_TRUNC, 0644);
-            SYSCALL(bk.fd);
-            bk.cur = NewRequest(bk.fd, 0);
+            for (size_t s = 0; s < disk_span; s++) {
+                const size_t i = b * disk_span_ + s;
+                Bucket& bk = buckets_[i];
+                results_[i].filename = GetFileName(prefix, i);
+                bk.fd = open(results_[i].filename.c_str(),
+                             O_WRONLY | O_DIRECT | O_CREAT | O_TRUNC, 0644);
+                SYSCALL(bk.fd);
+                bk.cur = NewRequest(bk.fd, 0);
+            }
         }
     }
 
@@ -156,9 +166,13 @@ public:
     }
 
     // Takes ownership of `buf` (a bucket_allocator block); `count` is its live
-    // element prefix.
-    void Write(size_t b, T* buf, size_t count) {
-        Bucket& bk = buckets_[b];
+    // element prefix.  `shard` selects which of bucket b's disk_span files this
+    // block goes to -- the caller picks it (e.g. round-robin per (worker,bucket)
+    // staging slot), the writer just routes by (b,shard).  Default 0 keeps the
+    // original 3-argument call sites (disk_span==1 callers, e.g.
+    // direct_samplesort.h) working unchanged.
+    void Write(size_t b, T* buf, size_t count, size_t shard = 0) {
+        Bucket& bk = buckets_[b * disk_span_ + shard];
         const size_t bytes = count * sizeof(T);
         if (bytes % O_DIRECT_MULTIPLE != 0) {
             std::lock_guard<std::mutex> l(bk.lock);
@@ -178,11 +192,12 @@ public:
         }
     }
 
-    // Flush every bucket's partial request + parked buffers, close the pending
-    // queue (which ends the I/O threads), and report each bucket's on-disk
-    // extent.  Not concurrent with Write(); the caller joins the I/O threads.
+    // Flush every (bucket,shard)'s partial request + parked buffers, close the
+    // pending queue (which ends the I/O threads), and report each shard's
+    // on-disk extent (results_[b*disk_span+s]).  Not concurrent with Write();
+    // the caller joins the I/O threads.
     std::vector<Result> ReapResult() {
-        parlay::parallel_for(0, num_buckets_, [&](size_t b) {
+        parlay::parallel_for(0, num_buckets_ * disk_span_, [&](size_t b) {
             Bucket& bk = buckets_[b];
             Request* r = bk.cur;
 
@@ -280,6 +295,7 @@ private:
     }
 
     const size_t num_buckets_;
+    const size_t disk_span_;
     std::vector<Bucket> buckets_;
     std::vector<Result> results_;
     std::vector<Request> requests_;

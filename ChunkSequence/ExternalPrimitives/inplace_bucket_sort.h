@@ -44,15 +44,29 @@ constexpr size_t kBucketPipelineStaggerUs = 5000;
 // technique as direct_samplesort.h's WorkerOnlyPhase2 / Peter's
 // ScatterGather.  A bucket's chunks are grouped into maximal contiguous runs
 // (same filename, back-to-back begin_addr) before I/O is issued: one open(),
-// one read SQE, one write SQE per run, instead of per chunk.  Since
-// count_sort now carves each bucket out of one contiguous per-bucket file,
-// this collapses to exactly one run per bucket in the common case — matching
-// direct_samplesort.h's single open/read/write per bucket — while a bucket
-// that happens to span multiple files still degrades safely to one run per
-// chunk.  Each run's fd is opened O_RDWR once and reused for both its read
-// and its write (closed only after the write completes), rather than
-// reopened per direction, halving the open()/close() syscalls on top of the
-// run-coalescing itself.
+// one read SQE, one write SQE per run, instead of per chunk.  With a
+// single-shard (single-file) bucket this collapses to exactly one run per
+// bucket, matching direct_samplesort.h's single open/read/write per bucket;
+// a bucket spanning multiple files (e.g. a drive-striped count_sort, one file
+// per shard) degrades to one run per shard.  Each run's fd is opened O_RDWR
+// once and reused for both its read and its write (closed only after the
+// write completes), rather than reopened per direction, halving the
+// open()/close() syscalls on top of the run-coalescing itself.
+//
+// `buf` is chunk-slotted: chunk ci's bytes always live at buf[ci*ept],
+// padded out to a full CHUNK_SIZE regardless of how many are actually live
+// (`used`) — needed so a run's read/write is one SQE at a fixed offset. A
+// *partial* chunk's slot therefore has live bytes only at its front; with a
+// single run (one partial chunk, at the very end) that leaves one contiguous
+// live prefix, which is what let `processor` operate directly on `buf`
+// before. With multiple runs (multiple shards), each run's own partial
+// chunk leaves a gap *mid-buffer*, breaking that contiguity — so `buf` is
+// compacted into a separate `nelem`-sized `compact` buffer (chunk order, no
+// gaps) before `processor` runs, and expanded back into `buf`'s per-chunk
+// slots afterward.  The two are physically distinct allocations, so the
+// compact/expand copies need no particular chunk order (no in-place aliasing
+// to worry about) and the untouched slot padding is left exactly as it was
+// read -- already correctly zeroed by whatever wrote it originally.
 template <typename T = uint64_t, typename Processor>
 void process_buckets_inplace(std::vector<chunk_seq>& buckets, Processor processor) {
     static_assert(CHUNK_SIZE % sizeof(T) == 0,
@@ -90,7 +104,8 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets, Processor processo
         };
         struct Stage {
             size_t bucket = (size_t)-1;
-            T* buf = nullptr;
+            T* buf = nullptr;       // chunk-slotted: chunk ci at buf[ci*ept], see file comment
+            T* compact = nullptr;  // nelem live elements, packed in chunk order -- what `processor` sees
             size_t nc = 0, nelem = 0;
             std::vector<Run> runs;
         };
@@ -163,20 +178,37 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets, Processor processo
                     }
                     for (const chunk& c : bs.chunks) nelem += c.used / sizeof(T);
                     next.nelem = nelem;
+                    next.compact = (T*)std::aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT,
+                                                          std::max<size_t>(nelem, 1) * sizeof(T));
+                    CHECK(next.compact != nullptr) << "process_buckets_inplace: compact alloc failed";
                     SYSCALL(io_uring_submit(&read_ring));
                 }
             }
             reap_read = submit_read;
 
-            // Run `processor` on the bucket whose read just landed, and zero-pad
-            // + open write fds so its write can be submitted below.
+            // Compact the chunk-slotted read into a gap-free buffer, run
+            // `processor` on it, and expand the result back into the slots so
+            // the write below lands each chunk's bytes back where they came
+            // from.  Slot padding outside each chunk's `used` prefix is never
+            // touched here, so it stays exactly as read (see file comment).
             if (process) {
-                processor(current.bucket, current.buf, current.nelem);
+                const chunk_seq& bs = buckets[current.bucket];
 
-                const size_t padded = current.nc * ept;
-                if (current.nelem < padded)
-                    std::memset(current.buf + current.nelem, 0,
-                               (padded - current.nelem) * sizeof(T));
+                char* cdst = (char*)current.compact;
+                for (size_t ci = 0; ci < current.nc; ci++) {
+                    const size_t used = bs.chunks[ci].used;
+                    std::memcpy(cdst, (char*)current.buf + ci * CHUNK_SIZE, used);
+                    cdst += used;
+                }
+
+                processor(current.bucket, current.compact, current.nelem);
+
+                char* csrc = (char*)current.compact;
+                for (size_t ci = 0; ci < current.nc; ci++) {
+                    const size_t used = bs.chunks[ci].used;
+                    std::memcpy((char*)current.buf + ci * CHUNK_SIZE, csrc, used);
+                    csrc += used;
+                }
 
                 // current.runs[*].fd is still the O_RDWR fd opened for the
                 // read above; reuse it rather than reopening for the write.
@@ -195,6 +227,7 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets, Processor processo
                     close(previous.runs[ri].fd);
                 }
                 free(previous.buf);
+                free(previous.compact);
             }
 
             // Submit this bucket's write.

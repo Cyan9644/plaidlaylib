@@ -475,10 +475,16 @@ void count_sort_serial(const D& dseq, size_t num_buckets,
 //     writer.Wait();
 // }
 
+// disk_span spreads each bucket's output across disk_span independent
+// per-drive files instead of one (see BucketWriter's disk_span doc): default
+// 1 reproduces the exact single-file-per-bucket layout above; passing
+// GetSSDList().size() stripes every bucket across every drive, so a bucket's
+// later read (sort_buckets_inplace) touches all drives instead of one.
 template<class D>
 void count_sort(const D& dseq, size_t num_buckets,
                       std::vector<chunk_seq>& externalSequenceVector,
-                      const std::string& result_prefix = "bucket") {
+                      const std::string& result_prefix = "bucket",
+                      size_t disk_span = 1) {
     using Pair = typename D::value_type;
     using T    = typename Pair::first_type;
     CHECK(externalSequenceVector.size() == num_buckets)
@@ -489,7 +495,7 @@ void count_sort(const D& dseq, size_t num_buckets,
     constexpr size_t kBufElems         = SAMPLE_SORT_BUCKET_SIZE / sizeof(T);
     constexpr size_t kWriterIoThreads  = 2;
 
-    BucketWriter<T> writer(result_prefix, num_buckets);
+    BucketWriter<T> writer(result_prefix, num_buckets, disk_span);
 
     // INVARIANT: every thread that touches bucket_allocator must be a parlay
     // worker.  bucket_allocator is backed by parlay::internal::block_allocator,
@@ -513,6 +519,11 @@ void count_sort(const D& dseq, size_t num_buckets,
     const size_t W = std::max<size_t>(1, parlay::num_workers());
     std::vector<T*>     buf(W * num_buckets, nullptr);
     std::vector<size_t> fill(W * num_buckets, 0);
+    // Rotates which of a bucket's disk_span files a (worker,bucket) slot's next
+    // flush goes to -- thread-local to the slot (no lock, no new contention),
+    // so a worker's contribution to a bucket spreads across every shard/drive
+    // over time regardless of how W compares to disk_span.
+    std::vector<size_t> shard_rr(W * num_buckets, 0);
     for (size_t i = 0; i < W * num_buckets; i++)
         buf[i] = (T*)bucket_allocator::alloc();
 
@@ -536,7 +547,7 @@ void count_sort(const D& dseq, size_t num_buckets,
                     const size_t si = w * num_buckets + b;
                     buf[si][fill[si]++] = pr.first;
                     if (fill[si] == kBufElems) {
-                        writer.Write(b, buf[si], kBufElems);
+                        writer.Write(b, buf[si], kBufElems, shard_rr[si]++ % disk_span);
                         buf[si] = (T*)bucket_allocator::alloc();
                         fill[si] = 0;
                     }
@@ -546,7 +557,7 @@ void count_sort(const D& dseq, size_t num_buckets,
             // Flush every worker's residual per-bucket buffer.
             for (size_t i = 0; i < W * num_buckets; i++) {
                 const size_t b = i % num_buckets;
-                if (fill[i] > 0) writer.Write(b, buf[i], fill[i]);
+                if (fill[i] > 0) writer.Write(b, buf[i], fill[i], shard_rr[i]++ % disk_span);
                 else             bucket_allocator::free((BucketData*)buf[i]);
             }
 
@@ -556,16 +567,20 @@ void count_sort(const D& dseq, size_t num_buckets,
     writer.CloseFiles();
     bucket_allocator::finish();
 
-    // Carve each bucket's contiguous result file into CHUNK_SIZE slices --
-    // the same "no repack pass" carving direct_sample_sort uses for its
-    // output -- instead of the balls-in-bins per-drive placement the other
-    // count_sort overloads use.
+    // Carve each bucket's shard files into CHUNK_SIZE slices -- the same "no
+    // repack pass" carving direct_sample_sort uses for its output, just per
+    // shard now instead of per whole bucket.  At disk_span==1 this is exactly
+    // the prior single-file carve; order across shards within a bucket doesn't
+    // matter (sort_buckets_inplace re-sorts the whole bucket afterward).
     for (size_t b = 0; b < num_buckets; b++) {
         size_t idx = 0;
-        for (size_t off = 0; off < results[b].true_bytes; off += CHUNK_SIZE)
-            externalSequenceVector[b].chunks.push_back(
-                {results[b].filename, off,
-                 std::min<size_t>(CHUNK_SIZE, results[b].true_bytes - off), idx++});
+        for (size_t s = 0; s < disk_span; s++) {
+            const auto& r = results[b * disk_span + s];
+            for (size_t off = 0; off < r.true_bytes; off += CHUNK_SIZE)
+                externalSequenceVector[b].chunks.push_back(
+                    {r.filename, off,
+                     std::min<size_t>(CHUNK_SIZE, r.true_bytes - off), idx++});
+        }
     }
 }
 

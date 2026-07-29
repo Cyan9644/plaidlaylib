@@ -44,7 +44,8 @@ TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/scalarTest $(BINDIR)/bigintAddTest $(BINDIR)/convexHullTest \
                  $(BINDIR)/partitionTest $(BINDIR)/segmentedReduceTest \
                  $(BINDIR)/dc3Test \
-                 $(BINDIR)/bigintMulTest
+                 $(BINDIR)/bigintMulTest \
+                 $(BINDIR)/samplesortStripedTest
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
@@ -246,6 +247,13 @@ $(BINDIR)/convexHullTest: ChunkSequence/tests/convex_hull_test.cpp $(UTIL_OBJS) 
 	$(LINK)
 
 $(BINDIR)/tempMain: ChunkSequence/examples/temp_main.cpp $(UTIL_OBJS)
+	$(LINK)
+
+# samplesortStripedTest: correctness + drive-placement check for the
+# drive-striped sample sorts (sample_sort_striped / direct_sample_sort_striped).
+# Pulls in the samplesort example headers directly (header-only algorithms, no
+# upstream baseline needed), so no extra deps prerequisite.
+$(BINDIR)/samplesortStripedTest: ChunkSequence/tests/samplesort_striped_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
 # ── examples ───────────────────────────────────────────────────────────────────
