@@ -170,17 +170,11 @@ int main(int argc, char* argv[]) {
             // baseline over the full spectrum (with the transpose-free permutation).
             auto Xref = complex_fft(x);
             std::vector<cd> out = s1.to_vector<cd>();
-            double max_ref = 0, err_oc = 0, err_mem = 0;
-            for (size_t k = 0; k < N; k++) {
-                const size_t p = ChunkFFT::out_perm(k, d);
-                max_ref = std::max(max_ref, std::abs(Xref[k]));
-                err_oc  = std::max(err_oc,  std::abs(out[p]  - Xref[k]));
-                err_mem = std::max(err_mem, std::abs(Xmem[p] - Xref[k]));
-            }
-            const double tol = 1e-6 * (max_ref > 0 ? max_ref : 1.0);
-            agree = (err_oc <= tol) && (err_mem <= tol);
-            std::cout << "   out-of-core err " << std::scientific << err_oc
-                      << "   in-mem err " << err_mem << "   tol " << tol << std::fixed
+            auto e = ChunkFFT::spectrum_errs(out, Xmem, Xref, d, ChunkFFT::out_perm);
+            const double tol = 1e-6 * (e.max_ref > 0 ? e.max_ref : 1.0);
+            agree = (e.err_oc <= tol) && (e.err_mem <= tol);
+            std::cout << "   out-of-core err " << std::scientific << e.err_oc
+                      << "   in-mem err " << e.err_mem << "   tol " << tol << std::fixed
                       << (agree ? "   OK" : "   *** MISMATCH ***");
         } else {
             std::cout << "   (timing baseline only; FFT_VERIFY=1 to cross-check)";

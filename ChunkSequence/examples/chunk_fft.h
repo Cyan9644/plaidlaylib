@@ -63,6 +63,8 @@
 #include <thread>
 #include <atomic>
 #include <algorithm>
+#include <random>
+#include <utility>
 #include <fcntl.h>
 #include <unistd.h>
 #include <liburing.h>
@@ -126,21 +128,26 @@ struct FFTPlan {
     }
 };
 
-// Forward transform: out[k] = SUM_j a[j] * exp(-2*pi*i*j*k/n).  In place, input in
-// natural order (bit-reversal done here).  p.n must be a power of two.
-inline void fft_inplace(cd* a, const FFTPlan& p) {
-    const size_t n = p.n;
+// Below this transform length a whole FFT is cache-resident, so the tight
+// iterative loop wins; above it we recurse (see fft_inplace) to keep the working
+// set small.  ~128 KiB (2^13 complex) comfortably fits L2 on the target boxes.
+constexpr size_t FFT_BASE = size_t(1) << 13;
+
+// In-place iterative radix-2 FFT on a contiguous, natural-order array of length n
+// (a power of two, n <= its plan size).  Uses raw-double butterflies and the
+// precomputed twiddles W[k * (n/len)] = exp(-2*pi*i*k/len).  This is the small
+// base case; fft_inplace dispatches large transforms to the recursive kernel.
+inline void fft_iter_inplace(cd* a, size_t n, const cd* W) {
     for (size_t i = 1, j = 0; i < n; i++) {          // bit-reversal permutation
         size_t bit = n >> 1;
         for (; j & bit; bit >>= 1) j ^= bit;
         j ^= bit;
         if (i < j) std::swap(a[i], a[j]);
     }
-    const cd* W = p.w.data();
     for (size_t len = 2; len <= n; len <<= 1) {
         const size_t h = len >> 1;
         const size_t step = n / len;                 // W[k*step] = exp(-2*pi*i*k/len)
-        for (size_t i = 0; i < n; i += len) {
+        for (size_t i = 0; i < n; i += len)
             for (size_t k = 0; k < h; k++) {
                 const cd& wk = W[k * step];
                 const double wr = wk.real(), wi = wk.imag();
@@ -153,8 +160,83 @@ inline void fft_inplace(cd* a, const FFTPlan& p) {
                 *lo = cd(ur + vr, ui + vi);
                 *hi = cd(ur - vr, ui - vi);
             }
-        }
     }
+}
+
+inline size_t fft_bitrev(size_t x, int bits) {
+    size_t r = 0;
+    for (int i = 0; i < bits; i++) { r = (r << 1) | (x & 1); x >>= 1; }
+    return r;
+}
+
+// Recursive divide-and-conquer Cooley-Tukey (decimation-in-time).  Writes out[0..n)
+// = DFT of the strided samples in[0], in[s], ..., in[(n-1)*s].  Because the top-level
+// size M = n*s is fixed, a sub-FFT of size n at stride s indexes the SAME plan
+// twiddle table as W[k*s] (top butterfly) / W[k*s*(n/len)] (base butterfly), so one
+// table serves every level.  Splitting depth-first keeps each subproblem's working
+// set small: only O(log(n/FFT_BASE)) full passes over out (vs the iterative kernel's
+// O(log n)), which removes the cache cliff once a row/column exceeds L2 (n >= 2^18).
+//
+// NOTE: the recursion *structure* is cache-oblivious (it self-tunes to any cache by
+// halving), but this is NOT a strictly cache-oblivious algorithm -- the FFT_BASE
+// cutoff is hardcoded to L2, making the implementation cache-AWARE.  A truly
+// cache-oblivious variant would recurse to a constant base (n=2) with no FFT_BASE,
+// at higher constant-factor overhead; the tuned base is a deliberate speed tradeoff.
+inline void fft_rec(size_t n, size_t s, const cd* in, cd* out, const cd* W) {
+    if (n <= FFT_BASE) {
+        int bits = 0;
+        while ((size_t(1) << bits) < n) bits++;      // log2 n
+        for (size_t i = 0; i < n; i++)               // gather strided input, bit-reversed
+            out[fft_bitrev(i, bits)] = in[i * s];
+        for (size_t len = 2; len <= n; len <<= 1) {
+            const size_t h = len >> 1;
+            const size_t step = s * (n / len);       // W[k*step] = exp(-2*pi*i*k/len)
+            for (size_t i = 0; i < n; i += len)
+                for (size_t k = 0; k < h; k++) {
+                    const cd& wk = W[k * step];
+                    const double wr = wk.real(), wi = wk.imag();
+                    cd* lo = &out[i + k];
+                    cd* hi = &out[i + k + h];
+                    const double xr = hi->real(), xi = hi->imag();
+                    const double vr = xr * wr - xi * wi;
+                    const double vi = xr * wi + xi * wr;
+                    const double ur = lo->real(), ui = lo->imag();
+                    *lo = cd(ur + vr, ui + vi);
+                    *hi = cd(ur - vr, ui - vi);
+                }
+        }
+        return;
+    }
+    const size_t h = n >> 1;
+    fft_rec(h, s << 1, in,     out,     W);           // even samples -> out[0..h)
+    fft_rec(h, s << 1, in + s, out + h, W);           // odd samples  -> out[h..n)
+    for (size_t k = 0; k < h; k++) {                  // combine with W[k*s]
+        const cd& wk = W[k * s];
+        const double wr = wk.real(), wi = wk.imag();
+        cd* lo = &out[k];
+        cd* hi = &out[k + h];
+        const double xr = hi->real(), xi = hi->imag();
+        const double vr = xr * wr - xi * wi;
+        const double vi = xr * wi + xi * wr;
+        const double ur = lo->real(), ui = lo->imag();
+        *lo = cd(ur + vr, ui + vi);
+        *hi = cd(ur - vr, ui - vi);
+    }
+}
+
+// Forward transform: out[k] = SUM_j a[j] * exp(-2*pi*i*j*k/n).  In place, natural
+// order in and out.  Small transforms run the iterative kernel directly; large ones
+// use the recursive (cache-aware) kernel into a per-worker scratch, then copy back.
+inline void fft_inplace(cd* a, const FFTPlan& p) {
+    const size_t n = p.n;
+    if (n <= FFT_BASE) {
+        fft_iter_inplace(a, n, p.w.data());
+        return;
+    }
+    thread_local std::vector<cd> scratch;
+    scratch.resize(n);
+    fft_rec(n, 1, a, scratch.data(), p.w.data());
+    std::memcpy(a, scratch.data(), n * sizeof(cd));
 }
 
 // ---- stage 1: streaming length-A block FFTs (reuse ExternalTransform) -------
@@ -439,6 +521,219 @@ inline void in_mem_transform(parlay::sequence<cd>& W, const Dims& d) {
         for (size_t k2 = 0; k2 < B; k2++)
             W[k2 * A + k1] = col[k2];                       // scatter back
     });
+}
+
+// ============================================================================
+// Transpose variant: instead of stage 2's random strided column access, make the
+// columns contiguous with an explicit on-disk transpose, then do stage 2 as a
+// streaming pass.  Trades 4N-with-random-I/O for 6N-all-streaming -- the classic
+// external-memory tradeoff, to compare against the transpose-free path.
+// ============================================================================
+
+// The transpose variant leaves output in transposed order: stage 2T writes
+// V[k1][k2] to physical k1*B + k2, so X[k1 + A*k2] lives at physical (k%A)*B+(k/A).
+inline size_t out_perm_transpose(size_t k, const Dims& d) {
+    const size_t k1 = k % d.A;
+    const size_t k2 = k / d.A;
+    return k1 * d.B + k2;
+}
+
+// Allocate a fresh N-element chunk_seq layout (per-drive files fallocated to size,
+// chunks assigned to drives and packed at slot offsets) WITHOUT writing any data --
+// factored from tabulate's layout logic (chunk_seq.h).  Returns the index-ordered
+// chunk_seq (so position q lives in chunks[q/EPC] at begin_addr + (q%EPC)*16) and
+// the per-drive filenames.
+inline std::pair<chunk_seq, std::vector<std::string>>
+alloc_layout(size_t N, const std::string& prefix) {
+    const size_t num_chunks = (N + EPC - 1) / EPC;
+    const size_t num_drives = GetSSDList().size();
+
+    std::vector<size_t> drive_of(num_chunks);
+    {
+        std::mt19937_64 rng(std::random_device{}());
+        std::uniform_int_distribution<size_t> dist(0, num_drives - 1);
+        for (size_t i = 0; i < num_chunks; i++) drive_of[i] = dist(rng);
+    }
+    std::vector<std::vector<size_t>> drive_chunks(num_drives);
+    for (size_t i = 0; i < num_chunks; i++) drive_chunks[drive_of[i]].push_back(i);
+    std::vector<size_t> slot_of(num_chunks);
+    for (size_t dd = 0; dd < num_drives; dd++)
+        for (size_t s = 0; s < drive_chunks[dd].size(); s++)
+            slot_of[drive_chunks[dd][s]] = s;
+
+    std::vector<std::string> filenames(num_drives);
+    parlay::parallel_for(0, num_drives, [&](size_t dd) {
+        filenames[dd] = GetFileName(prefix, dd);
+        const size_t file_size = drive_chunks[dd].size() * CHUNK_SIZE;
+        if (file_size == 0) return;
+        int fd = open(filenames[dd].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        SYSCALL(fd);
+        if (fallocate(fd, 0, 0, (off_t)file_size) != 0)
+            SYSCALL(ftruncate(fd, (off_t)file_size));
+        SYSCALL(close(fd));
+    }, /*granularity=*/1);
+
+    std::vector<chunk> chunks(num_chunks);
+    for (size_t i = 0; i < num_chunks; i++) {
+        const size_t start = i * EPC;
+        const size_t count = std::min(EPC, N - start);
+        chunks[i] = {filenames[drive_of[i]], slot_of[i] * CHUNK_SIZE,
+                     count * sizeof(cd), i};
+    }
+    return {chunk_seq{chunks}, filenames};
+}
+
+// On-disk transpose of the stage-1 output: the B x A matrix (row b at positions
+// [b*A, b*A+A)) becomes the A x B transpose (physical p = b*A+k1 -> q = k1*B + b),
+// so stage 2T can stream contiguous length-B rows.  One-pass BAND transpose: read
+// a band of `tb` consecutive rows (large sequential reads), transpose it in DRAM,
+// and write A contiguous `tb`-element runs (one per output row k1) at their strided
+// offsets via a deep-queue io_uring RandomRing -- large (>=4 KiB) streaming writes,
+// not 4 KiB random.  Returns the transposed chunk_seq.
+inline chunk_seq transpose_pass(const chunk_seq& s1, const Dims& d,
+                                const std::string& prefix) {
+    const size_t N = d.N, A = d.A, B = d.B;
+    CHECK(B <= EPC) << "transpose variant requires B <= EPC (N <= 2^36)";
+
+    // Input (s1) read fds, one per distinct per-drive file.
+    std::map<std::string, int> in_fidx;
+    std::vector<int> rd_fds;
+    for (const chunk& c : s1.chunks) {
+        if (in_fidx.count(c.filename)) continue;
+        in_fidx[c.filename] = (int)rd_fds.size();
+        int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+        SYSCALL(fd);
+        rd_fds.push_back(fd);
+    }
+
+    // Output layout + per-drive write fds; precompute position -> (drive, offset).
+    auto [out, out_filenames] = alloc_layout(N, prefix);
+    const size_t num_drives = out_filenames.size();
+    std::vector<int> wr_fds(num_drives);
+    std::map<std::string, int> out_fidx;
+    for (size_t dd = 0; dd < num_drives; dd++) {
+        out_fidx[out_filenames[dd]] = (int)dd;
+        wr_fds[dd] = open(out_filenames[dd].c_str(), O_DIRECT | O_WRONLY);
+        SYSCALL(wr_fds[dd]);
+    }
+    std::vector<int> out_chunk_drive(out.chunks.size());
+    std::vector<size_t> out_chunk_begin(out.chunks.size());
+    for (size_t ci = 0; ci < out.chunks.size(); ci++) {
+        out_chunk_drive[ci] = out_fidx.at(out.chunks[ci].filename);
+        out_chunk_begin[ci] = out.chunks[ci].begin_addr;
+    }
+    auto out_locate = [&](size_t q, int& drive, size_t& offset) {
+        const size_t ci = q / EPC;
+        drive  = out_chunk_drive[ci];
+        offset = out_chunk_begin[ci] + (q % EPC) * sizeof(cd);
+    };
+
+    // Band size tb: largest power of two in [256, B] whose two DRAM buffers (band +
+    // transposed band, tb*A elements each) fit the budget.  tb | B (both powers of
+    // two), so every band is full -- no ragged tail.
+    const size_t phys = (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
+    size_t budget = std::min<size_t>(size_t(8) << 30, phys / 8);
+    if (const char* e = getenv("FFT_TRANSPOSE_DRAM_BUDGET_BYTES")) budget = std::stoull(e);
+    size_t tb = std::min<size_t>(256, B);
+    while (tb * 2 <= B && 2 * (tb * 2) * A * sizeof(cd) <= budget) tb <<= 1;
+    const size_t band_bytes = tb * A * sizeof(cd);
+    const size_t qd = std::min<size_t>(A, 512);
+    std::fprintf(stderr, "transpose: tb=%zu rows  band=%zu MiB (x2)  qd=%zu\n",
+                 tb, band_bytes >> 20, qd);
+
+    cd* band = (cd*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, band_bytes);   // tb x A
+    cd* tbuf = (cd*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, band_bytes);   // A x tb
+    CHECK(band != nullptr && tbuf != nullptr) << "transpose: band alloc failed";
+    RandomRing wring(qd);
+    std::vector<std::pair<int, size_t>> wreqs(A);
+
+    for (size_t r0 = 0; r0 < B; r0 += tb) {
+        // Read rows [r0, r0+tb) == positions [r0*A, (r0+tb)*A) into `band`, one
+        // segment per overlapping input chunk (all boundaries are A-aligned, so
+        // >= 4 KiB O_DIRECT-aligned).
+        const size_t p_lo = r0 * A, p_hi = (r0 + tb) * A;
+        const size_t c_lo = p_lo / EPC, c_hi = (p_hi - 1) / EPC;
+        parlay::parallel_for(c_lo, c_hi + 1, [&](size_t ci) {
+            const size_t cs = ci * EPC, ce = cs + EPC;
+            const size_t s = std::max(p_lo, cs), e = std::min(p_hi, ce);
+            const int    fd  = rd_fds[in_fidx.at(s1.chunks[ci].filename)];
+            const size_t foff = s1.chunks[ci].begin_addr + (s - cs) * sizeof(cd);
+            SYSCALL(pread(fd, (char*)band + (s - p_lo) * sizeof(cd),
+                          (e - s) * sizeof(cd), (off_t)foff));
+        }, /*granularity=*/1);
+
+        // Transpose the band in DRAM: tbuf[k1][b_local] = band[b_local][k1], and
+        // stage the write target for each output row's contiguous run.
+        parlay::parallel_for(0, A, [&](size_t k1) {
+            cd* run = tbuf + k1 * tb;
+            for (size_t bl = 0; bl < tb; bl++) run[bl] = band[bl * A + k1];
+            int drive; size_t off;
+            out_locate(k1 * B + r0, drive, off);           // run -> phys k1*B + r0
+            wreqs[k1] = {drive, off};
+        });
+
+        // Write all A runs (tb*16 B each) via the deep-queue ring.
+        wring.run(wr_fds, wreqs, (char*)tbuf, tb * sizeof(cd), /*write=*/true);
+    }
+
+    free(band);
+    free(tbuf);
+    for (int fd : rd_fds) close(fd);
+    for (int fd : wr_fds) close(fd);
+    return out;
+}
+
+// Stage 2T: the transposed stage 2, a streaming ExternalTransform over the
+// transposed sequence (mirrors stage1_rows).  Each chunk holds EPC/B contiguous
+// rows (row k1 = B contiguous elements); the body applies the twiddle W_N^{b*k1}
+// (per row: one polar + geometric over b, as in stage2_cols) then a length-B FFT.
+inline chunk_seq stage2t_cols(const chunk_seq& sT, const Dims& d,
+                              const std::string& prefix) {
+    const size_t N = d.N, B = d.B;
+    const double pi = kPi();
+    FFTPlan planB;
+    planB.init(B);
+    return ChunkSequenceOps::ExternalTransform<cd, cd>(
+        sT, prefix,
+        [N, B, pi, &planB](const cd* in, size_t n, size_t index,
+            const ChunkSequenceOps::ChunkEmitter<cd>& emit) {
+            cd* out = emit.alloc();
+            const size_t nrows = n / B;                    // n is a multiple of B
+            const size_t first_row = index * (EPC / B);    // global k1 of row 0
+            for (size_t r = 0; r < nrows; r++) {
+                const size_t k1 = first_row + r;
+                const cd* src = in + r * B;
+                cd* o = out + r * B;
+                const cd ratio = std::polar(1.0, -2.0 * pi * (double)(k1 % N) / (double)N);
+                cd tw(1.0, 0.0);
+                for (size_t b = 0; b < B; b++) {           // twiddle W_N^{b*k1}
+                    o[b] = src[b] * tw;
+                    tw *= ratio;
+                }
+                fft_inplace(o, planB);                     // length-B row FFT
+            }
+            if (n < EPC) std::memset((char*)out + n * sizeof(cd), 0,
+                                     CHUNK_SIZE - n * sizeof(cd));
+            emit.emit(out, n, index);
+        });
+}
+
+// Shared full-spectrum error computation for both drivers' FFT_VERIFY path: `out`
+// is the out-of-core physical result (compared through `perm`), Xmem the in-mem
+// baseline (already logical order), Xref the independent complex_fft oracle.
+struct SpectrumErrs { double max_ref, err_oc, err_mem; };
+template <typename PermFn>
+inline SpectrumErrs spectrum_errs(const std::vector<cd>& out,
+                                  const parlay::sequence<cd>& Xmem,
+                                  const parlay::sequence<cd>& Xref,
+                                  const Dims& d, PermFn perm) {
+    double max_ref = 0, err_oc = 0, err_mem = 0;
+    for (size_t k = 0; k < d.N; k++) {
+        max_ref = std::max(max_ref, std::abs(Xref[k]));
+        err_oc  = std::max(err_oc,  std::abs(out[perm(k, d)] - Xref[k]));
+        err_mem = std::max(err_mem, std::abs(Xmem[k]         - Xref[k]));
+    }
+    return {max_ref, err_oc, err_mem};
 }
 
 }  // namespace ChunkFFT
