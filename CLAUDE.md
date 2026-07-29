@@ -292,6 +292,25 @@ vertex's in-edge range at once (see `external_bellman_ford_fast` in
 `examples/external/external_bellman_ford.h`). ExternalGraph/ExternalPrimitives
 aren't otherwise documented here yet.
 
+**Out-of-core graph generation** (`examples/external/graph_utils/external_rmat.h`,
+tested by `externalRmatTest`): an RMAT edge is a pure function of its index
+(`rmat_edges_` draws edge `i` from `gen[i]`; `add_weights` draws `(u,v)`'s weight
+from `gen[min][max]`), so `external_rmat_symmetric_graph` builds a whole
+`chunk_csr` without ever holding the graph — `tabulate` the forward *and*
+reversed edges straight to disk (that is the symmetrization), `direct_sample_sort`
+by `(src,dst)`, then one `DensePackStream` pass with a 1-element forward halo
+that drops self-loops, keeps the last of each duplicate run, projects to CSR row
+layout, and run-length counts degrees into `degree_scan`. The result is the same
+graph `graph_utils`' DRAM path builds — same draws, and upstream's pre-symmetrize
+`remove_duplicates` is subsumed by the adjacent dedup — differing only in
+neighbor order within a row, which a min-relax cannot see. Residual DRAM is
+`degree_scan` alone (8 B/vertex, which `chunk_csr` requires); transient disk is
+~3–4× the final edge bytes (the generated list plus sort buckets), swept before
+returning. It uses `direct_sample_sort`, **not** `sample_sort`: the latter pads
+its `heap_tree` pivots with `std::numeric_limits<T>::max()`, which for a
+program-defined `T` is a value-initialized `T` — the *minimum* — so it silently
+misroutes struct elements.
+
 ### Dense packing  (`dense_pack.h`)
 
 `ChunkFilter` and `ChunkFlatTabulate` need **dense** output (every chunk but the

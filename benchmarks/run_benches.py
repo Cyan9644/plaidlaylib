@@ -45,6 +45,7 @@ import glob
 import math
 import os
 import re
+import signal
 import subprocess
 import sys
 from datetime import datetime
@@ -683,8 +684,16 @@ def run_binary(path, args, fatal=True):
             csv = line[len("CSV,"):].split(",")
     problem = None
     if r.returncode != 0:
-        why = ("killed by a signal (crash)" if r.returncode < 0
-               else "correctness mismatch or error")
+        if r.returncode == -signal.SIGKILL:
+            # Nothing here ever sends SIGKILL and there is no timeout, so this
+            # is the kernel OOM killer essentially every time.  Say so: an OOM
+            # looks nothing like a crash to debug (no core, no stack, and any
+            # trace file stops at whatever phase was allocating).
+            why = "killed by SIGKILL — almost certainly the OOM killer"
+        elif r.returncode < 0:
+            why = f"killed by signal {-r.returncode} (crash)"
+        else:
+            why = "correctness mismatch or error"
         problem = f"exited {r.returncode} ({why})"
     elif csv is None:
         problem = "no CSV line in output"

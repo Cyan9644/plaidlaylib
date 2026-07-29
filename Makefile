@@ -45,7 +45,8 @@ TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/partitionTest $(BINDIR)/segmentedReduceTest \
                  $(BINDIR)/dc3Test \
                  $(BINDIR)/bigintMulTest \
-                 $(BINDIR)/samplesortStripedTest
+                 $(BINDIR)/samplesortStripedTest \
+                 $(BINDIR)/externalRmatTest
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
@@ -255,6 +256,13 @@ $(BINDIR)/tempMain: ChunkSequence/examples/temp_main.cpp $(UTIL_OBJS)
 # Pulls in the samplesort example headers directly (header-only algorithms, no
 # upstream baseline needed), so no extra deps prerequisite.
 $(BINDIR)/samplesortStripedTest: ChunkSequence/tests/samplesort_striped_test.cpp $(UTIL_OBJS)
+	$(LINK)
+
+# externalRmatTest: the out-of-core RMAT generator (external_rmat.h) against the
+# in-memory graph_utils reference it claims to reproduce.  Its in-DRAM baseline
+# is the LOCAL examples/in_memory/graph/graph_utils/graph_utils.h, not an
+# upstream header, so no deps/parlaylib-examples prerequisite is needed.
+$(BINDIR)/externalRmatTest: ChunkSequence/tests/external_rmat_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
 # ── examples ───────────────────────────────────────────────────────────────────

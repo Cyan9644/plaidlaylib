@@ -21,14 +21,23 @@
 // every other case using the same generator (rmat_symmetric_graph) and lets
 // the sweep isolate the effect of edge count alone.
 //
-// Graph construction is NOT out-of-core: there is no streaming graph-ingestion
-// path yet (a general one is planned separately), so this generates + weights
-// each RMAT graph entirely in DRAM (graph_utils' rmat_symmetric_graph +
-// add_weights) and then does a one-off flatten into chunk_csr row order,
-// written out with ChunkSequenceOps::tabulate.  So only the relaxation phase
-// is "external"; the graph itself must fit DRAM to be built and to run the
-// in-memory baseline.  The graph is symmetric (undirected), so its own
-// adjacency doubles as its transpose GT, which both algorithms pull from.
+// Graph construction IS out-of-core (external_rmat.h): an RMAT edge is a pure
+// function of its index, so the edge list is tabulated straight onto the drives,
+// put into CSR order with direct_sample_sort, and deduped/projected/counted in
+// one DensePackStream pass.  Nothing graph-sized is DRAM-resident except
+// chunk_csr's degree_scan (8 bytes/vertex, which the data structure requires).
+// Transient disk is ~3-4x the final edge bytes and is swept before the build
+// returns.  The graph is symmetric (undirected), so its own adjacency doubles
+// as its transpose GT, which both algorithms pull from.
+//
+// The in-memory baseline still needs a DRAM graph, so when it is enabled the
+// binary builds a SECOND copy via graph_utils' rmat_symmetric_graph +
+// add_weights.  Both generators are deterministic functions of (n_req, m_req)
+// and use the same draws, so they produce the same graph (up to neighbor order
+// within a row, which min-relax cannot see) -- which makes the distance
+// cross-check below double as an end-to-end check that they agree.  That DRAM
+// copy is what used to OOM-kill this binary at benchmark scale; it is now gated
+// by a budget (below) and simply not built when it doesn't fit.
 //
 // Defaults are deliberately tiny.  external_bellman_ford relaxes a vertex by
 // calling sequential_materialize on a fresh delayed cut of the edge chunk_seq
@@ -50,6 +59,16 @@
 // edge count) stop being a useful DRAM baseline and are just wall-clock/memory
 // cost.  It runs regardless of PLAID_TRACE (raise the env var on a box with
 // enough DRAM to still want the comparison at larger n; see run_case()).
+//
+// A second, size-derived gate guards DRAM directly (BELLMAN_FORD_BUILD_BUDGET_
+// BYTES, default half of physical RAM, 0 disables).  run_case() estimates both
+// the unavoidable out-of-core footprint (degree_scan + the two distance arrays)
+// and the in-memory baseline's graph BEFORE allocating anything: if only the
+// baseline is over budget it is dropped and the out-of-core methods still run
+// and report; if even the out-of-core footprint is over budget the case is
+// skipped with no CSV line, which run_benches.py drops with a warning.  This
+// is what an OOM kill used to look like -- exit -9, no CSV, and a trace with a
+// build_start mark and no build_end.
 //
 //   usage: bellman_fordExample [global --flags] [n] [balanced_avg_degree] [case]
 //     n                    requested vertex count, rounded up to a power of
@@ -106,6 +125,9 @@
 #include "utils/trace_marker.h"
 #include "ChunkSequence/chunk_seq.h"
 #include "ChunkSequence/examples/external/bench_drives.h"
+// Before external_bellman_ford.h: this pulls in dense_pack/direct_samplesort,
+// which must be parsed before external_compressed_sparse_row.h's bare macros.
+#include "ChunkSequence/examples/external/graph_utils/external_rmat.h"
 #include "ChunkSequence/examples/external/external_bellman_ford.h"
 
 using Clock = std::chrono::steady_clock;
@@ -139,49 +161,87 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
 
     std::cout << "\n=== case: " << label << " (avg_degree " << avg_degree
               << ") ===\n";
+
+    // n is a pure function of n_req (RMAT rounds up to a power of two), so
+    // every budget decision below can be made BEFORE anything is allocated.
+    const size_t n = size_t{1} << (int)std::round(std::log2((double)n_req));
+    const size_t m_req = avg_degree * n_req;   // directed edges, pre-dedup
+
+    // Two DRAM gates, both evaluated up front.
+    //
+    // ext_bytes is what the out-of-core path itself cannot avoid: chunk_csr's
+    // degree_scan (8 bytes/vertex, DRAM-resident by construction --
+    // external_compressed_sparse_row.h) plus external_bellman_ford_fast's two
+    // `long double` distance arrays (16 bytes/vertex each).
+    //
+    // inmem_bytes is the in-memory baseline's graph, which is the expensive
+    // one: ~48 bytes/vertex of parlay::sequence outer arrays (G, symmetrize's
+    // transpose, WG) plus ~64 bytes per requested edge (8 in G, 32 in WG, and
+    // symmetrize's 16-byte edge-list copies) -- see external_rmat.h's header
+    // for why that peak is what OOM-killed this binary at n = 2^32.
+    const size_t ext_bytes   = 8 * (n + 1) + 2 * 16 * n;
+    const size_t inmem_bytes = 48 * n + 64 * m_req;
+
+    size_t inmem_max_n = 1ull << 30;
+    if (const char* e = getenv("BELLMAN_FORD_INMEM_MAX_N"))
+        inmem_max_n = std::stoull(e);
+    bool inmem_ok = n <= inmem_max_n;
+
+    const size_t phys = (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
+    size_t budget = phys / 2;
+    if (const char* e = getenv("BELLMAN_FORD_BUILD_BUDGET_BYTES"))
+        budget = std::stoull(e);
+
+    if (budget != 0 && ext_bytes > budget) {
+        // Nothing here is runnable. Print no CSV line at all and return
+        // success: run_benches.py drops a CSV-less point with a warning and
+        // keeps sweeping, which is what we want instead of an OOM kill.
+        std::cout << "SKIPPED: n=" << n << " needs " << std::setprecision(3)
+                  << to_gb(ext_bytes) << " GB of DRAM for degree_scan + distance "
+                  << "arrays alone, past the " << to_gb(budget) << " GB budget "
+                  << "(BELLMAN_FORD_BUILD_BUDGET_BYTES)\n";
+        return true;
+    }
+    if (inmem_ok && budget != 0 && ext_bytes + inmem_bytes > budget) {
+        // Only the baseline doesn't fit -- drop it and still run (and report)
+        // the out-of-core methods rather than losing the whole point.
+        std::cout << "in-memory baseline disabled: its DRAM graph needs ~"
+                  << std::setprecision(3) << to_gb(inmem_bytes) << " GB, past the "
+                  << to_gb(budget) << " GB budget\n";
+        inmem_ok = false;
+    }
+
     std::cout << "Generating " << n_req << "-vertex RMAT graph (avg degree "
-              << avg_degree << ")..." << std::flush;
+              << avg_degree << ") out-of-core..." << std::flush;
     trace_mark(("build_start_" + label).c_str());
     auto t0 = Clock::now();
 
-    // Symmetric (undirected) weighted graph in DRAM -- also its own transpose,
-    // so it feeds the "pull" Bellman-Ford directly on both sides of the compare.
-    auto G = vertex_utils::rmat_symmetric_graph((long)n_req, (long)(avg_degree * n_req));
-    const size_t n = G.size();   // RMAT rounds n_req up to a power of two
-    auto WG = vertex_utils::add_weights<long double>(G, 1.0L, 20.0L);
-    G = decltype(G){};   // fully consumed; drop before flattening/writing WG
-
-    // Exclusive degree prefix sum (chunk_csr's `degree_scan`, length n+1). n is
-    // small enough (this algorithm's own per-vertex I/O pattern forces that)
-    // that a sequential prefix sum is negligible next to everything else here.
-    parlay::sequence<size_t> degree_scan(n + 1);
-    degree_scan[0] = 0;
-    for (size_t v = 0; v < n; v++)
-        degree_scan[v + 1] = degree_scan[v] + WG[v].size();
-    const size_t m = degree_scan[n];
-
-    // Look up edge i's owning vertex via binary search on degree_scan (tiny --
-    // one entry per vertex, easily cache-resident) instead of pre-flattening
-    // WG into a second full-size buffer: for a graph this large, WG plus a
-    // flattened copy can approach the box's DRAM and stall on allocation/page
-    // faults. This reads out CSR row order identically to the old
-    // flatten-then-index path (flat[i] == WG[v][i - degree_scan[v]] for
-    // degree_scan[v] <= i < degree_scan[v+1]), just without ever materializing
-    // `flat`; the in-memory cross-check below still verifies it element-wise.
-    chunk_csr graph;
-    graph.edges = ChunkSequenceOps::tabulate<weighted_edge>(
-        m, edge_prefix, [&](size_t i) {
-            size_t v = std::upper_bound(degree_scan.begin(), degree_scan.end(), i)
-                       - degree_scan.begin() - 1;
-            const auto& p = WG[v][i - degree_scan[v]];
-            return weighted_edge{p.first, p.second};
-        });
-    graph.degree_scan = std::move(degree_scan);
+    // Symmetric (undirected) weighted graph built straight onto the drives --
+    // also its own transpose, so it feeds the "pull" Bellman-Ford directly on
+    // both sides of the compare.  Nothing graph-sized is ever DRAM-resident
+    // here except degree_scan; see external_rmat.h.
+    chunk_csr graph = ExternalGraphUtils::external_rmat_symmetric_graph(
+        n_req, m_req, edge_prefix, /*minw=*/1.0L, /*maxw=*/20.0L);
+    const size_t m = graph.degree_scan[n];
 
     const double build_s = elapsed(t0);
     trace_mark(("build_end_" + label).c_str());
     std::cout << " done (" << n << " vertices, " << m << " edges, "
               << std::fixed << std::setprecision(4) << build_s << "s)\n";
+
+    // The baseline's own copy of the same graph, in DRAM.  Built independently
+    // rather than shared with the out-of-core path: both generators are
+    // deterministic functions of (n_req, m_req), so building twice turns the
+    // distance cross-check below into an end-to-end check that they agree.
+    // Not counted in build_s, which times the out-of-core build only.
+    vertex_utils::weighted_graph<long double> WG;
+    if (inmem_ok) {
+        std::cout << "Generating the in-memory baseline's copy..." << std::flush;
+        auto G = vertex_utils::rmat_symmetric_graph((long)n_req, (long)m_req);
+        WG = vertex_utils::add_weights<long double>(G, 1.0L, 20.0L);
+        G = decltype(G){};   // fully consumed; drop before the baseline runs
+        std::cout << " done\n";
+    }
 
     const size_t start = 0;
 
@@ -264,8 +324,9 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
         std::cout << "*** out-of-core Bellman-Ford (fast) did not converge within "
                   << n << " rounds ***\n";
 
-    // Skipped past inmem_max_n vertices: a sweep's smaller points all run
-    // this binary WITHOUT PLAID_TRACE (io_trace.py traces only the largest by
+    // `inmem_ok` was decided at the top of run_case (before the build) and WG
+    // was only populated if it held: a sweep's smaller points all run this
+    // binary WITHOUT PLAID_TRACE (io_trace.py traces only the largest by
     // default), so a sweep whose smaller points still exceed a couple billion
     // vertices would otherwise pay full DRAM cost (RMAT generation +
     // bellman_ford<long double>, i.e. O(n) `long double` distance arrays with
@@ -275,16 +336,11 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
     // DRAM to still want the comparison at larger n (the baseline runs
     // regardless of PLAID_TRACE -- it appends a CPU-only, disk-idle tail to
     // a trace capture after fast_op_end, which is expected).
-    size_t inmem_max_n = 1ull << 30;
-    if (const char* e = getenv("BELLMAN_FORD_INMEM_MAX_N"))
-        inmem_max_n = std::stoull(e);
-    const bool inmem_ok = n <= inmem_max_n;
-
     std::optional<parlay::sequence<long double>> d_mem_opt;
     double inmem_op_s = 0;
     if (!inmem_ok) {
         std::cout << "Running in-memory bellman_ford: skipped (n " << n
-                  << " exceeds inmem_max_n " << inmem_max_n << ")\n";
+                  << ", inmem_max_n " << inmem_max_n << ")\n";
     } else {
         std::cout << "Running in-memory bellman_ford..." << std::flush;
         t0 = Clock::now();
