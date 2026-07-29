@@ -64,6 +64,7 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/fftExample \
                     $(BINDIR)/fft_transposeExample \
                     $(BINDIR)/bellman_fordExample \
+                    $(BINDIR)/bfsExample \
 
 # Peter's external sample sort (the second contestant in the
 # external_samplesort_vs_peter comparison) ships its own configs.h /
@@ -314,6 +315,15 @@ $(BINDIR)/chunk_cutExample: ChunkSequence/examples/external/chunk_cut.cpp $(UTIL
 $(BINDIR)/bellman_fordExample: ChunkSequence/examples/external/bellman_ford.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(CXX) $(CXXFLAGS) -Ideps/parlaylib-examples $(INCLUDES) $^ -o $@ \
 	    $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
+
+# bfs: out-of-core BFS_simple vs the in-memory reference (examples/in_memory/
+# graph/), same examples/external/ location/recipe as bellman_ford. Doesn't
+# need bellman_ford's extra -Ideps/parlaylib-examples: examples/in_memory/
+# graph/bfs.h's BFS() has no unprefixed helper/*-style include (unlike
+# bellman_ford.h's `#include "helper/ligra_light.h"`), so the plain include
+# path suffices.
+$(BINDIR)/bfsExample: ChunkSequence/examples/external/bfs.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(LINK)
 
 # external_samplesort_vs_peter: our sample sort vs Peter's, head-to-head.  The
 # driver TU uses the main includes; Peter's sort is linked in via peter_shim.o,

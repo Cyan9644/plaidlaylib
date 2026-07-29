@@ -106,6 +106,12 @@ def _bellman_ford_dense_n(size_bytes):
     m = max(edge_epc, (size_bytes // 32) // edge_epc * edge_epc)
     return int((2 * m) ** 0.5)
 
+
+# bfs.cpp's dense case is the same avg_degree = n/2 shape as bellman_ford's
+# (same chunk_csr / weighted_edge build via external_rmat_symmetric_graph),
+# so the same size <-> n inversion applies verbatim.
+_bfs_dense_n = _bellman_ford_dense_n
+
 # ── examples registry ───────────────────────────────────────────────────────
 # Each example is a dual-purpose binary (bin/<name>Example) that prints a
 # `CSV,<cols...>` line the sweep greps.  `cols` names those fields in order;
@@ -506,6 +512,56 @@ EXAMPLES = [
      "xlabel": "input size (edge bytes)",
      "title": "Bellman-Ford (dense, avg_degree=n/2): out-of-core vs in-mem",
      "data_globs": ["bf_edges_dense*"]},
+
+    # bfsExample: same three-case (sparse/balanced/dense) RMAT sweep as
+    # bellman_ford, same extra_argv placeholder/case-filter reasoning (see
+    # above) -- but only TWO series, not three: BFS_simple has no "fast"
+    # streaming counterpart (external_bfs.h), just the one per-vertex-pread
+    # implementation, so there's no extra_series entry here.
+    #
+    # NOT in the make bench-examples/-mid/-full target lists (opt-in via
+    # --example only, same precedent as bellman_ford_*): BFS_simple's
+    # per-vertex reader-setup cost is documented as dramatically slower than
+    # the in-memory baseline even at small n, so it doesn't belong in the
+    # default dev-box sweep.
+    {"name": "bfs_sparse", "target": "bin/bfsExample",
+     "cols": ["case", "n", "m", "build_s", "op_s", "inmem_op_s", "levels",
+              "reachable", "throughput_gb_s"],
+     "time_col": "op_s", "inmem_col": "inmem_op_s",
+     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core (BFS_simple)"),
+     "extra_argv": ["8", "sparse"],
+     "elem_bytes": 2 * 32, "input_seqs": 1,   # avg_degree(2) * sizeof(weighted_edge)
+     "xlabel": "input size (edge bytes)",
+     "title": "BFS (sparse, avg_degree=2): out-of-core (BFS_simple) vs in-mem",
+     "data_globs": ["bfs_edges_sparse*", "bfs_frontier*"]},
+
+    {"name": "bfs_balanced", "target": "bin/bfsExample",
+     "cols": ["case", "n", "m", "build_s", "op_s", "inmem_op_s", "levels",
+              "reachable", "throughput_gb_s"],
+     "time_col": "op_s", "inmem_col": "inmem_op_s",
+     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core (BFS_simple)"),
+     "extra_argv": ["8", "balanced"],
+     "elem_bytes": 8 * 32, "input_seqs": 1,   # avg_degree(8) * sizeof(weighted_edge)
+     "xlabel": "input size (edge bytes)",
+     "title": "BFS (balanced, avg_degree=8): out-of-core (BFS_simple) vs in-mem",
+     "data_globs": ["bfs_edges_balanced*", "bfs_frontier*"]},
+
+    # dense: avg_degree = n/2 (bfs.cpp), so edge bytes ~= 16*n^2, quadratic in
+    # n -- see _bfs_dense_n above (an alias of bellman_ford's own inverse,
+    # since both build the same chunk_csr shape). elem_bytes/input_seqs below
+    # are unused whenever n_from_size is present (see size_to_n) -- kept only
+    # as documentation of the on-disk element size.
+    {"name": "bfs_dense", "target": "bin/bfsExample",
+     "cols": ["case", "n", "m", "build_s", "op_s", "inmem_op_s", "levels",
+              "reachable", "throughput_gb_s"],
+     "time_col": "op_s", "inmem_col": "inmem_op_s",
+     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core (BFS_simple)"),
+     "extra_argv": ["8", "dense"],
+     "n_from_size": _bfs_dense_n,
+     "elem_bytes": 32, "input_seqs": 1,
+     "xlabel": "input size (edge bytes)",
+     "title": "BFS (dense, avg_degree=n/2): out-of-core (BFS_simple) vs in-mem",
+     "data_globs": ["bfs_edges_dense*", "bfs_frontier*"]},
 
 ]
 

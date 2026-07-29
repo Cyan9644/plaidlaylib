@@ -186,6 +186,36 @@ static bool test_halo1(const std::string& name, size_t n,
     return pass;
 }
 
+// ── Test 4: elementwise overload -- variable-length output per element ───────
+// f(v) repeats v (v % 3) times, so output length varies 0..2 per input element
+// (both the zero-output and multi-output carry cases are exercised).  n is
+// chosen to straddle a chunk boundary.  Differential against an in-memory loop.
+static bool test_elementwise(size_t n, const std::function<uint64_t(size_t)>& gen) {
+    std::cout << "  elementwise_repeat_mod3  (n=" << n << ")\n" << std::flush;
+    const std::string in_prefix = "flatmap_in";
+    const std::string out_prefix = "flatmap_out";
+
+    chunk_seq input = ChunkSequenceOps::tabulate<uint64_t>(n, in_prefix, gen);
+    chunk_seq matches = ChunkSequenceOps::ChunkFlatMap<uint64_t, uint64_t>(
+        input, out_prefix, [](uint64_t v) {
+            parlay::sequence<uint64_t> out;
+            for (uint64_t k = 0; k < v % 3; k++) out.push_back(v);
+            return out;
+        });
+
+    std::vector<uint64_t> expected;
+    for (size_t i = 0; i < n; i++) {
+        uint64_t v = gen(i);
+        for (uint64_t k = 0; k < v % 3; k++) expected.push_back(v);
+    }
+
+    bool pass = verify("elementwise_repeat_mod3", matches, expected);
+
+    cleanup_prefix(in_prefix);
+    cleanup_prefix(out_prefix);
+    return pass;
+}
+
 int main(int argc, char* argv[]) {
     ParseGlobalArguments(argc, argv);
     bool all_pass = true;
@@ -228,6 +258,10 @@ int main(int argc, char* argv[]) {
         };
         all_pass &= test_halo1("halo1_seam", n, gen);
     }
+
+    // 4. Elementwise overload: variable-length (0..2) output per input element,
+    //    straddling a chunk boundary.
+    all_pass &= test_elementwise(2 * EPCT + 5, noise);
 
     std::cout << (all_pass ? "ALL PASS" : "SOME FAILED") << "\n";
     return all_pass ? 0 : 1;

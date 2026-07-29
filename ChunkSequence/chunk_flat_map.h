@@ -55,6 +55,37 @@ chunk_seq ChunkFlatMap(const chunk_seq& seq, const std::string& result_prefix,
     return DensePackStream<T, R>(seq, result_prefix, halo, f);
 }
 
+/**
+ * Elementwise sibling of the chunk-buffer ChunkFlatMap above: the literal
+ * out-of-core analogue of parlay::flatten(parlay::map(seq, f)) -- the
+ * stored-input counterpart to ChunkFlatTabulate (which generates its input
+ * from an index range instead of reading a chunk_seq).
+ *
+ * Streams `seq` chunk-by-chunk (via DensePackStream, no halo -- an
+ * elementwise mapping never needs cross-chunk lookahead) and calls f on each
+ * element in logical order, concatenating every element's (possibly
+ * variable-length, possibly empty) result into that chunk's output run before
+ * dense-packing.
+ *
+ * @tparam T  Input element type (must match the chunk_seq).
+ * @tparam R  Output element type (sizeof(R) <= 8, the DensePack on-disk limit).
+ * @tparam F  Callable: T -> parlay::sequence<R>
+ */
+template<typename T, typename R, typename F>
+chunk_seq ChunkFlatMap(const chunk_seq& seq, const std::string& result_prefix, F f) {
+    if (seq.chunks.empty()) return {};
+    return DensePackStream<T, R>(seq, result_prefix, /*halo=*/0,
+        [f](const T* buf, size_t n, uint64_t /*gpos*/,
+            const T* /*halo*/, size_t /*halo_n*/) {
+            parlay::sequence<R> out;
+            for (size_t j = 0; j < n; j++) {
+                auto r = f(buf[j]);
+                for (auto&& x : r) out.push_back(std::move(x));
+            }
+            return out;
+        });
+}
+
 } // namespace ChunkSequenceOps
 
 #endif // CHUNK_FLAT_MAP_H

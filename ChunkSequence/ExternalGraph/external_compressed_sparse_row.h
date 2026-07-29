@@ -67,7 +67,7 @@ struct chunk_csr{
 
 
     //this method should accept a vertex ID n and return a parlay sequence of the (destination, weight) edges of n
-    parlay::sequence<weighted_edge> get_adjacent(size_t n){
+    parlay::sequence<weighted_edge> get_adjacent(size_t n) const {
 
         return ChunkSequenceOps::materialize<weighted_edge>(ChunkSequenceOps::sequential_cut_no_compression<weighted_edge>(this->edges, this->degree_scan[n], this->degree_scan[n+1]));
     }
