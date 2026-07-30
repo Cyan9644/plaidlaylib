@@ -46,7 +46,9 @@ TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/dc3Test \
                  $(BINDIR)/bigintMulTest \
                  $(BINDIR)/samplesortStripedTest \
-                 $(BINDIR)/externalRmatTest
+                 $(BINDIR)/externalRmatTest \
+                 $(BINDIR)/indexedTest \
+                 $(BINDIR)/fftIndexedTest
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
@@ -65,6 +67,7 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/fft_transposeExample \
                     $(BINDIR)/bellman_fordExample \
                     $(BINDIR)/bfsExample \
+                    $(BINDIR)/transposeExample \
 
 # Peter's external sample sort (the second contestant in the
 # external_samplesort_vs_peter comparison) ships its own configs.h /
@@ -264,6 +267,19 @@ $(BINDIR)/samplesortStripedTest: ChunkSequence/tests/samplesort_striped_test.cpp
 # is the LOCAL examples/in_memory/graph/graph_utils/graph_utils.h, not an
 # upstream header, so no deps/parlaylib-examples prerequisite is needed.
 $(BINDIR)/externalRmatTest: ChunkSequence/tests/external_rmat_test.cpp $(UTIL_OBJS)
+	$(LINK)
+
+# indexedTest: the direct-indexing view (chunk_indexed.h) + the transpose example
+# header it drives (examples/chunk_transpose.h).  Header-only algorithms, no
+# upstream baseline, so no deps/parlaylib-examples prerequisite.
+$(BINDIR)/indexedTest: ChunkSequence/tests/indexed_test.cpp $(UTIL_OBJS)
+	$(LINK)
+
+# fftIndexedTest: compares the FFT's hand-rolled transpose_pass against the same
+# transpose expressed on IndexedChunkSeq (transpose_rect), inside the four-step
+# pipeline.  Includes chunk_fft.h (self-contained; the upstream FFT oracle is NOT
+# used here — the in-mem four-step is the reference), so no deps prerequisite.
+$(BINDIR)/fftIndexedTest: ChunkSequence/tests/fft_indexed_transpose_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
 # ── examples ───────────────────────────────────────────────────────────────────

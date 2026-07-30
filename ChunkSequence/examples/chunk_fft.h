@@ -609,10 +609,18 @@ inline chunk_seq transpose_pass(const chunk_seq& s1, const Dims& d,
     // Output layout + per-drive write fds; precompute position -> (drive, offset).
     auto [out, out_filenames] = alloc_layout(N, prefix);
     const size_t num_drives = out_filenames.size();
-    std::vector<int> wr_fds(num_drives);
+    std::vector<int> wr_fds(num_drives, -1);
     std::map<std::string, int> out_fidx;
+    for (size_t dd = 0; dd < num_drives; dd++) out_fidx[out_filenames[dd]] = (int)dd;
+    // alloc_layout only creates a file for a drive that received >=1 chunk (it skips
+    // file_size==0 drives), so open write fds for exactly those -- a drive with no
+    // output chunk has no file (opening it O_WRONLY would ENOENT) and is never
+    // addressed by out_locate.  Mirrors the read-side dedup above.  Matters when
+    // num_chunks < num_drives (small N).
+    std::vector<char> used(num_drives, 0);
+    for (const chunk& c : out.chunks) used[out_fidx.at(c.filename)] = 1;
     for (size_t dd = 0; dd < num_drives; dd++) {
-        out_fidx[out_filenames[dd]] = (int)dd;
+        if (!used[dd]) continue;
         wr_fds[dd] = open(out_filenames[dd].c_str(), O_DIRECT | O_WRONLY);
         SYSCALL(wr_fds[dd]);
     }

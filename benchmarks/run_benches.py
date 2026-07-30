@@ -222,6 +222,19 @@ EXAMPLES = [
      "xlabel": "input size",
      "title": "FFT: out-of-core transpose (streaming 6N) vs in-mem four-step",
      "data_globs": ["fft_in*", "fft_s1*", "fft_t*", "fft_t2*"]},
+    # transposeExample: out-of-core M x M matrix transpose written IMPERATIVELY on
+    # the direct-indexing view (IndexedChunkSeq) -- out[c*M+r]=in[r*M+c] as a plain
+    # get/set loop, no bespoke transpose primitive.  Plots the transpose pass
+    # (transpose_s) vs the in-mem parlay transpose (inmem_s); the naive per-element
+    # operator[] baseline is printed by the binary but only for small n.  Kept OUT
+    # of the aggregate list; run via `--example transpose`.  8-byte elements.
+    {"name": "transpose", "target": "bin/transposeExample",
+     "cols": ["n", "build_s", "transpose_s", "inmem_s", "count", "throughput_gb_s"],
+     "time_col": "transpose_s", "inmem_col": "inmem_s",
+     "elem_bytes": 8, "input_seqs": 1,
+     "xlabel": "input size",
+     "title": "Matrix transpose: direct-indexing view vs in-mem parlay",
+     "data_globs": ["transpose_in*", "transpose_out*", "transpose_naive*"]},
     # kth_smallestExample sweeps n with k at the median (n/2); the plotted time
     # is the selection pass only (input build excluded).  Its recursion leaves
     # id_/flags_/next_ intermediates in addition to the kth_in input.

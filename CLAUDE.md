@@ -75,6 +75,7 @@ ChunkSequence/
   chunk_histogram_by_index.h  ChunkHistogramByIndex / ChunkHistogramByKey (bucket counts on RemoveWorker)
   chunk_find_if.h             ChunkFindIf     (fold on RemoveWorker)
   chunk_partition.h           ChunkPartition  (single-reader/writer k-way split; per-worker scatter)
+  chunk_indexed.h             IndexedChunkSeq  (direct-indexing get(i)/set(i) view; per-worker io_uring ring + block cache that coalesces element accesses into whole-block reads/writes; alloc_indexed)
   n_reader.h                  NReader / NRemoveWorker (co-indexed lockstep read of N parallel chunk_seqs)
   helper/heaptree.h           vendored parlay heap_tree rank search (cache-efficient pivot lookup for sampling)
   chunk_delayed.h             delayed (fused) recursive-node layer: delay/tabulate/map/scan/zip + reduce/force/filter
@@ -85,13 +86,15 @@ ChunkSequence/
     external_compressed_sparse_row.h  chunk_csr (degree_scan + edges; get_adjacent / delay_get_adjacent / segmented_reduce_over_edges / from_file)
   tests/                      correctness tests (iota, map, reduce, filter, scan, combined, delayed,
                               flatTabulate, flatMap, findIf, histogram, kmp, rabinKarp, scalar,
-                              bigintAdd, convexHull, partition, segmentedReduce, dc3, bigintMul)
+                              bigintAdd, convexHull, partition, segmentedReduce, dc3, bigintMul, indexed,
+                              fftIndexedTranspose)
   examples/                   demonstration programs (→ primesExample …); dual-purpose
     primes.cpp                out-of-core prime sieve on ChunkFlatTabulate
     chunk_kmp.h  kmp.cpp      out-of-core KMP search (ChunkKmp, a producer on DensePack)
     chunk_rabin_karp.h  rabin_karp.cpp  out-of-core Rabin-Karp search (same shape as KMP)
     chunk_convex_hull.h  convex_hull.cpp  out-of-core upper convex hull (UpperHull, recursive quickhull on ChunkReduce+ChunkPartition)
     chunk_fft.h  fft.cpp  fft_transpose.cpp  out-of-core 1-D four-step FFT (transpose-free vs on-disk transpose)
+    chunk_transpose.h  transpose.cpp  out-of-core M×M matrix transpose written imperatively on IndexedChunkSeq (cache-blocked get/set loop)
     chunk_bigint_add.h  bigint_add.cpp  bigint_add_eager.cpp  out-of-core big-integer add (delayed-fused; eager variant)
     chunk_bigint_mul.h  bigint_mul.cpp  out-of-core big-integer Karatsuba multiply
     external/                 sort/graph/suffix-array family (external_samplesort, direct_samplesort.h,
@@ -246,6 +249,21 @@ to `warnings.txt` in the results dir, next to the fstrim outcome note).
   gather/scatter columns); `fft_transpose` instead does an explicit on-disk matrix
   transpose between two contiguous passes.  Baseline: the same four-step FFT in
   DRAM.  Emits `CSV,N,build_s,stage1_s,{stage2_s|transpose_s,stage2t_s},total_s,inmem_s,count,gb_s`.
+- `transpose.cpp` → `bin/transposeExample [n]`: out-of-core M×M matrix transpose
+  (M ≈ √n on the block grid) written **imperatively** on `IndexedChunkSeq`
+  (`chunk_indexed.h`) — a cache-blocked nested `get`/`set` loop
+  (`out[c*M+r]=in[r*M+c]`, `ChunkTranspose::transpose` in `chunk_transpose.h`,
+  tested by `indexedTest`) rather than a bespoke transpose primitive or the FFT's
+  hand-rolled band+`RandomRing` `transpose_pass`.  The tiling makes the block
+  cache coalesce both sides (every O_DIRECT block read/written once), so it beats
+  the naive per-element `chunk_seq::operator[]` transpose by ~60× while staying a
+  plain index-based loop.  The rectangular `transpose_rect` is also cross-validated
+  against the FFT's hand-rolled `transpose_pass` inside the four-step pipeline by
+  `fftIndexedTest` (bit-identical transposes ⇒ identical spectra, both matching the
+  in-mem four-step exactly).  Baseline: in-mem parlay transpose (cross-checked
+  element-wise); the naive `operator[]` path is also timed for small n (human
+  output only).  Emits `CSV,n,build_s,transpose_s,inmem_s,count,gb_s`; the sweep
+  (`--example transpose`) plots `transpose_s`.  Not in the aggregate examples list.
 - `bigint_add.cpp` (+ `bigint_add_eager.cpp`) / `bigint_mul.cpp` →
   `bin/bigint_addExample` / `bin/bigint_add_eagerExample` / `bin/bigint_mulExample`:
   out-of-core n-limb big-integer add (`chunk_bigint_add.h`) as a fused delayed
@@ -345,6 +363,7 @@ Primitive mapping:
 | `ChunkFlatMap`      | `DensePackStream` (`flatten∘map`, `f(data,n,start,halo,halo_n)`; optional forward **halo** for boundary-crossing maps; `chunk_flat_map.h`) |
 | `ChunkHistogramByIndex` / `ChunkHistogramByKey` | `RemoveWorker` (per-worker bucket-count fold; `chunk_histogram_by_index.h`) |
 | `ChunkPartition`    | own single-reader + single-writer pass (`chunk_partition.h`); k-way split with a `PARTITION_DROP` sentinel |
+| `IndexedChunkSeq`   | own per-worker `Session` (private io_uring ring + LRU block cache) over a materialized index-ordered `chunk_seq` (`chunk_indexed.h`); direct `get(i)`/`set(i,v)` for imperative index-based code (matrix transpose, windowed steps) — the cache line is one O_DIRECT block, so it coalesces accesses sharing a block; write-back is whole-block, so writes must be **block-disjoint across workers** (same discipline as partition) |
 | `NReader` / `NRemoveWorker` | own N-way co-indexed reader (`n_reader.h`); lockstep read of N parallel `chunk_seq`s (e.g. values + bucket-ids for count-sort) |
 | `tabulate` / `iota` | own writer pipeline (`chunk_seq.h`) — no reader stage to unify |
 
