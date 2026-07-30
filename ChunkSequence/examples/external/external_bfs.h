@@ -82,9 +82,20 @@ auto BFS_simple(V start, const chunk_csr& G) {
   return frontiers;
 }
 
-//port to streaming of external_bfs
+// external_bfs: the streaming out-of-core BFS. Same level-by-level frontier
+// expansion as BFS_simple, but each round does ONE streaming pass over ALL
+// edges (a boolean segmented-reduce keyed by chunk_csr's degree_scan bounds)
+// instead of a per-vertex delay_get_adjacent + sequential_materialize read.
+// That alone removes BFS_simple's small/duplicate reads -- but the streaming
+// pass itself used to rebuild a fresh reader (io_uring rings, reader
+// threads, fd opens) EVERY round, via segmented_reduce_over_edges's eager
+// RemoveWorker. G.edges/G.degree_scan never change across rounds -- only
+// `dist`'s captured values do -- so, exactly like external_bellman_ford_fast
+// (external_bellman_ford.h) does for the same reason, build ONE
+// PersistentReadContext before the loop and reuse it for every round's
+// delayed::segmented_reduce call instead.
 template <typename V>
-auto external_bfs(V start, chunk_csr& G) {
+auto external_bfs(V start, chunk_csr& G, size_t* rounds_out = nullptr) {
 
   size_t n = G.degree_scan.size() - 1;
 
@@ -97,7 +108,13 @@ auto external_bfs(V start, chunk_csr& G) {
 
     //the current frontier is just the first vertex
     //spinning up a whole tabulate is wasteful here
-  chunk_seq frontier = ChunkSequenceOps::tabulate<size_t>(1, "bfs_frontier0", [&](short i){
+  // NOTE: "bfs_frontier_fast" (not BFS_simple's "bfs_frontier") -- the two
+  // implementations run back-to-back in the same process in bfs.cpp, and
+  // sharing a prefix would let this loop's writes clobber BFS_simple's
+  // still-live frontier chunk_seqs out from under it. Still starts with
+  // "bfs_frontier", so the existing "bfs_frontier*" cleanup globs
+  // (run_benches.py's data_globs, scripts/clean_bfs.sh) still catch it.
+  chunk_seq frontier = ChunkSequenceOps::tabulate<size_t>(1, "bfs_frontier_fast0", [&](short i){
     return start;
   });
   parlay::sequence<chunk_seq> frontiers;
@@ -108,6 +125,16 @@ auto external_bfs(V start, chunk_csr& G) {
     bool operator()(bool a, bool b) const { return a || b; }
   };
 
+  // `dist` is captured BY REFERENCE, so per_edge itself needs to be built
+  // only ONCE: reassigning `cur_round` below on every iteration is visible
+  // through the reference without rebuilding the node (same reasoning as
+  // external_bellman_ford_fast's `per_edge` -- see its comment).
+  size_t cur_round = 0;
+  auto per_edge = ChunkSequenceOps::delayed::map(
+      ChunkSequenceOps::delayed::delay<weighted_edge>(G.edges),
+      [&](weighted_edge e) { return dist[e.connecting_vertex] == cur_round; });
+  ChunkSequenceOps::delayed::PersistentReadContext<decltype(per_edge)> ctx(per_edge);
+
   while (!frontier.chunks.empty()){
     //add the current frontier to the frontiers list
     frontiers.push_back(frontier);
@@ -115,11 +142,12 @@ auto external_bfs(V start, chunk_csr& G) {
     // one streaming pass over ALL edges: for each vertex v, OR over its
     // incident edges whether the neighbor is exactly at `round` (i.e. in the
     // frontier just pushed above) -- replaces BFS_simple's per-vertex
-    // delay_get_adjacent + sequential_materialize reads.
-    size_t cur_round = round;
-    parlay::sequence<bool> reached = G.template segmented_reduce_over_edges<bool>(
-        [&](weighted_edge e) { return dist[e.connecting_vertex] == cur_round; },
-        OrMonoid{});
+    // delay_get_adjacent + sequential_materialize reads, and reuses `ctx`'s
+    // already-running io_uring rings/reader threads instead of paying setup
+    // cost again this round.
+    cur_round = round;
+    parlay::sequence<bool> reached = ChunkSequenceOps::delayed::segmented_reduce(
+        per_edge, G.degree_scan, OrMonoid{}, ctx);
 
     ++round;
     parlay::sequence<bool> newly_reached = parlay::tabulate(n, [&](size_t v) {
@@ -128,10 +156,11 @@ auto external_bfs(V start, chunk_csr& G) {
     });
     parlay::sequence<size_t> next_ids = parlay::pack_index<size_t>(newly_reached);
 
-    frontier = ChunkSequenceOps::tabulate<size_t>(next_ids.size(), "bfs_frontier" + std::to_string(round),
+    frontier = ChunkSequenceOps::tabulate<size_t>(next_ids.size(), "bfs_frontier_fast" + std::to_string(round),
         [&](size_t i){ return next_ids[i]; });
   }
 
+  if (rounds_out) *rounds_out = round;
   return frontiers;
 }
 

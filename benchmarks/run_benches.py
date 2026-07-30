@@ -165,6 +165,24 @@ EXAMPLES = [
      "xlabel": "input size",
      "title": "Upper convex hull: out-of-core (quickhull) vs in-mem parlaylib",
      "data_globs": ["ch_in*", "ch_scratch*"]},
+    # convex_hull_lazy_filterExample: a SEPARATE, opt-in benchmark (deliberately
+    # NOT in the Makefile's bench-examples rules, same convention as
+    # bigint_add_eager) that adds a third line -- the same hull computed with
+    # UpperHullLazyFilter (ChunkSequence/examples/chunk_convex_hull_lazy_filter.h,
+    # every ChunkPartition call replaced by delayed::lazy_filter +
+    # materialize_wide) -- alongside the existing ChunkPartition-based hull and
+    # the in-mem baseline. Run it explicitly:
+    # `run_benches.py --example convex_hull_lazy_filter`.
+    {"name": "convex_hull_lazy_filter", "target": "bin/convex_hull_lazy_filterExample",
+     "cols": ["n", "build_s", "hull_s", "lazyfilter_hull_s", "inmem_hull_s",
+              "count", "throughput_gb_s"],
+     "time_col": "hull_s", "inmem_col": "inmem_hull_s",
+     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core (ChunkPartition)"),
+     "extra_series": [("lazyfilter_hull_s", "out-of-core (delayed lazy_filter)", "^-")],
+     "elem_bytes": 32, "input_seqs": 1,
+     "xlabel": "input size",
+     "title": "Upper convex hull: ChunkPartition vs delayed lazy_filter vs in-mem parlaylib",
+     "data_globs": ["ch_in*", "ch_scratch*", "ch_lazy*"]},
     # suffix_arrayExample sweeps n; the plotted time is the construction (text
     # build excluded).  Prefix-doubling does ~2 external sorts per round over
     # ~log2(n) rounds, so its I/O (and peak disk residency) is many times the
@@ -514,10 +532,11 @@ EXAMPLES = [
      "data_globs": ["bf_edges_dense*"]},
 
     # bfsExample: same three-case (sparse/balanced/dense) RMAT sweep as
-    # bellman_ford, same extra_argv placeholder/case-filter reasoning (see
-    # above) -- but only TWO series, not three: BFS_simple has no "fast"
-    # streaming counterpart (external_bfs.h), just the one per-vertex-pread
-    # implementation, so there's no extra_series entry here.
+    # bellman_ford, same extra_argv placeholder/case-filter reasoning and same
+    # THREE series (in-mem, per-vertex, fast streaming): external_bfs.h's
+    # external_bfs is the streaming counterpart to BFS_simple's per-vertex
+    # pread implementation, same slow-vs-fast split as
+    # external_bellman_ford/external_bellman_ford_fast.
     #
     # NOT in the make bench-examples/-mid/-full target lists (opt-in via
     # --example only, same precedent as bellman_ford_*): BFS_simple's
@@ -526,24 +545,28 @@ EXAMPLES = [
     # default dev-box sweep.
     {"name": "bfs_sparse", "target": "bin/bfsExample",
      "cols": ["case", "n", "m", "build_s", "op_s", "inmem_op_s", "levels",
-              "reachable", "throughput_gb_s"],
+              "reachable", "throughput_gb_s", "fast_op_s", "fast_levels",
+              "fast_reachable", "fast_throughput_gb_s"],
      "time_col": "op_s", "inmem_col": "inmem_op_s",
-     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core (BFS_simple)"),
+     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core, per-vertex (BFS_simple)"),
+     "extra_series": [("fast_op_s", "out-of-core, streaming (fast)", "^-")],
      "extra_argv": ["8", "sparse"],
      "elem_bytes": 2 * 32, "input_seqs": 1,   # avg_degree(2) * sizeof(weighted_edge)
      "xlabel": "input size (edge bytes)",
-     "title": "BFS (sparse, avg_degree=2): out-of-core (BFS_simple) vs in-mem",
+     "title": "BFS (sparse, avg_degree=2): out-of-core vs in-mem",
      "data_globs": ["bfs_edges_sparse*", "bfs_frontier*"]},
 
     {"name": "bfs_balanced", "target": "bin/bfsExample",
      "cols": ["case", "n", "m", "build_s", "op_s", "inmem_op_s", "levels",
-              "reachable", "throughput_gb_s"],
+              "reachable", "throughput_gb_s", "fast_op_s", "fast_levels",
+              "fast_reachable", "fast_throughput_gb_s"],
      "time_col": "op_s", "inmem_col": "inmem_op_s",
-     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core (BFS_simple)"),
+     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core, per-vertex (BFS_simple)"),
+     "extra_series": [("fast_op_s", "out-of-core, streaming (fast)", "^-")],
      "extra_argv": ["8", "balanced"],
      "elem_bytes": 8 * 32, "input_seqs": 1,   # avg_degree(8) * sizeof(weighted_edge)
      "xlabel": "input size (edge bytes)",
-     "title": "BFS (balanced, avg_degree=8): out-of-core (BFS_simple) vs in-mem",
+     "title": "BFS (balanced, avg_degree=8): out-of-core vs in-mem",
      "data_globs": ["bfs_edges_balanced*", "bfs_frontier*"]},
 
     # dense: avg_degree = n/2 (bfs.cpp), so edge bytes ~= 16*n^2, quadratic in
@@ -553,14 +576,16 @@ EXAMPLES = [
     # as documentation of the on-disk element size.
     {"name": "bfs_dense", "target": "bin/bfsExample",
      "cols": ["case", "n", "m", "build_s", "op_s", "inmem_op_s", "levels",
-              "reachable", "throughput_gb_s"],
+              "reachable", "throughput_gb_s", "fast_op_s", "fast_levels",
+              "fast_reachable", "fast_throughput_gb_s"],
      "time_col": "op_s", "inmem_col": "inmem_op_s",
-     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core (BFS_simple)"),
+     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core, per-vertex (BFS_simple)"),
+     "extra_series": [("fast_op_s", "out-of-core, streaming (fast)", "^-")],
      "extra_argv": ["8", "dense"],
      "n_from_size": _bfs_dense_n,
      "elem_bytes": 32, "input_seqs": 1,
      "xlabel": "input size (edge bytes)",
-     "title": "BFS (dense, avg_degree=n/2): out-of-core (BFS_simple) vs in-mem",
+     "title": "BFS (dense, avg_degree=n/2): out-of-core vs in-mem",
      "data_globs": ["bfs_edges_dense*", "bfs_frontier*"]},
 
 ]
@@ -802,8 +827,15 @@ def run_chunk_size(chunk_sizes, n, extra_args, clear_glob, clear_enabled):
 
 
 # ── examples sweep ──────────────────────────────────────────────────────────
-def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings):
+def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings,
+                n_values=None):
     """Sweep one example over input `sizes` (bytes); return parsed rows.
+
+    If `n_values` is given (a list of element counts), it takes precedence over
+    `sizes`: each n is passed to the binary exactly as given, with no
+    size_to_n/chunk-grid rounding — `input_bytes` (used only for the CSV column
+    and the plot x-axis) is then computed as the inverse, n*elem_bytes*input_seqs,
+    rather than driving n.
 
     Correctness is checked inside the binary: when the in-memory parlaylib
     baseline runs (sizes within its RAM budget) the binary cross-checks the
@@ -823,8 +855,10 @@ def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings):
     make(entry["target"])
     binary = os.path.join(BINDIR, os.path.basename(entry["target"]))
     rows = []
-    for size in sizes:
-        n = size_to_n(entry, size)
+    points = ([(n, n * entry["elem_bytes"] * entry["input_seqs"]) for n in n_values]
+             if n_values is not None else
+             [(size_to_n(entry, size), size) for size in sizes])
+    for n, size in points:
         print(f"\n=== example {entry['name']}: size={_bytes_fmt(size, None)} "
               f"(n={n}) ===", flush=True)
         fields, problem = run_binary(binary, [n] + entry.get("extra_argv", []) + extra_args,
@@ -1036,6 +1070,13 @@ def main():
                          "'256MiB 1GiB' or '2^28 2^30'); converted per example to its "
                          "element count (see size_to_n) — for an 8-byte-element example "
                          "'2^30' is the point that sorts 2^27 keys")
+    ap.add_argument("--example-n-values",
+                    default=os.environ.get("BENCH_EXAMPLE_N_VALUES", ""),
+                    help="examples sweep by element count (n) directly, bypassing "
+                         "--example-sizes/size_to_n entirely (space-separated, e.g. "
+                         "'2^32 2^33 2^34'); each n is passed to the binary exactly as "
+                         "given (no chunk-grid rounding). Takes precedence over "
+                         "--example-sizes when non-empty")
     ap.add_argument("--ssd-args", default=os.environ.get("BENCH_SSD_ARGS", ""),
                     help="extra global flags passed to each binary (e.g. '--num_ssd=4')")
     ap.add_argument("--fstrim-glob",
@@ -1068,6 +1109,8 @@ def main():
     chunk_sizes = [parse_bytes(x) for x in args.chunk_sizes.split()]
     chunk_n = parse_count(args.n)
     example_sizes = [parse_bytes(x) for x in args.example_sizes.split()]
+    example_n_values = ([parse_count(x) for x in args.example_n_values.split()]
+                        if args.example_n_values.strip() else None)
     fstrim_enabled = not args.no_fstrim
     clear_enabled = not args.no_clean
 
@@ -1099,7 +1142,8 @@ def main():
         for entry in examples_to_run:
             print(f"\n######## example: {entry['name']} ########")
             rows = run_example(entry, example_sizes, extra,
-                               args.fstrim_glob, clear_enabled, warnings)
+                               args.fstrim_glob, clear_enabled, warnings,
+                               n_values=example_n_values)
             write_csv(os.path.join(outdir, f"{entry['name']}_scale.csv"),
                       ["input_bytes"] + entry["cols"], rows)
             # The CSV is the result; the plot is a convenience.  A plotting

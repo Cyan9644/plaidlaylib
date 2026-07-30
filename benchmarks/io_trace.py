@@ -376,16 +376,19 @@ def write_trace_csv(path, ser, devices, t0):
 
 
 # (kind, edge) -> (color, short label). No magenta -- kept to a neutral,
-# print-appropriate set. build/op are the pair that appears together on one
-# trace; fast_op is a different algorithm's kind (never co-occurs with
-# build/op on the same trace) so its colors can be picked independently.
+# print-appropriate set. build/op/fast_op can all co-occur on one trace
+# (e.g. bellman_ford.cpp and bfs.cpp both emit op_* for their per-vertex
+# method and fast_op_* for their streaming method in the same run, whenever
+# the per-vertex method isn't gated off) -- fast_op is shared across whatever
+# example emits it, not tied to one algorithm, so its label must stay
+# generic.
 PHASE_STYLE = {
     ("build", "start"): ("blue", "Setup"),
     ("build", "end"): ("yellow", "Settling"),
     ("op", "start"): ("red", "Begin"),
     ("op", "end"): ("aqua", "End"),
-    ("fast_op", "start"): ("green", "EBF Start"),
-    ("fast_op", "end"): ("orange", "EBF End"),
+    ("fast_op", "start"): ("green", "Fast Start"),
+    ("fast_op", "end"): ("orange", "Fast End"),
 }
 
 # Fixed POINT offsets below the axis (not axes-fraction) for the triangle /

@@ -1,22 +1,25 @@
-// bfsExample — out-of-core BFS_simple vs the in-memory parlaylib reference,
-// swept over sparse/balanced/dense RMAT graphs at the same n.
+// bfsExample — out-of-core BFS (per-vertex and streaming) vs the in-memory
+// parlaylib reference, swept over sparse/balanced/dense RMAT graphs at the
+// same n.
 //
-// BFS_simple (external_bfs.h) is the out-of-core analogue of parlaylib's BFS
-// (examples/in_memory/graph/bfs.h, byte-identical to
-// deps/parlaylib-examples/BFS.h): expand the frontier one level at a time,
-// each round materializing every frontier vertex's adjacency and CAS-claiming
-// unvisited neighbors into the next frontier. Unlike external_bellman_ford
-// (which has a slow per-vertex method AND a fast streaming method), there is
-// only one out-of-core BFS implementation here -- BFS_simple relaxes a vertex
-// by calling chunk_csr::delay_get_adjacent + sequential_materialize (against a
-// per-worker SequentialReadContext) PER FRONTIER VERTEX PER ROUND, the same
-// "blocking pread per vertex, not buffered" cost profile external_bellman_ford's
-// slow method has (see external_bfs.h). That is expected to make it dramatically slower than the
-// in-memory baseline even at modest n; this benchmark exists to measure
-// exactly that gap, not to hide it -- and, because there is no faster
-// out-of-core alternative to fall back on, BFS_simple is never budget-gated
-// off the way external_bellman_ford's slow method is: gating away the only
-// out-of-core series would leave nothing to plot at larger n.
+// external_bfs.h has two out-of-core BFS implementations, the same
+// slow-vs-fast split bellman_ford.cpp exercises for Bellman-Ford on this same
+// chunk_csr substrate:
+//   - BFS_simple: the out-of-core analogue of parlaylib's BFS
+//     (examples/in_memory/graph/bfs.h, byte-identical to
+//     deps/parlaylib-examples/BFS.h). Each round it relaxes a vertex by
+//     calling chunk_csr::delay_get_adjacent + sequential_materialize (against
+//     a per-worker SequentialReadContext) PER FRONTIER VERTEX PER ROUND -- a
+//     blocking pread per vertex, not buffered, the same cost profile
+//     external_bellman_ford's slow method has.
+//   - external_bfs: a drop-in alternative that does the same level-by-level
+//     expansion with ONE streaming pass over all edges per round (a boolean
+//     delayed::segmented_reduce over a PersistentReadContext built once
+//     outside the round loop) instead of a per-vertex reader setup -- see
+//     external_bfs.h for why that's expected to be dramatically faster.
+// This benchmark runs both out-of-core methods and the in-memory algorithm
+// from the same start vertex on each of three graphs, and cross-checks the
+// resulting frontiers; it exits non-zero if any case mismatches.
 //
 // Graph construction IS out-of-core (external_rmat.h), exactly as in
 // bellman_ford.cpp: an RMAT edge is a pure function of its index, so the edge
@@ -25,40 +28,43 @@
 // pass. The graph is symmetric (undirected), so its own adjacency doubles as
 // its transpose, though BFS only ever walks it in one direction.
 //
-// BFS_simple ignores edge weights entirely (it only reads
+// Neither out-of-core method reads edge weights (only
 // weighted_edge::connecting_vertex), so unlike bellman_ford.cpp the in-memory
 // baseline needs no add_weights step: it builds directly with
 // graph_utils<size_t>::rmat_symmetric_graph(n_req, m_req), the plain
 // unweighted graph type BFS() (examples/in_memory/graph/bfs.h) expects. The
 // out-of-core side still goes through external_rmat_symmetric_graph (which
 // always produces a chunk_csr of weighted_edges), so weights exist on disk
-// but are simply unused by BFS_simple -- both generators are still
-// deterministic functions of (n_req, m_req) and use the same draws, so they
-// produce the same graph (up to neighbor order within a row, which BFS
-// membership cannot see), which is what makes the level-by-level cross-check
-// below double as an end-to-end check that they agree.
+// but are simply unused -- both generators are still deterministic functions
+// of (n_req, m_req) and use the same draws, so they produce the same graph
+// (up to neighbor order within a row, which BFS membership cannot see),
+// which is what makes the level-by-level cross-check below double as an
+// end-to-end check that they agree.
 //
 // Defaults are deliberately tiny, for the same reason bellman_ford.cpp's are:
 // BFS_simple's cost scales as O(sum of visited vertices' degrees) reader
 // setups (a pread per vertex, once, in the round it's discovered), not O(m)
-// bytes read, so it is expected to be dramatically slower than the in-memory
-// baseline. Unlike bellman_ford.cpp, this benchmark does NOT skip the
-// out-of-core method past a byte budget -- see above -- so keep any sweep's n
-// small unless you're deliberately measuring the slow end of that gap. The
-// in-memory baseline is still skipped past BFS_INMEM_MAX_N vertices (default
-// 2^30, env-overridable), the same "stop paying DRAM cost once it stops being
-// a useful baseline point" gate bellman_ford.cpp uses; it runs regardless of
-// PLAID_TRACE (raise the env var on a box with enough DRAM to still want the
-// comparison at larger n; see run_case()).
+// bytes read, so it's expected to be dramatically slower than the in-memory
+// baseline and than external_bfs even on small graphs. Because of that,
+// run_case() skips BFS_simple once a case's edge bytes exceed
+// BFS_PER_VERTEX_MAX_BYTES (default 512 KiB, env-overridable, same default as
+// bellman_ford.cpp's BELLMAN_FORD_PER_VERTEX_MAX_BYTES) -- past that it isn't
+// useful benchmark data, just wall-clock cost -- and leaves its CSV fields
+// blank for that point. external_bfs is never gated and always runs at every
+// size. The in-memory baseline is still skipped past BFS_INMEM_MAX_N vertices
+// (default 2^30, env-overridable), the same "stop paying DRAM cost once it
+// stops being a useful baseline point" gate bellman_ford.cpp uses; it runs
+// regardless of PLAID_TRACE (raise the env var on a box with enough DRAM to
+// still want the comparison at larger n; see run_case()).
 //
 // A second, size-derived gate guards DRAM directly (BFS_BUILD_BUDGET_BYTES,
 // default half of physical RAM, 0 disables), estimating the unavoidable
-// out-of-core footprint (chunk_csr's degree_scan plus BFS_simple's
-// atomic<bool> visited array) and the in-memory baseline's graph BEFORE
-// allocating anything -- same reasoning as bellman_ford.cpp's build-budget
-// gate. Both are far smaller here than Bellman-Ford's (no `long double`
-// distance arrays, no weighted graph), so this budget is expected to bind
-// only at vertex counts in the billions.
+// out-of-core footprint (chunk_csr's degree_scan, BFS_simple's atomic<bool>
+// visited array, and external_bfs's size_t dist array) and the in-memory
+// baseline's graph BEFORE allocating anything -- same reasoning as
+// bellman_ford.cpp's build-budget gate. Both are far smaller here than
+// Bellman-Ford's (no `long double` distance arrays, no weighted graph), so
+// this budget is expected to bind only at vertex counts in the billions.
 //
 //   usage: bfsExample [global --flags] [n] [balanced_avg_degree] [case]
 //     n                    requested vertex count, rounded up to a power of
@@ -76,12 +82,17 @@
 //                          invocation (they keep only the last line seen)
 //
 // One CSV line per case:
-//   CSV,case,n,m,build_s,op_s,inmem_op_s,levels,reachable,throughput_gb_s
+//   CSV,case,n,m,build_s,op_s,inmem_op_s,levels,reachable,throughput_gb_s,fast_op_s,fast_levels,fast_reachable,fast_throughput_gb_s
 //   throughput = edge bytes (m * sizeof(weighted_edge)) / op_s -- the same
 //   "dataset size / op time" convention every other example here uses, not a
 //   literal touched-bytes accounting (BFS_simple only ever reads edges
-//   incident to a reached vertex, once). inmem_op_s is blank when the
-//   in-memory baseline is skipped (n past BFS_INMEM_MAX_N).
+//   incident to a reached vertex, once). fast_throughput_gb_s is
+//   rounds-corrected (edge_bytes * fast_rounds / fast_op_s), since
+//   external_bfs re-reads the full edge list every round -- same correction
+//   bellman_ford.cpp's gb_s/fast_gb_s apply. op_s/levels/reachable/
+//   throughput_gb_s are blank when BFS_simple is skipped past
+//   BFS_PER_VERTEX_MAX_BYTES; inmem_op_s is blank when the in-memory baseline
+//   is skipped (n past BFS_INMEM_MAX_N).
 
 #include <algorithm>
 #include <chrono>
@@ -144,10 +155,12 @@ static size_t level_size(const chunk_seq& level) {
 using vertex_utils = graph_utils<size_t>;
 
 // Builds one RMAT graph (n_req vertices, avg_degree * n_req edges before
-// rounding/symmetrizing), runs BFS_simple and the in-memory BFS baseline from
-// the same start vertex, cross-checks them level-by-level, prints a summary
-// and a CSV line, and cleans up the files it wrote. Returns true iff the two
-// sides agree (or the in-memory baseline was skipped -- nothing to compare).
+// rounding/symmetrizing), runs BFS_simple, external_bfs, and the in-memory
+// BFS baseline from the same start vertex, cross-checks each out-of-core
+// method against the baseline level-by-level, prints a summary and a CSV
+// line, and cleans up the files it wrote. Returns true iff every method that
+// ran agrees with the in-memory baseline (or the baseline was skipped --
+// nothing to compare).
 static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) {
     const std::string edge_prefix = "bfs_edges_" + label;
 
@@ -236,33 +249,77 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
     }
 
     const size_t start = 0;
+    const size_t edge_bytes = m * sizeof(weighted_edge);
 
-    bench_drives::settle_drives();   // isolate the timed read from the build's writeback
+    bench_drives::settle_drives();   // isolate the first timed read from the build's writeback
 
     // BFS_simple: same algorithm as the in-memory BFS below, but each round
     // materializes every frontier vertex's adjacency with a fresh delayed cut
     // (a blocking pread per vertex, not buffered -- see external_bfs.h), so
-    // it's expected to be dramatically slower than the in-memory baseline
-    // even at modest edge counts. Unlike external_bellman_ford's per-vertex
-    // method, this is never budget-skipped: it's the only out-of-core series
-    // here, so gating it off would leave nothing to plot.
-    std::cout << "Running out-of-core BFS (BFS_simple)..." << std::flush;
-    trace_mark(("op_start_" + label).c_str());
+    // it's expected to be dramatically slower than the in-memory baseline and
+    // than external_bfs even at modest edge counts -- not useful benchmark
+    // data past a small budget, and impractically slow to just leave
+    // running. Skip it past a byte budget (edge bytes, matching
+    // bellman_ford.cpp's BELLMAN_FORD_PER_VERTEX_MAX_BYTES-style gate),
+    // leaving its CSV fields blank so the plotted "out-of-core (BFS_simple)"
+    // line simply stops there (run_benches.py's _series already drops
+    // blanks).
+    size_t per_vertex_budget = 512 * 1024;   // 512 KiB of edges
+    if (const char* e = getenv("BFS_PER_VERTEX_MAX_BYTES"))
+        per_vertex_budget = std::stoull(e);
+    const bool per_vertex_ok = edge_bytes <= per_vertex_budget;
+
+    size_t ext_levels = 0, ext_reachable = 0;
+    double op_s = 0, gb_s = 0;
+    parlay::sequence<chunk_seq> ext_frontiers;
+    if (per_vertex_ok) {
+        std::cout << "Running out-of-core BFS (BFS_simple)..." << std::flush;
+        trace_mark(("op_start_" + label).c_str());
+        t0 = Clock::now();
+        ext_frontiers = BFS_simple(start, graph);
+        op_s = elapsed(t0);
+        trace_mark(("op_end_" + label).c_str());
+        std::cout << " done\n";
+
+        ext_levels = ext_frontiers.size();
+        for (const auto& level : ext_frontiers) ext_reachable += level_size(level);
+
+        gb_s = to_gb(edge_bytes) / op_s;
+        std::cout << ext_levels << " levels   " << ext_reachable << "/" << n
+                  << " vertices reachable   " << std::setprecision(4) << op_s
+                  << "s   " << std::setprecision(2) << gb_s << " GB/s (edges read)\n";
+
+        bench_drives::settle_drives();   // isolate the fast method's timer from this run
+    } else {
+        std::cout << "out-of-core BFS (BFS_simple): skipped (edges "
+                  << to_gb(edge_bytes) << " GB exceed per-vertex budget "
+                  << to_gb(per_vertex_budget) << " GB)\n";
+    }
+
+    // external_bfs: same algorithm, one streaming pass over the edges per
+    // round (delayed::segmented_reduce over a PersistentReadContext built
+    // once outside the round loop) instead of a per-vertex reader setup --
+    // see external_bfs.h for why that's expected to be dramatically faster.
+    std::cout << "Running out-of-core BFS (fast)..." << std::flush;
+    trace_mark(("fast_op_start_" + label).c_str());
     t0 = Clock::now();
-    parlay::sequence<chunk_seq> ext_frontiers = BFS_simple(start, graph);
-    const double op_s = elapsed(t0);
-    trace_mark(("op_end_" + label).c_str());
+    size_t fast_rounds = 0;
+    parlay::sequence<chunk_seq> fast_frontiers = external_bfs(start, graph, &fast_rounds);
+    const double fast_op_s = elapsed(t0);
+    trace_mark(("fast_op_end_" + label).c_str());
     std::cout << " done\n";
 
-    const size_t ext_levels = ext_frontiers.size();
-    size_t ext_reachable = 0;
-    for (const auto& level : ext_frontiers) ext_reachable += level_size(level);
+    const size_t fast_levels = fast_frontiers.size();
+    size_t fast_reachable = 0;
+    for (const auto& level : fast_frontiers) fast_reachable += level_size(level);
 
-    const size_t edge_bytes = m * sizeof(weighted_edge);
-    const double gb_s = to_gb(edge_bytes) / op_s;
-    std::cout << ext_levels << " levels   " << ext_reachable << "/" << n
-              << " vertices reachable   " << std::setprecision(4) << op_s
-              << "s   " << std::setprecision(2) << gb_s << " GB/s (edges read)\n";
+    // Rounds-corrected, same reasoning as bellman_ford.cpp's fast_gb_s:
+    // external_bfs's streaming pass re-reads the full edge list every round,
+    // not once.
+    const double fast_gb_s = to_gb(edge_bytes) * (double)fast_rounds / fast_op_s;
+    std::cout << fast_levels << " levels   " << fast_reachable << "/" << n
+              << " vertices reachable   " << std::setprecision(4) << fast_op_s
+              << "s   " << std::setprecision(2) << fast_gb_s << " GB/s (edges read)\n";
 
     // `inmem_ok` was decided at the top of run_case (before the build) and G
     // was only populated if it held -- same reasoning as bellman_ford.cpp:
@@ -288,59 +345,76 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
     // the graph (shortest hop-count from start), but the order vertices land
     // in within a level is racy (parallel CAS discovery among several
     // in-frontier neighbors), so an unsorted compare would spuriously fail.
-    bool agree = true;
-    if (inmem_ok) {
-        if (mem_frontiers.size() != ext_levels) {
-            std::cout << "*** MISMATCH: in-mem " << mem_frontiers.size()
-                      << " levels != out-of-core " << ext_levels << " ***\n";
-            agree = false;
-        } else {
-            for (size_t lvl = 0; lvl < ext_levels && agree; lvl++) {
-                parlay::sequence<size_t> ext_level =
-                    ChunkSequenceOps::materialize<size_t>(ext_frontiers[lvl]);
-                parlay::sequence<size_t> mem_level = mem_frontiers[lvl];
-                if (ext_level.size() != mem_level.size()) {
-                    std::cout << "*** MISMATCH at level " << lvl << ": in-mem "
-                              << mem_level.size() << " vertices != out-of-core "
-                              << ext_level.size() << " ***\n";
-                    agree = false;
-                    break;
-                }
-                parlay::sort_inplace(ext_level);
-                parlay::sort_inplace(mem_level);
-                for (size_t i = 0; i < ext_level.size(); i++) {
-                    if (ext_level[i] != mem_level[i]) {
-                        std::cout << "*** MISMATCH at level " << lvl
-                                  << ", position " << i << ": in-mem "
-                                  << mem_level[i] << " != out-of-core "
-                                  << ext_level[i] << " ***\n";
-                        agree = false;
-                        break;
-                    }
+    // Factored into a lambda so both out-of-core methods share it (mirrors
+    // bellman_ford.cpp's compare_to_mem).
+    auto compare_to_mem = [&](const std::string& name,
+                               const parlay::sequence<chunk_seq>& frontiers) -> bool {
+        const size_t levels = frontiers.size();
+        if (mem_frontiers.size() != levels) {
+            std::cout << "*** MISMATCH (" << name << "): in-mem " << mem_frontiers.size()
+                      << " levels != out-of-core " << levels << " ***\n";
+            return false;
+        }
+        for (size_t lvl = 0; lvl < levels; lvl++) {
+            parlay::sequence<size_t> ext_level =
+                ChunkSequenceOps::materialize<size_t>(frontiers[lvl]);
+            parlay::sequence<size_t> mem_level = mem_frontiers[lvl];
+            if (ext_level.size() != mem_level.size()) {
+                std::cout << "*** MISMATCH (" << name << ") at level " << lvl
+                          << ": in-mem " << mem_level.size() << " vertices != out-of-core "
+                          << ext_level.size() << " ***\n";
+                return false;
+            }
+            parlay::sort_inplace(ext_level);
+            parlay::sort_inplace(mem_level);
+            for (size_t i = 0; i < ext_level.size(); i++) {
+                if (ext_level[i] != mem_level[i]) {
+                    std::cout << "*** MISMATCH (" << name << ") at level " << lvl
+                              << ", position " << i << ": in-mem "
+                              << mem_level[i] << " != out-of-core "
+                              << ext_level[i] << " ***\n";
+                    return false;
                 }
             }
         }
-        if (agree) std::cout << "cross-check OK: " << ext_levels
-                              << " levels agree\n";
+        std::cout << "cross-check OK (" << name << "): " << levels << " levels agree\n";
+        return true;
+    };
+
+    bool agree = true;
+    if (inmem_ok) {
+        if (per_vertex_ok) agree &= compare_to_mem("BFS_simple", ext_frontiers);
+        agree &= compare_to_mem("fast", fast_frontiers);
     } else {
         std::cout << "cross-check skipped (in-memory BFS not run)\n";
     }
 
     // Machine-readable line for benchmarks/run_benches.py.
-    // Columns: case,n,m,build_s,op_s,inmem_op_s,levels,reachable,throughput_gb_s
-    // (inmem_op_s blank past inmem_max_n vertices, where it was never run.)
+    // Columns: case,n,m,build_s,op_s,inmem_op_s,levels,reachable,
+    //          throughput_gb_s,fast_op_s,fast_levels,fast_reachable,
+    //          fast_throughput_gb_s
+    // (op_s/levels/reachable/throughput_gb_s blank when BFS_simple is
+    // skipped past BFS_PER_VERTEX_MAX_BYTES; inmem_op_s blank past
+    // inmem_max_n vertices, where it was never run.)
     auto f9 = [](double v) { std::ostringstream o; o << std::setprecision(9) << v; return o.str(); };
     std::cout << "CSV," << label << ',' << n << ',' << m << ',' << f9(build_s)
-              << ',' << f9(op_s)
+              << ',' << (per_vertex_ok ? f9(op_s) : std::string())
               << ',' << (inmem_ok ? f9(inmem_op_s) : std::string())
-              << ',' << ext_levels << ',' << ext_reachable
-              << ',' << f9(gb_s) << '\n';
+              << ',' << (per_vertex_ok ? std::to_string(ext_levels) : std::string())
+              << ',' << (per_vertex_ok ? std::to_string(ext_reachable) : std::string())
+              << ',' << (per_vertex_ok ? f9(gb_s) : std::string())
+              << ',' << f9(fast_op_s)
+              << ',' << fast_levels << ',' << fast_reachable
+              << ',' << f9(fast_gb_s) << '\n';
 
     cleanup_prefix(edge_prefix);
-    // BFS_simple leaves one chunk_seq per round ("bfs_frontier0",
-    // "bfs_frontier1", ... -- an unknown count up front, each possibly
-    // sharded across several drives), which cleanup_prefix's fixed
-    // per-drive-index enumeration can't catch; a directory-scan cleanup does.
+    // Both out-of-core methods leave one chunk_seq per round
+    // ("bfs_frontier0", "bfs_frontier1", ... for BFS_simple;
+    // "bfs_frontier_fast0", ... for external_bfs -- see external_bfs.h for
+    // why they use distinct prefixes) -- an unknown count up front, each
+    // possibly sharded across several drives, which cleanup_prefix's fixed
+    // per-drive-index enumeration can't catch. A single directory-scan
+    // cleanup on the shared "bfs_frontier" prefix catches both.
     bench_drives::clear_drives({"bfs_frontier"});
     return agree;
 }

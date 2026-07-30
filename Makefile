@@ -61,6 +61,7 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/samplesort_three_wayExample \
                     $(BINDIR)/external_random_shuffleExample \
                     $(BINDIR)/convex_hullExample \
+                    $(BINDIR)/convex_hull_lazy_filterExample \
                     $(BINDIR)/fftExample \
                     $(BINDIR)/fft_transposeExample \
                     $(BINDIR)/bellman_fordExample \

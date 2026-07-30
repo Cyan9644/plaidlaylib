@@ -33,6 +33,7 @@
 #include "utils/file_utils.h"
 #include "ChunkSequence/chunk_seq.h"
 #include "ChunkSequence/examples/chunk_convex_hull.h"
+#include "ChunkSequence/examples/chunk_convex_hull_lazy_filter.h"
 
 using ChunkSequenceOps::hpoint;
 using ChunkSequenceOps::area;
@@ -95,6 +96,48 @@ static bool geometry_ok(const std::vector<hpoint>& pts,
     return true;
 }
 
+// Differential (vs upstream) + independent geometry + out-of-core-recursion
+// checks for one algorithm's hull, shared by both UpperHull and
+// UpperHullLazyFilter below.
+static bool check_hull(const std::string& label,
+                       const std::vector<hpoint>& pts,
+                       const std::vector<uint64_t>& hull,
+                       const intseq& hull_mem,
+                       size_t splits,
+                       bool expect_ext_recursion) {
+    bool pass = true;
+
+    // 1. Differential: identical hull vs upstream.
+    if (hull.size() != hull_mem.size()) {
+        std::cout << "    FAIL " << label << " count: out-of-core=" << hull.size()
+                  << " in-mem=" << hull_mem.size() << "\n";
+        pass = false;
+    } else {
+        for (size_t i = 0; i < hull.size(); i++)
+            if (hull[i] != (uint64_t)hull_mem[i]) {
+                std::cout << "    FAIL " << label << " match at " << i
+                          << ": out-of-core=" << hull[i] << " in-mem=" << hull_mem[i] << "\n";
+                pass = false;
+                break;
+            }
+        if (pass) std::cout << "    " << label << " match  OK (" << hull.size() << " vertices)\n";
+    }
+
+    // 2. Independent geometry.
+    if (pass && !geometry_ok(pts, hull)) pass = false;
+    else if (pass) std::cout << "    " << label << " geometry OK\n";
+
+    // 3. The recursion actually left DRAM when we expected it to.
+    if (expect_ext_recursion && splits == 0) {
+        std::cout << "    FAIL " << label << ": expected out-of-core recursion but none occurred\n";
+        pass = false;
+    } else {
+        std::cout << "    " << label << " out-of-core split levels: " << splits << "\n";
+    }
+
+    return pass;
+}
+
 static bool run_case(const std::string& name, size_t n,
                      const std::function<hpoint(size_t)>& gen,
                      bool expect_ext_recursion) {
@@ -103,10 +146,13 @@ static bool run_case(const std::string& name, size_t n,
     const std::string in_prefix = "cht_in";
     chunk_seq points = ChunkSequenceOps::tabulate<hpoint>(n, in_prefix, gen);
 
-    // Tiny DRAM budget (128 points) so the recursion is forced out-of-core.
+    // Tiny DRAM budget (128 points) so both recursions are forced out-of-core.
     const size_t budget = 128 * sizeof(hpoint);
     std::vector<uint64_t> hull = ChunkSequenceOps::UpperHull(points, budget, "cht_s");
     const size_t splits = ChunkSequenceOps::last_ext_splits();
+    std::vector<uint64_t> hull_lazy =
+        ChunkSequenceOps::UpperHullLazyFilter(points, budget, "cht_lazy");
+    const size_t splits_lazy = ChunkSequenceOps::last_ext_splits();
 
     // Independent in-DRAM baseline on the same points.
     std::vector<hpoint> pts(n);
@@ -114,35 +160,9 @@ static bool run_case(const std::string& name, size_t n,
     pointseq Pts = parlay::tabulate(n, [&](size_t i) { return point{pts[i].x, pts[i].y}; });
     intseq hull_mem = upper_hull(Pts);
 
-    bool pass = true;
-
-    // 1. Differential: identical hull vs upstream.
-    if (hull.size() != hull_mem.size()) {
-        std::cout << "    FAIL count: out-of-core=" << hull.size()
-                  << " in-mem=" << hull_mem.size() << "\n";
-        pass = false;
-    } else {
-        for (size_t i = 0; i < hull.size(); i++)
-            if (hull[i] != (uint64_t)hull_mem[i]) {
-                std::cout << "    FAIL match at " << i << ": out-of-core=" << hull[i]
-                          << " in-mem=" << hull_mem[i] << "\n";
-                pass = false;
-                break;
-            }
-        if (pass) std::cout << "    match  OK (" << hull.size() << " vertices)\n";
-    }
-
-    // 2. Independent geometry.
-    if (pass && !geometry_ok(pts, hull)) pass = false;
-    else if (pass) std::cout << "    geometry OK\n";
-
-    // 3. The recursion actually left DRAM when we expected it to.
-    if (expect_ext_recursion && splits == 0) {
-        std::cout << "    FAIL: expected out-of-core recursion but none occurred\n";
-        pass = false;
-    } else {
-        std::cout << "    out-of-core split levels: " << splits << "\n";
-    }
+    bool pass = check_hull("ChunkPartition", pts, hull, hull_mem, splits, expect_ext_recursion);
+    pass = check_hull("lazy_filter", pts, hull_lazy, hull_mem, splits_lazy,
+                      expect_ext_recursion) && pass;
 
     cleanup_prefix(in_prefix);
     return pass;

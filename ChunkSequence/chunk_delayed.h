@@ -155,13 +155,30 @@ struct zip_iter {
 template<class ItA, class ItB>
 zip_iter<ItA, ItB> make_zip_iter(ItA a, ItB b) { return {a, b}; }
 
+// Raw walk over a heap-materialized buffer, kept alive via shared_ptr for the
+// iterator's lifetime.  Used by filter_node::build, which re-filters the source
+// chunk(s) a logical chunk needs into a small compacted buffer (see lazy_filter).
+template<class T>
+struct materialized_iter {
+    std::shared_ptr<std::vector<T>> buf;
+    size_t pos = 0;
+    const T& operator*() const { return (*buf)[pos]; }
+    materialized_iter& operator++() { ++pos; return *this; }
+};
+
 // ── read planning: dedup + resolve ───────────────────────────────────────────
 //
-// A node's plan() calls Planner::need once per in-range leaf, keyed by the
-// source chunk_seq*, so a source that appears in several leaves of one logical
-// chunk (e.g. A and B in both zip(A,B) and a scan of zip(A,B)) collapses to a
-// single physical read.  build() then calls Resolver::next once per in-range
-// leaf, in the same left-to-right order, to get that leaf's resolved buffer.
+// A node's plan() calls Planner::need once per in-range leaf, keyed by
+// (source chunk_seq*, physical chunk index), so a source that appears in
+// several leaves of one logical chunk *at the same physical index* (e.g. A and
+// B in both zip(A,B) and a scan of zip(A,B)) collapses to a single physical
+// read.  The index is part of the key -- not just the source pointer -- because
+// a node may also need several *different* physical indices from the same
+// source within one logical chunk (e.g. cut_source spanning two chunks, or
+// filter_node's predecessor search spanning a run of source chunks); those
+// must NOT collapse into each other.  build() then calls Resolver::next once
+// per in-range leaf, in the same left-to-right order, to get that leaf's
+// resolved buffer.
 struct Planner {
     std::vector<chunk>            unique_reads;  // this chunk's deduped reads (slot order)
     std::vector<uint32_t>         leaf_slots;    // one local slot per in-range leaf occurrence
@@ -169,7 +186,10 @@ struct Planner {
 
     void need(const chunk_seq* src, const chunk& c) {
         for (uint32_t s = 0; s < src_of.size(); s++)          // fanout is tiny: linear scan
-            if (src_of[s] == src) { leaf_slots.push_back(s); return; }
+            if (src_of[s] == src && unique_reads[s].index == c.index) {
+                leaf_slots.push_back(s);
+                return;
+            }
         leaf_slots.push_back((uint32_t)unique_reads.size());
         src_of.push_back(src);
         unique_reads.push_back(c);
@@ -402,6 +422,66 @@ struct zip_node {
         auto ib = b.build(i, r);
         return make_zip_iter(make_pad_iter(ia, rA, padA),
                              make_pad_iter(ib, rB, padB));
+    }
+};
+
+// A delayed, non-writing filter: chunk i's survivors are computed by re-reading
+// and re-running `pred` over whichever physical chunk(s) of `d` a predecessor
+// search over a precomputed survivor-count prefix sum resolves to.  Never
+// allocates a chunk_seq or writes to disk -- see lazy_filter (in the terminals
+// section below) for how `offsets`/`total` are computed.
+template<class D, class Pred>
+struct filter_node {
+    using value_type = typename D::value_type;
+    D d;
+    Pred pred;
+    std::shared_ptr<std::vector<size_t>> offsets; // size d.num_chunks()+1; exclusive prefix
+    size_t total;                                  // sum of per-source-chunk survivor counts
+
+    size_t length()     const { return total; }
+    size_t num_chunks() const { return grid_num_chunks(total); }
+    size_t chunk_len(size_t i) const { return grid_chunk_len(total, i); }
+
+    // Predecessor search: last physical (source) chunk index k with
+    // offsets[k] <= g, i.e. the source chunk containing filtered index g.
+    size_t locate(size_t g) const {
+        auto it = std::upper_bound(offsets->begin(), offsets->end(), g);
+        return (size_t)(it - offsets->begin()) - 1;
+    }
+
+    template<class Planner>
+    void plan(size_t i, Planner& p) const {
+        const size_t n = chunk_len(i);
+        if (n == 0) return;
+        const size_t g_lo = i * ELEMS_PER_CHUNK;
+        const size_t src_lo = locate(g_lo);
+        const size_t src_hi = locate(g_lo + n - 1);
+        for (size_t k = src_lo; k <= src_hi; k++) d.plan(k, p);
+    }
+
+    template<class Resolver>
+    auto build(size_t i, Resolver& r) const {
+        const size_t n = chunk_len(i);
+        auto buf = std::make_shared<std::vector<value_type>>();
+        if (n > 0) {
+            buf->reserve(n);
+            const size_t g_lo = i * ELEMS_PER_CHUNK;
+            const size_t src_lo = locate(g_lo);
+            // Mirrors plan()'s [src_lo, locate(g_lo+n-1)] range exactly: since
+            // `offsets` is the exact survivor-count prefix sum, this loop always
+            // stops with k == locate(g_lo+n-1), never overshooting past it.
+            for (size_t k = src_lo; buf->size() < n; k++) {
+                auto it = d.build(k, r);
+                const size_t src_n = d.chunk_len(k);
+                size_t skip = (k == src_lo) ? (g_lo - (*offsets)[k]) : 0;
+                for (size_t j = 0; j < src_n && buf->size() < n; j++, ++it) {
+                    if (!pred(*it)) continue;
+                    if (skip > 0) { --skip; continue; }
+                    buf->push_back(*it);
+                }
+            }
+        }
+        return materialized_iter<value_type>{buf, 0};
     }
 };
 
@@ -960,6 +1040,41 @@ auto scan(const D& d, Monoid m) {
     const R total = run;
 
     return std::pair{scan_node<D, Monoid>{d, m, offsets}, total};
+}
+
+// lazy_filter: a delayed filter that never writes to disk and never creates a
+// chunk_seq (contrast with the eager, disk-writing `filter` above, which
+// densely repacks survivors into a fresh chunk_seq via for_each_window).
+//   Pass 1 (one streaming read pass, no allocation beyond the counts):
+//   per-chunk survivor counts under `pred`.  Then a sequential prefix sum over
+//   those counts.  Consuming the returned node (via for_each_chunk, reduce,
+//   scan, map, force, sequential_for_each_chunk, another lazy_filter, ...)
+//   re-reads only the physical chunks a given logical output chunk's
+//   predecessor search resolves to, and re-applies `pred` locally -- see
+//   filter_node::plan/build above.
+//
+// Trade-off: a low-selectivity `pred` makes one logical output chunk's source
+// span many physical chunks (bounded only by how sparse `pred` is), so a
+// single chunk_len(i)-worth of survivors can cost reading most of `d`.  This is
+// inherent to not maintaining a separate index of match positions, and is the
+// same shape of trade-off cut_source already accepts for boundary-straddling
+// slices.
+template<class D, class Pred>
+auto lazy_filter(const D& d, Pred pred) {
+    const size_t nc = d.num_chunks();
+    std::vector<size_t> counts(nc);
+    for_each_chunk(d, [&](size_t ci, size_t n, auto it) {
+        size_t c = 0;
+        for (size_t j = 0; j < n; j++, ++it) if (pred(*it)) c++;
+        counts[ci] = c;
+    });
+
+    auto offsets = std::make_shared<std::vector<size_t>>(nc + 1);
+    size_t run = 0;
+    for (size_t i = 0; i < nc; i++) { (*offsets)[i] = run; run += counts[i]; }
+    (*offsets)[nc] = run;
+
+    return filter_node<D, Pred>{d, pred, offsets, run};
 }
 
 namespace detail {

@@ -242,6 +242,21 @@ static void run_size(size_t n) {
         cleanup_prefix("iota"); cleanup_prefix("dl_flt");
     }
 
+    // lazy_filter(map)  (keep evens of x+1) -- never writes to disk itself;
+    // only the cd::force call below does, purely to check the result.
+    {
+        chunk_seq seq = ChunkSequenceOps::iota(n);
+        auto d = cd::map(cd::delay(seq), [](uint64_t x) { return x + 1; });
+        auto fd = cd::lazy_filter(d, [](uint64_t x) { return x % 2 == 0; });
+        auto rv = ref_filter(ref_map(base, [](uint64_t x) { return x + 1; }),
+                             [](uint64_t x) { return x % 2 == 0; });
+        chunk_seq out = cd::force(fd, "dl_lflt");
+        expect_eq_vec<uint64_t>("lazy_filter(map) -> force  evens", out, rv);
+        expect_scalar("lazy_filter(map) reduce sum", cd::reduce(fd, SumMonoid{}),
+                      ref_reduce(rv, SumMonoid{}));
+        cleanup_prefix("iota"); cleanup_prefix("dl_lflt");
+    }
+
     // zip index × index (equal length)  -> (i) + (2i) = 3i
     {
         auto z = cd::map(cd::zip(cd::tabulate(n, [](size_t i) { return (uint64_t)i; }),
@@ -551,6 +566,87 @@ static void run_multibatch() {
     cleanup_prefix("iota"); cleanup_prefix("dl_mb");
 }
 
+// ── multi-batch lazy_filter, scalar-verified, consumed WITHOUT ever forcing to
+// disk (reduce/scan run directly against the filter_node) ────────────────────
+static void run_lazy_filter_multibatch() {
+    const size_t chunks = 130;                 // 2 filter batches (128 + 2)
+    const size_t n = chunks * ELEMS_PER_CHUNK;
+    std::cout << "  lazy_filter multi-batch  n=" << n << "  (" << chunks << " chunks)\n";
+
+    chunk_seq seq = ChunkSequenceOps::iota(n);
+    auto d = cd::map(cd::delay(seq), [](uint64_t x) { return x; });
+    auto fd = cd::lazy_filter(d, [](uint64_t x) { return x % 2 == 0; });
+
+    const uint64_t cnt = n / 2;                 // survivors 0,2,…,n-2
+    expect_scalar("lazy_filter multibatch length", fd.length(), cnt);
+    expect_scalar("lazy_filter multibatch count",
+                  cd::reduce(cd::map(fd, [](uint64_t) { return (uint64_t)1; }), SumMonoid{}),
+                  cnt);
+    expect_scalar("lazy_filter multibatch survivor sum",
+                  cd::reduce(fd, SumMonoid{}),
+                  cnt * (cnt - 1));
+
+    auto [sc, total] = cd::scan(fd, SumMonoid{});
+    expect_scalar("lazy_filter multibatch scan total", total, cnt * (cnt - 1));
+    (void)sc;
+
+    cleanup_prefix("iota");
+}
+
+// ── sparse predicate: total survivors fit in ONE logical output chunk, but the
+// predecessor search over the survivor-count prefix sum must span SEVERAL
+// physical chunks of the SAME source within that one plan()/build() call.  This
+// is exactly the scenario the Planner (src, chunk index) dedup fix targets: a
+// dedup keyed on the source pointer alone would misroute reads across the
+// spanned chunks and silently produce the wrong survivors. ───────────────────
+static void run_lazy_filter_sparse() {
+    const size_t chunks = 6;
+    const size_t n = chunks * ELEMS_PER_CHUNK;
+    std::cout << "  lazy_filter sparse  n=" << n << "  (" << chunks << " chunks)\n";
+
+    chunk_seq seq = ChunkSequenceOps::iota(n);
+    const uint64_t stride = ELEMS_PER_CHUNK + ELEMS_PER_CHUNK / 2;   // ~1 survivor / 1.5 chunks
+    auto pred = [stride](uint64_t x) { return x % stride == 0; };
+    auto fd = cd::lazy_filter(cd::delay(seq), pred);
+
+    auto ref = ref_filter(ref_iota(n), pred);
+    chunk_seq out = cd::force(fd, "dl_lfsp");
+    expect_eq_vec<uint64_t>("lazy_filter sparse force", out, ref);
+    expect_scalar("lazy_filter sparse reduce sum", cd::reduce(fd, SumMonoid{}),
+                  ref_reduce(ref, SumMonoid{}));
+
+    cleanup_prefix("iota"); cleanup_prefix("dl_lfsp");
+}
+
+// ── random single-index access: pull individual logical chunks of a
+// lazy_filter result directly via sequential_for_each_chunk (the predecessor-
+// search + re-filter mechanism, independent of force/reduce/scan) and compare
+// each against the corresponding slice of a serial reference. ────────────────
+static void run_lazy_filter_random_access() {
+    const size_t chunks = 3;
+    const size_t n = chunks * ELEMS_PER_CHUNK;
+    std::cout << "  lazy_filter random access  n=" << n << "\n";
+
+    chunk_seq seq = ChunkSequenceOps::iota(n);
+    auto pred = [](uint64_t x) { return x % 2 == 0; };
+    auto fd = cd::lazy_filter(cd::delay(seq), pred);
+    auto ref = ref_filter(ref_iota(n), pred);
+
+    bool ok = (fd.length() == ref.size());
+    size_t chunks_seen = 0;
+    cd::sequential_for_each_chunk(fd, [&](size_t ci, size_t cnt, auto it) {
+        chunks_seen++;
+        const size_t base = ci * ELEMS_PER_CHUNK;
+        for (size_t k = 0; k < cnt; k++, ++it) {
+            if (base + k >= ref.size() || *it != ref[base + k]) ok = false;
+        }
+    });
+    ok = ok && chunks_seen == fd.num_chunks() && fd.num_chunks() > 1;
+    report("lazy_filter sequential_for_each_chunk matches reference", ok);
+
+    cleanup_prefix("iota");
+}
+
 // ── sequential_for_each_chunk / sequential_materialize with a reused
 // SequentialReadContext (shared fd cache + buffer pool across calls) ─────────
 // Covers the Bellman-Ford-motivated path: a delayed::cut slice straddling a
@@ -679,6 +775,9 @@ int main(int argc, char* argv[]) {
 
     run_tabulate(2 * ELEMS_PER_CHUNK + 3);
     run_multibatch();
+    run_lazy_filter_multibatch();
+    run_lazy_filter_sparse();
+    run_lazy_filter_random_access();
     run_zip_pad();
     run_zip_multibatch();
     run_zip_compose();
