@@ -1,4 +1,5 @@
 #include <atomic>
+#include <limits>
 #include <string>
 
 #include <parlay/primitives.h>
@@ -77,6 +78,59 @@ auto BFS_simple(V start, const chunk_csr& G) {
   //this should basically work, because each iteration essentially runs at filter speed.
   //the main problem is essentially that when we read from the delayed cut, we need to actually issue a read for each individual edge
   //of course this is slow because it's not buffered and we need to re-read from the same areas multiple times -- see the
+
+  return frontiers;
+}
+
+//port to streaming of external_bfs
+template <typename V>
+auto external_bfs(V start, chunk_csr& G) {
+
+  size_t n = G.degree_scan.size() - 1;
+
+  // dist[v] == the round v was first reached; "max" sentinel == unvisited.
+  // Doubles as BFS_simple's `visited` check (dist[v] != max) and, read at
+  // round r-1, as "is v in the current frontier" for the streaming pass.
+  auto unvisited = std::numeric_limits<size_t>::max();
+  parlay::sequence<size_t> dist(n, unvisited);
+  dist[start] = 0;
+
+    //the current frontier is just the first vertex
+    //spinning up a whole tabulate is wasteful here
+  chunk_seq frontier = ChunkSequenceOps::tabulate<size_t>(1, "bfs_frontier0", [&](short i){
+    return start;
+  });
+  parlay::sequence<chunk_seq> frontiers;
+  size_t round=0;
+
+  struct OrMonoid {
+    bool identity = false;
+    bool operator()(bool a, bool b) const { return a || b; }
+  };
+
+  while (!frontier.chunks.empty()){
+    //add the current frontier to the frontiers list
+    frontiers.push_back(frontier);
+
+    // one streaming pass over ALL edges: for each vertex v, OR over its
+    // incident edges whether the neighbor is exactly at `round` (i.e. in the
+    // frontier just pushed above) -- replaces BFS_simple's per-vertex
+    // delay_get_adjacent + sequential_materialize reads.
+    size_t cur_round = round;
+    parlay::sequence<bool> reached = G.template segmented_reduce_over_edges<bool>(
+        [&](weighted_edge e) { return dist[e.connecting_vertex] == cur_round; },
+        OrMonoid{});
+
+    ++round;
+    parlay::sequence<bool> newly_reached = parlay::tabulate(n, [&](size_t v) {
+      if (reached[v] && dist[v] == unvisited) { dist[v] = round; return true; }
+      return false;
+    });
+    parlay::sequence<size_t> next_ids = parlay::pack_index<size_t>(newly_reached);
+
+    frontier = ChunkSequenceOps::tabulate<size_t>(next_ids.size(), "bfs_frontier" + std::to_string(round),
+        [&](size_t i){ return next_ids[i]; });
+  }
 
   return frontiers;
 }
