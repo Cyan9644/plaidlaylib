@@ -5,6 +5,7 @@
 #include <parlay/sequence.h>
 
 #include "ChunkSequence/ExternalGraph/external_compressed_sparse_row.h"
+#include "ChunkSequence/chunk_delayed.h"
 #include "ChunkSequence/chunk_flat_map.h"
 #include "ChunkSequence/chunk_seq.h"
 
@@ -40,6 +41,11 @@ auto BFS_simple(V start, const chunk_csr& G) {
   });
   parlay::sequence<chunk_seq> frontiers;
   size_t round=0;
+
+//need to figure out how this works
+  std::vector<ChunkSequenceOps::delayed::SequentialReadContext> ctxs(
+      std::max<size_t>(1, parlay::num_workers()));
+
   while (!frontier.chunks.empty()){
     //add the current frontier to the frontiers list
     frontiers.push_back(frontier);
@@ -50,7 +56,9 @@ auto BFS_simple(V start, const chunk_csr& G) {
     //this is different from the rabin-karp chunk_flatmap because it maps over elements rather than chunks --
     //ChunkFlatMap's elementwise overload (chunk_flat_map.h) takes f: T -> parlay::sequence<R>
     frontier = ChunkSequenceOps::ChunkFlatMap<size_t, size_t>(frontier, "bfs_frontier" + std::to_string(++round),[&] (size_t u) {
-    parlay::sequence<weighted_edge> adjacent = G.get_adjacent(u);
+
+    auto& ctx = ctxs[parlay::worker_id()];
+    parlay::sequence<weighted_edge> adjacent =ChunkSequenceOps::delayed::sequential_materialize(G.delay_get_adjacent(u), ctx);
     parlay::sequence<size_t> out;
     for (auto&&e : adjacent){
       size_t v = e.connecting_vertex;
@@ -67,8 +75,8 @@ auto BFS_simple(V start, const chunk_csr& G) {
     }
 
   //this should basically work, because each iteration essentially runs at filter speed.
-  //the main problem is essentially that when we read from the delayed cut, we need to actually isuse a read for each individual edge
-  //of course this is slow because it's not buffered and we need to re-read from the same areas multiple times.
+  //the main problem is essentially that when we read from the delayed cut, we need to actually issue a read for each individual edge
+  //of course this is slow because it's not buffered and we need to re-read from the same areas multiple times -- see the
 
   return frontiers;
 }

@@ -149,6 +149,11 @@ index_counter++;
 //we have now found the correct chunk for the start
 T* buff = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
 int fd1 = open(seq.chunks[index_counter].filename.c_str(), O_RDONLY | O_DIRECT);
+// A failed open() (e.g. EMFILE under fd pressure) must not silently flow into the
+// pread below as fd == -1 -- SYSCALL only logs, it isn't fatal, so that used to
+// corrupt this chunk's size/offset bookkeeping instead of failing loudly here.
+CHECK(fd1 >= 0) << "sequential_cut_no_compression: open failed for "
+                 << seq.chunks[index_counter].filename << ": " << std::strerror(errno);
 //seq.chunks[index_counter].used/sizeof(T) - tracker is the #of elements used in the block - the expected start position of the first
 //index we want to see, which means we need to read size of the difference between the two to get all the data from start to end
 SYSCALL(pread(fd1, buff, AlignUp(seq.chunks[index_counter].used), (off_t) seq.chunks[index_counter].begin_addr));
@@ -193,6 +198,8 @@ index_counter++;
 //we're allocating a new buffer because eventually we want these start/end chunks things to be in a parallel do 
 T* buf = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
 int fd = open(seq.chunks[index_counter].filename.c_str(), O_RDONLY | O_DIRECT);
+CHECK(fd >= 0) << "sequential_cut_no_compression: open failed for "
+               << seq.chunks[index_counter].filename << ": " << std::strerror(errno);
 
 
 // SYSCALL(pread(fd, buf, AlignUp(seq.chunks[index_counter].used/sizeof(T) - tracker) * sizeof(T), (off_t) (seq.chunks[index_counter].begin_addr + tracker*sizeof(T))));

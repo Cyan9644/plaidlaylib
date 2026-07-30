@@ -8,10 +8,10 @@
 // unvisited neighbors into the next frontier. Unlike external_bellman_ford
 // (which has a slow per-vertex method AND a fast streaming method), there is
 // only one out-of-core BFS implementation here -- BFS_simple relaxes a vertex
-// by calling chunk_csr::get_adjacent (a fresh materialize of a delayed cut)
-// PER FRONTIER VERTEX PER ROUND, the same "blocking pread per vertex, not
-// buffered" cost profile external_bellman_ford's slow method has (see
-// external_bfs.h). That is expected to make it dramatically slower than the
+// by calling chunk_csr::delay_get_adjacent + sequential_materialize (against a
+// per-worker SequentialReadContext) PER FRONTIER VERTEX PER ROUND, the same
+// "blocking pread per vertex, not buffered" cost profile external_bellman_ford's
+// slow method has (see external_bfs.h). That is expected to make it dramatically slower than the
 // in-memory baseline even at modest n; this benchmark exists to measure
 // exactly that gap, not to hide it -- and, because there is no faster
 // out-of-core alternative to fall back on, BFS_simple is never budget-gated
@@ -347,11 +347,13 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
 
 int main(int argc, char* argv[]) {
     ParseGlobalArguments(argc, argv);
-    // BFS_simple materializes one delayed cut per frontier vertex per round,
-    // each a fresh open+pread -- workers issuing these concurrently, plus the
-    // CSR build's own readers/writers, can blow past the common 1024 soft
-    // RLIMIT_NOFILE. Lift the soft limit to the hard limit before any I/O
-    // starts (same fix every other external example applies).
+    // BFS_simple materializes one delayed cut per frontier vertex per round
+    // against a per-worker SequentialReadContext (bounded-LRU fd cache, see
+    // external_bfs.h) -- num_workers() * SequentialReadContext::MAX_CACHED_FDS
+    // fds at steady state, plus the CSR build's own readers/writers, can still
+    // exceed the common 1024 soft RLIMIT_NOFILE. Lift the soft limit to the
+    // hard limit before any I/O starts (same fix every other external example
+    // applies).
     RaiseFdLimit();
     const size_t n_req = (argc > 1) ? std::stoull(argv[1]) : 200;
     const size_t balanced_avg_degree = (argc > 2) ? std::stoull(argv[2]) : 8;

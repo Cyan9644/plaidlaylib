@@ -73,7 +73,7 @@ struct chunk_csr{
     }
 
     //method to return a delayed external sequence of adjacent. yeah, right.
-    auto delay_get_adjacent(size_t n){
+    auto delay_get_adjacent(size_t n) const {
         return ChunkSequenceOps::delayed::cut<weighted_edge>(this->edges, this->degree_scan[n], this->degree_scan[n+1]);
     }
 

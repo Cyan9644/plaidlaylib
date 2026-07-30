@@ -374,12 +374,19 @@ $(BINDIR)/chunkSizeCompare_%: benchmarks/chunk_size_compare.cpp $(UTIL_OBJS)
 	    $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
 # One-off exploratory benchmarks (old vs new delayed-filter windowing; zip
-# chain depth scaling). Deliberately NOT part of TEST_BINARIES/EXAMPLE_BINARIES
-# or the bench/bench-full recipes — build and run manually, same as bin/tempMain.
+# chain depth scaling; synthetic work-per-element scaling). Deliberately NOT
+# part of TEST_BINARIES/EXAMPLE_BINARIES or the bench/bench-full recipes —
+# build and run manually, same as bin/tempMain.
 $(BINDIR)/filterCompare: benchmarks/filter_compare.cpp $(UTIL_OBJS)
 	$(LINK)
 
 $(BINDIR)/zipDepthCompare: benchmarks/zip_depth_compare.cpp $(UTIL_OBJS)
+	$(LINK)
+
+# work_exponent_compare: dialable per-element/per-round synthetic "busy work"
+# knob (see benchmarks/work_exponent_bench.py), isolating work-per-element as
+# a free variable independent of any specific algorithm's semantics.
+$(BINDIR)/workExponentCompare: benchmarks/work_exponent_compare.cpp $(UTIL_OBJS)
 	$(LINK)
 
 # Run both benchmark sweeps and write timestamped images + CSVs under results/.
