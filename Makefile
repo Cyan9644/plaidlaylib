@@ -48,7 +48,8 @@ TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/samplesortStripedTest \
                  $(BINDIR)/externalRmatTest \
                  $(BINDIR)/indexedTest \
-                 $(BINDIR)/fftIndexedTest
+                 $(BINDIR)/fftIndexedTest \
+                 $(BINDIR)/serviceEmitTest
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
@@ -280,6 +281,19 @@ $(BINDIR)/indexedTest: ChunkSequence/tests/indexed_test.cpp $(UTIL_OBJS)
 # pipeline.  Includes chunk_fft.h (self-contained; the upstream FFT oracle is NOT
 # used here — the in-mem four-step is the reference), so no deps prerequisite.
 $(BINDIR)/fftIndexedTest: ChunkSequence/tests/fft_indexed_transpose_test.cpp $(UTIL_OBJS)
+	$(LINK)
+
+# serviceSpike: throwaway validation of the demand-driven IO service's concurrency
+# model (shared coalescing cache + blocking gets under parallel_for). NOT in
+# TEST_BINARIES (not a pass/fail gate for `make test`); build/run by hand.
+$(BINDIR)/serviceSpike: ChunkSequence/tests/service_spike.cpp $(UTIL_OBJS)
+	$(LINK)
+
+# serviceEmitTest: the demand-driven IO service (indexed_io_service.h) + emit
+# primitive (chunk_emit.h).  KMP three-way differential (windowed vs service vs DRAM
+# reference) + an irregular gather differential.  Includes examples/chunk_kmp.h
+# (header-only, no upstream baseline), so no deps/parlaylib-examples prerequisite.
+$(BINDIR)/serviceEmitTest: ChunkSequence/tests/service_emit_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
 # ── examples ───────────────────────────────────────────────────────────────────

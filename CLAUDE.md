@@ -76,6 +76,8 @@ ChunkSequence/
   chunk_find_if.h             ChunkFindIf     (fold on RemoveWorker)
   chunk_partition.h           ChunkPartition  (single-reader/writer k-way split; per-worker scatter)
   chunk_indexed.h             IndexedChunkSeq  (direct-indexing get(i)/set(i) view; per-worker io_uring ring + block cache that coalesces element accesses into whole-block reads/writes; alloc_indexed)
+  indexed_io_service.h        IndexedIoService (process-global demand-driven READ service: shared sharded coalescing block cache + io_uring thread pool; ServiceView<T> per-worker cursor for free in[g] indexing at streaming parity — the shared-cache alternative to IndexedChunkSeq's per-worker private caches)
+  chunk_emit.h                ChunkEmitService (sequence-decoupled emit task: body indexes freely via ServiceView, emits variable output; dense-packed on DensePack)
   n_reader.h                  NReader / NRemoveWorker (co-indexed lockstep read of N parallel chunk_seqs)
   helper/heaptree.h           vendored parlay heap_tree rank search (cache-efficient pivot lookup for sampling)
   chunk_delayed.h             delayed (fused) recursive-node layer: delay/tabulate/map/scan/zip + reduce/force/filter
@@ -87,10 +89,10 @@ ChunkSequence/
   tests/                      correctness tests (iota, map, reduce, filter, scan, combined, delayed,
                               flatTabulate, flatMap, findIf, histogram, kmp, rabinKarp, scalar,
                               bigintAdd, convexHull, partition, segmentedReduce, dc3, bigintMul, indexed,
-                              fftIndexedTranspose)
+                              fftIndexedTranspose, serviceEmit)
   examples/                   demonstration programs (→ primesExample …); dual-purpose
     primes.cpp                out-of-core prime sieve on ChunkFlatTabulate
-    chunk_kmp.h  kmp.cpp      out-of-core KMP search (ChunkKmp, a producer on DensePack)
+    chunk_kmp.h  kmp.cpp      out-of-core KMP search (ChunkKmp on DensePack; a free-indexing KMP on IndexedIoService/chunk_emit.h is written inline by serviceEmitTest)
     chunk_rabin_karp.h  rabin_karp.cpp  out-of-core Rabin-Karp search (same shape as KMP)
     chunk_convex_hull.h  convex_hull.cpp  out-of-core upper convex hull (UpperHull, recursive quickhull on ChunkReduce+ChunkPartition)
     chunk_fft.h  fft.cpp  fft_transpose.cpp  out-of-core 1-D four-step FFT (transpose-free vs on-disk transpose)
@@ -197,7 +199,11 @@ to `warnings.txt` in the results dir, next to the fstrim outcome note).
   cross-chunk matches caught via batch-local overlap — chunk k+1's head is
   already in DRAM in the same batch; one small sync read per batch seam
   (requires pattern ≤ one chunk).  It lives in `examples/` rather than the
-  library proper.  Baseline: upstream `knuth_morris_pratt.h` on the same text
+  library proper.  `serviceEmitTest` additionally expresses this same search
+  **inline** on the demand-driven `IndexedIoService` — a `ChunkEmitService` call
+  whose per-chunk body is a plain global-indexed `in[g]` KMP scan (no halo, no
+  two-segment `at()` seam), cross-checked against `ChunkKmp` and a DRAM reference
+  (and shown matching/beating the windowed path).  Baseline: upstream `knuth_morris_pratt.h` on the same text
   (~n-byte footprint).  Emits
   `CSV,n,m,build_s,search_s,inmem_search_s,count,throughput_gb_s`; the sweep
   plots `search_s` (text build excluded from both series).
@@ -361,11 +367,49 @@ Primitive mapping:
 | `ChunkFlatTabulate` | `DensePack` (generator source, `f(start,end) -> sequence<R>`) |
 | `ChunkPack` / `pack_if` / `pack_value` | `DensePack` (boolean-array / chunk-parallel-flag / predicate gate; `chunk_pack.h`) |
 | `ChunkFlatMap`      | `DensePackStream` (`flatten∘map`, `f(data,n,start,halo,halo_n)`; optional forward **halo** for boundary-crossing maps; `chunk_flat_map.h`) |
+| `ChunkEmitService`  | `DensePack` producer whose body indexes the input **freely** via `ServiceView` (global `IndexedIoService`; `chunk_emit.h` + `indexed_io_service.h`) instead of a pre-read window — plain imperative `in[g]` for any g (crosses chunk seams, data-dependent), emitting variable output; **reads-only**, one shared coalescing cache, streaming parity via the per-worker cursor |
 | `ChunkHistogramByIndex` / `ChunkHistogramByKey` | `RemoveWorker` (per-worker bucket-count fold; `chunk_histogram_by_index.h`) |
 | `ChunkPartition`    | own single-reader + single-writer pass (`chunk_partition.h`); k-way split with a `PARTITION_DROP` sentinel |
 | `IndexedChunkSeq`   | own per-worker `Session` (private io_uring ring + LRU block cache) over a materialized index-ordered `chunk_seq` (`chunk_indexed.h`); direct `get(i)`/`set(i,v)` for imperative index-based code (matrix transpose, windowed steps) — the cache line is one O_DIRECT block, so it coalesces accesses sharing a block; write-back is whole-block, so writes must be **block-disjoint across workers** (same discipline as partition) |
 | `NReader` / `NRemoveWorker` | own N-way co-indexed reader (`n_reader.h`); lockstep read of N parallel `chunk_seq`s (e.g. values + bucket-ids for count-sort) |
 | `tabulate` / `iota` | own writer pipeline (`chunk_seq.h`) — no reader stage to unify |
+
+### Demand-driven random reads  (`indexed_io_service.h` / `chunk_emit.h`)
+
+`IndexedIoService` is a **process-global singleton** that lets many parlay workers
+index into a materialized `chunk_seq` with free `a.get(i)` while keeping the
+throughput of the push-based streaming reader.  Unlike `IndexedChunkSeq` (per-worker
+*private* ring + cache: a worker blocks on its own miss, depth ≈ #workers, no
+cross-worker sharing), the service routes every request through **one shared,
+coalescing block cache** backed by an io_uring thread pool (the `ChunkSequenceReader`
+shape, pulled on demand): concurrent requests for the same block share a **single**
+read, and the thread pool keeps a deep queue across all drives.
+
+- **Overlap model.** parlay exposes no user-facing cooperative yield
+  (`fork_join_scheduler` hides `wait_until`), so a `get(i)` **miss blocks that worker**
+  on the block's condition variable while the *other* workers keep running their
+  tasks.  Under a granularity-1 `parallel_for` that gives in-flight depth ≈ #workers,
+  which with the shared cache + CHUNK-sized blocks reaches streaming parity on
+  sequential scans.
+- **The cursor is mandatory.** A shard-locked hash probe *per element* is ~30× too
+  slow; `ServiceView<T>` caches the current block's bytes + element range so a
+  sequential run does one probe *per block* (validated: `service_spike.cpp` hit 0.95×
+  the streaming reader and 30.7× over naive per-element `get()`, with perfect
+  coalescing; `serviceEmitTest` shows `ChunkKmpService` matching/beating the windowed
+  `ChunkKmp`).  The cursor **pins** its block against eviction.
+- **Reads only** (no write-back): outputs are collected densely by `DensePack`, not
+  in-place.  The block-disjoint-write discipline that `IndexedChunkSeq` needs
+  therefore does **not** apply here.  Roles: `IndexedChunkSeq` for imperative
+  reads+writes with per-worker locality (tiled transpose); `IndexedIoService` for
+  irregular/shared reads with streaming-depth overlap.
+- `ChunkEmitService` (`chunk_emit.h`) is the emit primitive on top: run a body once
+  per input chunk over a `ServiceView` and dense-pack the emitted runs — the
+  sequence-decoupled "parallel-for that indexes freely and emits variable output".
+  KMP on the service is written **inline** in `serviceEmitTest` (deliberately not a
+  bespoke `ChunkKmp`-style wrapper): a `ChunkEmitService` call whose per-chunk body is
+  a plain `in[g]` KMP scan (no halo, no two-segment `at()` seam), cross-checked against
+  the windowed `ChunkKmp` and a DRAM reference, plus an irregular gather vs a DRAM
+  gather.
 
 `ChunkSequenceOps::ChunkSegmentedReduce` is also exposed per-vertex on CSR
 graphs (`ChunkSequence/ExternalGraph/external_compressed_sparse_row.h`) as
