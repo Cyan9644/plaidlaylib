@@ -7,6 +7,7 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <condition_variable>
 #include <memory>
 #include <fcntl.h>
 #include <liburing.h>
@@ -262,6 +263,243 @@ private:
 
         self->active_threads--;
         if (self->active_threads == 0) self->Close();
+    }
+};
+
+/**
+ * Long-lived counterpart to ChunkSequenceReader<T>: opens fds and spawns
+ * worker threads (each initializing its io_uring ring) ONCE, then replays
+ * the SAME round-robin chunk list across many "rounds" instead of tearing
+ * everything down after a single pass.
+ *
+ * Built for fixed-point-iteration callers (e.g. external_bellman_ford_fast,
+ * ChunkSequence/examples/external/external_bellman_ford.h) that re-read an
+ * unchanged chunk_seq many times: on WSL2, io_uring ring teardown frees its
+ * RLIMIT_MEMLOCK charge asynchronously (see InitIoUringWithRetry in
+ * utils/file_utils.h), so tearing down and rebuilding rings every round can
+ * burn real wall-clock time retrying -ENOMEM. Keeping the rings (and worker
+ * threads, and open fds) alive across rounds avoids that entirely.
+ *
+ * Does NOT support a different chunk list per round -- every StartRound()
+ * replays the exact list fixed at Start(). A caller whose read plan changes
+ * between calls must use ChunkSequenceReader instead. At most one round may
+ * be in flight at a time (StartRound() must not be called again until the
+ * previous round's TotalReads() completions have all been drained via
+ * Poll()); callers driving this synchronously (one round fully finishes
+ * before the next starts) satisfy this trivially.
+ *
+ * @tparam T Element type stored in each chunk.
+ */
+template<typename T>
+class PersistentChunkSequenceReader {
+public:
+    using BufferData = typename ChunkSequenceReader<T>::BufferData;
+
+    // Same process-wide, per-T singleton pool as ChunkSequenceReader<T>::Allocator
+    // (see that class's comment) -- already persistent across reader instances,
+    // so no new persistence design is needed for buffers specifically.
+    typename ChunkSequenceReader<T>::Allocator allocator;
+
+    PersistentChunkSequenceReader() = default;
+    PersistentChunkSequenceReader(const PersistentChunkSequenceReader&) = delete;
+    PersistentChunkSequenceReader& operator=(const PersistentChunkSequenceReader&) = delete;
+
+    ~PersistentChunkSequenceReader() { Shutdown(); }
+
+    /**
+     * Called ONCE. Opens one shared fd per distinct file, fixes each
+     * thread's round-robin chunk sub-list, and spawns num_threads persistent
+     * worker threads -- each inits its io_uring ring here, then blocks
+     * waiting for the first StartRound().
+     */
+    void Start(const chunk_seq& seq, size_t num_threads = 10, size_t queue_depth = 32,
+               size_t max_requests = 16, size_t buf_queue_sz = 128) {
+        CHECK(num_threads > 0);
+        buffer_queue.SetSizeLimit(buf_queue_sz);
+        total_reads = seq.chunks.size();
+
+        // Same fd-sharing scheme as ChunkSequenceReader::Start: one read-only
+        // fd per distinct file, shared read-only across all worker threads.
+        for (const chunk& c : seq.chunks) {
+            if (shared_fds.find(c.filename) == shared_fds.end()) {
+                int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+                SYSCALL(fd);
+                shared_fds[c.filename] = fd;
+            }
+        }
+
+        for (size_t t = 0; t < num_threads; t++) {
+            std::vector<chunk> work;
+            for (size_t i = t; i < seq.chunks.size(); i += num_threads)
+                work.push_back(seq.chunks[i]);
+            worker_threads.push_back(
+                std::make_unique<std::thread>(Worker, this, std::move(work),
+                                              queue_depth, max_requests));
+        }
+    }
+
+    // Total reads issued by one full round (sum of every thread's fixed work
+    // list); callers poll exactly this many BufferData per round.
+    size_t TotalReads() const { return total_reads; }
+
+    // Begin a new round: bump the round generation and wake every worker to
+    // replay its fixed chunk list. O(1), no I/O, no thread/ring churn.
+    void StartRound() {
+        {
+            std::lock_guard<std::mutex> l(mu);
+            generation++;
+        }
+        cv.notify_all();
+    }
+
+    /**
+     * Get the next completed chunk of the current round. Blocks until one is
+     * available or Shutdown() has been called. Returns (nullptr, 0, 0) once
+     * shut down.
+     */
+    BufferData Poll() {
+        static BufferData nil{nullptr, 0, 0};
+        return buffer_queue.Poll(nil).first;
+    }
+
+    // Joins all worker threads (each exits its wait loop, tears down its
+    // ring, and returns) and closes shared fds. Idempotent; also invoked by
+    // the destructor.
+    void Shutdown() {
+        {
+            std::lock_guard<std::mutex> l(mu);
+            if (shutting_down) return;
+            shutting_down = true;
+        }
+        cv.notify_all();
+        for (auto& t : worker_threads)
+            if (t->joinable()) t->join();
+        for (auto& [name, fd] : shared_fds) close(fd);
+        shared_fds.clear();
+    }
+
+private:
+    std::mutex mu;
+    std::condition_variable cv;
+    uint64_t generation = 0;
+    bool shutting_down = false;
+
+    std::vector<std::unique_ptr<std::thread>> worker_threads;
+    // Never Close()d/Reopen()d between rounds -- a round boundary is purely
+    // "the caller has drained TotalReads() completions", not a queue state
+    // transition. Only Shutdown() ever closes it (via thread exit, mirroring
+    // ChunkSequenceReader's active_threads-reaches-zero -> Close() pattern
+    // is unnecessary here since callers stop polling once they've drained
+    // TotalReads() themselves).
+    SimpleQueue<BufferData> buffer_queue;
+    // One read-only fd per distinct file, opened once in Start(), shared
+    // across all workers and all rounds, closed once in Shutdown().
+    std::map<std::string, int> shared_fds;
+    size_t total_reads = 0;
+
+    struct ReadRequest {
+        T* data;
+        size_t chunk_index;
+        size_t used_bytes;   // actual data bytes in this chunk (may be < CHUNK_SIZE)
+    };
+
+    static void Worker(PersistentChunkSequenceReader* self, std::vector<chunk> work,
+                       size_t queue_depth, size_t max_requests) {
+        struct io_uring ring;
+        SYSCALL(InitIoUringWithRetry(queue_depth, &ring, IORING_SETUP_SINGLE_ISSUER));
+
+        // fds are opened once in Start() and shared read-only across workers
+        // and rounds; the map is not mutated after Start(), so lookups here
+        // need no lock.
+        auto get_fd = [&](const std::string& name) -> int {
+            return self->shared_fds.at(name);
+        };
+
+        auto* pool = (ReadRequest*)malloc(max_requests * sizeof(ReadRequest));
+        CHECK(pool != nullptr) << "PersistentChunkSequenceReader: allocation failed";
+
+        uint64_t local_gen = 0;
+        while (true) {
+            {
+                std::unique_lock<std::mutex> l(self->mu);
+                self->cv.wait(l, [&] {
+                    return self->generation > local_gen || self->shutting_down;
+                });
+                if (self->shutting_down) break;
+                local_gen = self->generation;
+            }
+
+            // One full pass over this thread's fixed work list -- same
+            // submit/reap logic as ChunkSequenceReader::Worker, replayed
+            // fresh every round against the same, already-open ring.
+            std::vector<ReadRequest*> free_pool;
+            free_pool.reserve(max_requests);
+            for (size_t i = 0; i < max_requests; i++) free_pool.push_back(pool + i);
+
+            std::deque<chunk> pending(work.begin(), work.end());
+            size_t outstanding = 0;
+            size_t completed = 0;
+            const size_t total = work.size();
+
+            while (completed < total) {
+                // Non-blocking reap of completed reads.
+                while (outstanding > 0) {
+                    struct io_uring_cqe* cqe;
+                    if (io_uring_peek_cqe(&ring, &cqe) != 0) break;
+                    SYSCALL(cqe->res);
+                    auto* req = (ReadRequest*)io_uring_cqe_get_data(cqe);
+                    self->buffer_queue.Push({req->data, req->used_bytes / sizeof(T), req->chunk_index});
+                    free_pool.push_back(req);
+                    outstanding--;
+                    completed++;
+                    io_uring_cqe_seen(&ring, cqe);
+                }
+
+                // Submit new reads while we have capacity and pending chunks.
+                bool submitted = false;
+                while (!free_pool.empty() && !pending.empty() && outstanding < max_requests) {
+                    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring);
+                    if (sqe == nullptr) break;
+
+                    const chunk c = pending.front();   // copy before pop to avoid dangling ref
+                    pending.pop_front();
+
+                    auto* req = free_pool.back();
+                    free_pool.pop_back();
+                    req->data = self->allocator.Alloc();
+                    req->chunk_index = c.index;
+                    req->used_bytes = c.used;
+
+                    // O_DIRECT requires the read size to be page-aligned.
+                    size_t read_size = AlignUp(c.used);
+                    io_uring_prep_read(sqe, get_fd(c.filename), req->data, read_size, c.begin_addr);
+                    io_uring_sqe_set_data(sqe, req);
+                    outstanding++;
+                    submitted = true;
+                }
+
+                if (submitted) SYSCALL(io_uring_submit(&ring));
+
+                // If the ring is full and there's nothing more to submit,
+                // wait for at least one completion before looping.
+                if (outstanding > 0 && (pending.empty() || free_pool.empty()) && !submitted) {
+                    struct io_uring_cqe* cqe;
+                    SYSCALL(io_uring_wait_cqe(&ring, &cqe));
+                    SYSCALL(cqe->res);
+                    auto* req = (ReadRequest*)io_uring_cqe_get_data(cqe);
+                    self->buffer_queue.Push({req->data, req->used_bytes / sizeof(T), req->chunk_index});
+                    free_pool.push_back(req);
+                    outstanding--;
+                    completed++;
+                    io_uring_cqe_seen(&ring, cqe);
+                }
+            }
+            // Round done; loop back to wait for the next StartRound().
+        }
+
+        io_uring_queue_exit(&ring);
+        free(pool);
+        // Shared fds are closed once in Shutdown(), not per worker.
     }
 };
 

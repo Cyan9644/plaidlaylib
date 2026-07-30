@@ -14,6 +14,7 @@
 #include <string>
 #include <functional>
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <utility>
@@ -608,6 +609,62 @@ static void run_sequential_context() {
     cleanup_prefix("iota"); cleanup_prefix("seqctxB");
 }
 
+// ── for_each_chunk / segmented_reduce with a reused PersistentReadContext ────
+// Covers the Bellman-Ford-motivated path (external_bellman_ford_fast): one
+// persistent reader (io_uring rings + worker threads, built once) driving
+// several rounds over the SAME physical read plan, where only a captured
+// value changes between rounds -- mirrors Bellman-Ford's `d` mutating while
+// graph.edges/degree_scan stay fixed. Checks results against a serial
+// reference on every round, proving the reused reader doesn't misroute or
+// stale-cache buffers across rounds.
+static void run_persistent_context() {
+    const size_t n = 2 * ELEMS_PER_CHUNK + 3;
+    std::cout << "  persistent context  n=" << n << "\n";
+
+    chunk_seq A = ChunkSequenceOps::iota(n);
+
+    // `offset` is captured by reference, exactly like Bellman-Ford's `d`:
+    // the map node is built once and reused; only offset's VALUE changes
+    // between rounds, not per_elem's structure/read plan.
+    uint64_t offset = 0;
+    auto per_elem = cd::map(cd::delay(A), [&](uint64_t x) { return x + offset; });
+    cd::PersistentReadContext<decltype(per_elem)> ctx(per_elem);
+
+    // for_each_chunk(ctx): sum every element across several rounds.
+    for (uint64_t round = 0; round < 3; round++) {
+        offset = round * 100;
+        std::atomic<uint64_t> got_sum{0};
+        cd::for_each_chunk(per_elem, [&](size_t, size_t cnt, auto it) {
+            uint64_t local = 0;
+            for (size_t k = 0; k < cnt; k++) { local += *it; ++it; }
+            got_sum += local;
+        }, ctx);
+        const uint64_t want_sum = (n * (n - 1) / 2) + offset * n;
+        expect_scalar("persistent for_each_chunk sum round " + std::to_string(round),
+                      got_sum.load(), want_sum);
+    }
+
+    // segmented_reduce(ctx): non-chunk-aligned segments (one straddles the
+    // physical chunk 1/2 boundary), across rounds with different offsets.
+    const std::vector<size_t> bounds_v = {0, 1000, ELEMS_PER_CHUNK + 7,
+                                          2 * ELEMS_PER_CHUNK, n};
+    const parlay::sequence<size_t> bounds(bounds_v.begin(), bounds_v.end());
+    for (uint64_t round = 0; round < 2; round++) {
+        offset = 5 + round * 17;
+        auto out = cd::segmented_reduce(per_elem, bounds, SumMonoid{}, ctx);
+        bool ok = out.size() == bounds.size() - 1;
+        for (size_t s = 0; ok && s < out.size(); s++) {
+            const size_t lo = bounds_v[s], hi = bounds_v[s + 1];
+            uint64_t want = 0;
+            for (size_t i = lo; i < hi; i++) want += (uint64_t)i + offset;
+            ok = ok && out[s] == want;
+        }
+        report("persistent segmented_reduce round " + std::to_string(round), ok);
+    }
+
+    cleanup_prefix("iota");
+}
+
 // ── main ─────────────────────────────────────────────────────────────────────
 int main(int argc, char* argv[]) {
     ParseGlobalArguments(argc, argv);
@@ -627,6 +684,7 @@ int main(int argc, char* argv[]) {
     run_zip_compose();
     run_bigint_add();
     run_sequential_context();
+    run_persistent_context();
 
     std::cout << "\n" << g_pass << " passed, " << g_fail << " failed.  "
               << (g_fail == 0 ? "ALL PASS" : "SOME FAILED") << "\n";

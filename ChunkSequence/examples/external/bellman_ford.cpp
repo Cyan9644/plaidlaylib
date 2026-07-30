@@ -263,13 +263,14 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
 
     bool ext_converged = false;
     size_t reachable = 0;
+    size_t rounds = 0;
     double op_s = 0, gb_s = 0;
     parlay::sequence<long double> d_ext;
     if (per_vertex_ok) {
         std::cout << "Running out-of-core Bellman-Ford..." << std::flush;
         trace_mark(("op_start_" + label).c_str());
         t0 = Clock::now();
-        d_ext = external_bellman_ford(graph, start);
+        d_ext = external_bellman_ford(graph, start, &rounds);
         op_s = elapsed(t0);
         trace_mark(("op_end_" + label).c_str());
         std::cout << " done\n";
@@ -282,7 +283,10 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
                 return unreached(dv) ? 0 : 1;
             }));
 
-        gb_s = to_gb(edge_bytes) / op_s;
+        // edge_bytes is ONE round's worth; the algorithm relaxes every edge
+        // once per round, so the bytes actually moved off disk are
+        // edge_bytes * rounds, not edge_bytes alone.
+        gb_s = to_gb(edge_bytes) * (double)rounds / op_s;
         std::cout << reachable << "/" << n << " vertices reachable   "
                   << std::setprecision(4) << op_s << "s   "
                   << std::setprecision(2) << gb_s << " GB/s (edges read)\n";
@@ -304,7 +308,8 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
     std::cout << "Running out-of-core Bellman-Ford (fast)..." << std::flush;
     trace_mark(("fast_op_start_" + label).c_str());
     t0 = Clock::now();
-    parlay::sequence<long double> d_fast = external_bellman_ford_fast(graph, start);
+    size_t fast_rounds = 0;
+    parlay::sequence<long double> d_fast = external_bellman_ford_fast(graph, start, &fast_rounds);
     const double fast_op_s = elapsed(t0);
     trace_mark(("fast_op_end_" + label).c_str());
     std::cout << " done\n";
@@ -316,7 +321,9 @@ static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) 
             return unreached(dv) ? 0 : 1;
         }));
 
-    const double fast_gb_s = to_gb(edge_bytes) / fast_op_s;
+    // Same correction as gb_s above: fast_op_s covers fast_rounds full
+    // streaming passes over the edges, not just one.
+    const double fast_gb_s = to_gb(edge_bytes) * (double)fast_rounds / fast_op_s;
     std::cout << fast_reachable << "/" << n << " vertices reachable   "
               << std::setprecision(4) << fast_op_s << "s   "
               << std::setprecision(2) << fast_gb_s << " GB/s (edges read)\n";

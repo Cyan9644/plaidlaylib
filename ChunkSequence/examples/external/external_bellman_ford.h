@@ -95,7 +95,8 @@
 
 
 //this function accepts a transposed graph
-parlay::sequence<weight> external_bellman_ford(chunk_csr& graph, vertex start){
+parlay::sequence<weight> external_bellman_ford(chunk_csr& graph, vertex start,
+                                                size_t* rounds_out = nullptr){
 
 auto N = graph.degree_scan;
 //you can't materialize the edge list, which is the whole point
@@ -148,11 +149,13 @@ pass[start] = 0;
 
 
 if(pass == d){
+  if(rounds_out) *rounds_out = i + 1;
   return d;
 }
 d= std::move(pass);
 }
 
+if(rounds_out) *rounds_out = n;
 return parlay::sequence<weight>();
 
 
@@ -176,7 +179,18 @@ return parlay::sequence<weight>();
 //there are at most 2 vertices that spill over per chunk, so the size of the total boundary array is at most ~2 * #chunks
 //which means that it's O(#chunks) which is smaller than the edge sequence size by a factor of elements per chunk, which is ~large
 //maybe like 32000 times
-parlay::sequence<weight> external_bellman_ford_fast(chunk_csr& graph, vertex start){
+//Every round used to build its own ChunkSequenceReader (io_uring rings +
+//reader threads + fd opens) from scratch via segmented_reduce/for_each_chunk,
+//tearing it all down again at the end of the round -- expensive in general,
+//and on WSL2 specifically it can hit io_uring's asynchronous RLIMIT_MEMLOCK
+//reclaim (InitIoUringWithRetry, utils/file_utils.h) on every round's ring
+//creation, burning real wall-clock time with neither disk nor CPU active.
+//graph.edges/graph.degree_scan never change across rounds (only `d`'s
+//captured values do), so per_edge's physical read plan is identical every
+//round -- build ONE PersistentReadContext before the loop and reuse it for
+//every round's segmented_reduce call instead.
+parlay::sequence<weight> external_bellman_ford_fast(chunk_csr& graph, vertex start,
+                                                      size_t* rounds_out = nullptr){
 
 size_t n = graph.degree_scan.size() - 1;
 auto max_size = std::numeric_limits<long double>::max();
@@ -189,21 +203,32 @@ struct MinDistMonoid {
     long double operator()(long double a, long double b) const { return std::min(a, b); }
 };
 
-for(size_t i = 0; i < n; i++){
-
+//`d` is captured BY REFERENCE, so per_edge itself needs to be built only
+//ONCE: reassigning the *variable* `d` below (d = std::move(pass)) is visible
+//through the reference on every subsequent round without rebuilding the
+//node.  (Building a fresh per_edge each round would also give it a distinct
+//closure type from round to round's -- lambda types are unique per
+//lexical lambda-expression -- which would defeat reusing one `ctx`.)
 auto per_edge = ChunkSequenceOps::delayed::map(
     ChunkSequenceOps::delayed::delay<weighted_edge>(graph.edges),
     [&](weighted_edge e) { return d[e.connecting_vertex] + e.edge_weight; });
-auto pass = ChunkSequenceOps::delayed::segmented_reduce(per_edge, graph.degree_scan, MinDistMonoid{});
+ChunkSequenceOps::delayed::PersistentReadContext<decltype(per_edge)> ctx(per_edge);
+
+size_t i = 0;
+for(; i < n; i++){
+
+auto pass = ChunkSequenceOps::delayed::segmented_reduce(per_edge, graph.degree_scan, MinDistMonoid{}, ctx);
 
 pass[start] = 0;
 
 if(pass == d){
+  if(rounds_out) *rounds_out = i + 1;
   return d;
 }
 d = std::move(pass);
 }
 
+if(rounds_out) *rounds_out = i;
 return parlay::sequence<weight>();
 
 }

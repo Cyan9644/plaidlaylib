@@ -541,6 +541,44 @@ void for_each_window(const D& d, WindowBody&& wbody, size_t reader_threads = 8) 
     }
 }
 
+namespace detail {
+// Shared by for_each_chunk's overloads and PersistentReadContext's
+// constructor: plan every chunk of `d` up front (metadata only, no I/O) into
+// the deduped-reads + per-chunk buffer/slot bookkeeping for_each_chunk needs.
+template<class D>
+struct PlannedChunks {
+    std::vector<chunk>    refs;      // .index = global read-id
+    std::vector<uint32_t> owner;     // read-id -> chunk
+    std::vector<size_t>   first;     // chunk -> first read-id
+    std::vector<size_t>   remaining; // reads not yet landed
+    std::vector<std::vector<char*>>    cbufs;   // per-chunk buffers (slot order)
+    std::vector<std::vector<uint32_t>> cslots;  // per-chunk leaf_slots
+};
+
+template<class D>
+PlannedChunks<D> plan_chunks(const D& d, size_t nc) {
+    PlannedChunks<D> pc;
+    pc.first.resize(nc);
+    pc.remaining.resize(nc);
+    pc.cbufs.resize(nc);
+    pc.cslots.resize(nc);
+    for (size_t ci = 0; ci < nc; ci++) {
+        Planner pl;
+        d.plan(ci, pl);
+        pc.first[ci]     = pc.refs.size();
+        pc.remaining[ci] = pl.unique_reads.size();
+        pc.cbufs[ci].assign(pl.unique_reads.size(), nullptr);
+        pc.cslots[ci] = std::move(pl.leaf_slots);
+        for (chunk& c : pl.unique_reads) {
+            c.index = pc.refs.size();
+            pc.refs.push_back(c);
+            pc.owner.push_back((uint32_t)ci);
+        }
+    }
+    return pc;
+}
+} // namespace detail
+
 // Streaming: one read pass over the whole sequence with per-chunk async release.
 // A dispatcher thread assembles chunks from the reader's out-of-order
 // completions and hands each finished chunk to a parlay worker, so body runs
@@ -560,25 +598,13 @@ void for_each_chunk(const D& d, Body&& body, size_t reader_threads = 10,
     if (compute_workers == 0) compute_workers = parlay::num_workers();
 
     // Plan every chunk up front (metadata only): deduped reads + per-chunk state.
-    std::vector<chunk>    refs;                            // .index = global read-id
-    std::vector<uint32_t> owner;                           // read-id -> chunk
-    std::vector<size_t>   first(nc);                       // chunk -> first read-id
-    std::vector<size_t>   remaining(nc);                   // reads not yet landed
-    std::vector<std::vector<char*>>    cbufs(nc);          // per-chunk buffers (slot order)
-    std::vector<std::vector<uint32_t>> cslots(nc);         // per-chunk leaf_slots
-    for (size_t ci = 0; ci < nc; ci++) {
-        Planner pl;
-        d.plan(ci, pl);
-        first[ci]     = refs.size();
-        remaining[ci] = pl.unique_reads.size();
-        cbufs[ci].assign(pl.unique_reads.size(), nullptr);
-        cslots[ci] = std::move(pl.leaf_slots);
-        for (chunk& c : pl.unique_reads) {
-            c.index = refs.size();
-            refs.push_back(c);
-            owner.push_back((uint32_t)ci);
-        }
-    }
+    auto pc = detail::plan_chunks(d, nc);
+    std::vector<chunk>&    refs      = pc.refs;
+    std::vector<uint32_t>& owner     = pc.owner;
+    std::vector<size_t>&   first     = pc.first;
+    std::vector<size_t>&   remaining = pc.remaining;
+    std::vector<std::vector<char*>>&    cbufs  = pc.cbufs;
+    std::vector<std::vector<uint32_t>>& cslots = pc.cslots;
     const size_t total = refs.size();
 
     auto run_chunk = [&](size_t ci) {
@@ -755,6 +781,142 @@ void sequential_for_each_chunk(const D& d, Body&& body) {
     sequential_for_each_chunk(d, ctx, std::forward<Body>(body));
 }
 
+// Reusable execution context for repeatedly running for_each_chunk /
+// segmented_reduce over the SAME physical read plan across many calls -- the
+// async-driver analogue of SequentialReadContext above, but for
+// for_each_chunk's ChunkSequenceReader/dispatcher-thread path instead of
+// sequential_for_each_chunk's blocking-pread path.
+//
+// Meant to be constructed ONCE outside a fixed-point iteration's round loop
+// (e.g. external_bellman_ford_fast, ChunkSequence/examples/external/
+// external_bellman_ford.h) and passed into every round's
+// for_each_chunk/segmented_reduce call, so the expensive part -- io_uring
+// rings, reader OS threads, and fd opens (see PersistentChunkSequenceReader,
+// chunk_seq_reader.h) -- is paid ONCE for the whole run instead of once per
+// round.
+//
+// CONTRACT (same-shape reads): every call sharing one PersistentReadContext<D>
+// must plan to the exact same physical reads, in the same order, as the `d`
+// passed to the constructor -- same source chunk_seq(s), same chunk
+// count/order.  The context plans ONCE (at construction) and its
+// PersistentChunkSequenceReader replays that fixed plan every round; only
+// `d`'s runtime VALUES (e.g. a captured distance array) may differ between
+// calls, not its STRUCTURE.  This holds for Bellman-Ford: `graph.edges` /
+// `graph.degree_scan` never change across rounds, only the map lambda's
+// captured `d` does, so per_edge's plan (chunks read from graph.edges) is
+// identical every round.  A caller whose read plan genuinely differs between
+// calls must NOT share a context -- use the plain (non-context) overloads.
+// The context-aware for_each_chunk overload below CHECKs this contract on
+// every call (fail loud rather than silently misroute completions).
+//
+// CONCURRENCY: at most one call into a shared context may be in flight at a
+// time (mirrors PersistentChunkSequenceReader's single-round-in-flight
+// requirement).  A fixed-point round loop is inherently sequential -- each
+// round's call fully returns before the next round starts -- so this holds
+// trivially and needs no extra synchronization on the caller side.
+//
+// LIFETIME: must outlive every for_each_chunk/segmented_reduce call that uses
+// it.  Non-copyable (owns threads/fds via its reader).
+template<class D>
+class PersistentReadContext {
+public:
+    explicit PersistentReadContext(const D& d, size_t reader_threads = 10,
+                                    size_t queue_depth = 32,
+                                    size_t max_requests = 16,
+                                    size_t buf_queue_sz = 128) {
+        const size_t nc = d.num_chunks();
+        auto pc = detail::plan_chunks(d, nc);
+        expected_reads = std::move(pc.refs);
+        chunk_seq rs;
+        rs.chunks = expected_reads;
+        if (!expected_reads.empty())
+            reader.Start(rs, reader_threads, queue_depth, max_requests, buf_queue_sz);
+    }
+
+    PersistentReadContext(const PersistentReadContext&) = delete;
+    PersistentReadContext& operator=(const PersistentReadContext&) = delete;
+    ~PersistentReadContext() = default;   // reader's dtor joins threads, closes fds
+
+    PersistentChunkSequenceReader<char> reader;
+    std::vector<chunk> expected_reads;    // captured at construction; validated every call
+};
+
+// Persistent-context overload: reuses ctx's already-running io_uring rings +
+// reader worker threads (see PersistentReadContext / PersistentChunkSequenceReader)
+// instead of building a fresh ChunkSequenceReader/reader-thread set for this
+// call.  `d` must plan to the SAME physical reads every call sharing `ctx`
+// (see PersistentReadContext's class doc above) -- validated via CHECK below.
+// The dispatcher thread and compute-worker pool are still spawned fresh each
+// call (cheap: no io_uring/fd setup); only ctx's reader persists across calls.
+// `compute_workers` has the same meaning as the plain overload.
+template<class D, class Body>
+void for_each_chunk(const D& d, Body&& body, PersistentReadContext<D>& ctx,
+                    size_t compute_workers = 0) {
+    const size_t nc = d.num_chunks();
+    if (nc == 0) return;
+    if (compute_workers == 0) compute_workers = parlay::num_workers();
+
+    auto pc = detail::plan_chunks(d, nc);
+    std::vector<chunk>&    refs      = pc.refs;
+    std::vector<uint32_t>& owner     = pc.owner;
+    std::vector<size_t>&   first     = pc.first;
+    std::vector<size_t>&   remaining = pc.remaining;
+    std::vector<std::vector<char*>>&    cbufs  = pc.cbufs;
+    std::vector<std::vector<uint32_t>>& cslots = pc.cslots;
+    const size_t total = refs.size();
+
+    CHECK(total == ctx.expected_reads.size())
+        << "PersistentReadContext: read plan changed between calls (expected "
+        << ctx.expected_reads.size() << " reads, got " << total << ")";
+    for (size_t k = 0; k < total; k++)
+        CHECK(refs[k].filename == ctx.expected_reads[k].filename &&
+              refs[k].begin_addr == ctx.expected_reads[k].begin_addr &&
+              refs[k].used == ctx.expected_reads[k].used)
+            << "PersistentReadContext: read plan diverged at read " << k
+            << " -- shared contexts require an identical physical read plan "
+               "on every call (see PersistentReadContext's class doc)";
+
+    auto run_chunk = [&](size_t ci) {
+        Resolver r{&cbufs[ci], &cslots[ci], 0};
+        auto it = d.build(ci, r);
+        body(ci, d.chunk_len(ci), it);
+    };
+
+    if (total == 0) {                                     // pure index: no I/O
+        parlay::parallel_for(0, nc, [&](size_t ci) { run_chunk(ci); }, 1);
+        return;
+    }
+
+    ctx.reader.StartRound();                              // cheap: no ring/thread/fd churn
+
+    SimpleQueue<size_t> ready;
+    ready.SetSizeLimit(FILTER_BATCH_SIZE);
+
+    std::thread dispatcher([&] {
+        for (size_t ci = 0; ci < nc; ci++)
+            if (remaining[ci] == 0) ready.Push(ci);
+        for (size_t done = 0; done < total; done++) {
+            auto [buf, n, rid] = ctx.reader.Poll(); (void)n;
+            CHECK(buf != nullptr) << "delayed: short read";
+            const size_t ci = owner[rid];
+            cbufs[ci][rid - first[ci]] = buf;
+            if (--remaining[ci] == 0) ready.Push(ci);
+        }
+        ready.Close();
+    });
+
+    parlay::parallel_for(0, compute_workers, [&](size_t) {
+        while (true) {
+            auto [ci, code] = ready.Poll((size_t)0);
+            if (code == QueueCode::FINISH) break;
+            run_chunk(ci);
+            for (char* p : cbufs[ci]) if (p) ctx.reader.allocator.Free(p);
+        }
+    }, 1);
+
+    dispatcher.join();
+}
+
 // ── terminals ────────────────────────────────────────────────────────────────
 
 // Per-chunk monoid reduction: sums[i] = reduction of chunk i.  Shared by reduce
@@ -800,22 +962,26 @@ auto scan(const D& d, Monoid m) {
     return std::pair{scan_node<D, Monoid>{d, m, offsets}, total};
 }
 
-// segmented_reduce: `bounds` (size num_segments+1, exclusive prefix over D's own
-// element indices, bounds[0]==0, bounds.back()==d.length()) partitions D into
-// contiguous segments; returns one R per segment, monoid-reduced over every
-// element in that segment.  One streaming pass (for_each_chunk) regardless of
-// how many segments there are or how many chunks a segment spans: each chunk
-// classifies every segment it touches as fully owned (no other chunk can touch
-// it -> written directly) or boundary (touches the chunk's first or last
-// element -> stashed per chunk index for an O(n_chunks) sequential merge
-// afterward, chaining through segments spanning many consecutive chunks).
-// Same mechanism as ChunkSegmentedReduce, generalized from a raw chunk_seq<T>
-// to any composed delayed node (so a preceding map/zip/etc. fuses into this
-// one pass instead of paying a separate read).
-template<class D, class Monoid>
+namespace detail {
+// segmented_reduce's shared body: `bounds` (size num_segments+1, exclusive
+// prefix over D's own element indices, bounds[0]==0, bounds.back()==d.length())
+// partitions D into contiguous segments; returns one R per segment,
+// monoid-reduced over every element in that segment.  One streaming pass
+// regardless of how many segments there are or how many chunks a segment
+// spans: each chunk classifies every segment it touches as fully owned (no
+// other chunk can touch it -> written directly) or boundary (touches the
+// chunk's first or last element -> stashed per chunk index for an
+// O(n_chunks) sequential merge afterward, chaining through segments spanning
+// many consecutive chunks).  Same mechanism as ChunkSegmentedReduce,
+// generalized from a raw chunk_seq<T> to any composed delayed node (so a
+// preceding map/zip/etc. fuses into this one pass instead of paying a
+// separate read).  `run_pass(body)` is either the plain-reader or the
+// persistent-context for_each_chunk call -- factored out so both
+// segmented_reduce overloads share this boundary-merge logic verbatim.
+template<class D, class Monoid, class RunPass>
 parlay::sequence<typename D::value_type>
-segmented_reduce(const D& d, const parlay::sequence<size_t>& bounds, Monoid m,
-                  size_t reader_threads = 10) {
+segmented_reduce_generic(const D& d, const parlay::sequence<size_t>& bounds, Monoid m,
+                          RunPass&& run_pass) {
     using R = typename D::value_type;
     const size_t nc = d.num_chunks();
     const size_t num_segments = bounds.size() - 1;
@@ -826,7 +992,7 @@ segmented_reduce(const D& d, const parlay::sequence<size_t>& bounds, Monoid m,
     parlay::sequence<R> out(num_segments, m.identity);
     std::vector<std::vector<std::pair<size_t, R>>> boundary(nc);
 
-    for_each_chunk(d, [&](size_t ci, size_t n, auto it) {
+    run_pass([&](size_t ci, size_t n, auto it) {
         if (n == 0) return;
         const size_t global_start = chunk_start[ci];
         const size_t global_end = global_start + n;
@@ -855,7 +1021,7 @@ segmented_reduce(const D& d, const parlay::sequence<size_t>& bounds, Monoid m,
             ++it;
         }
         finalize(cur_v, cur_val);
-    }, reader_threads);
+    });
 
     bool have_open = false;
     size_t open_v = 0;
@@ -875,6 +1041,28 @@ segmented_reduce(const D& d, const parlay::sequence<size_t>& bounds, Monoid m,
     if (have_open) out[open_v] = open_val;
 
     return out;
+}
+} // namespace detail
+
+template<class D, class Monoid>
+parlay::sequence<typename D::value_type>
+segmented_reduce(const D& d, const parlay::sequence<size_t>& bounds, Monoid m,
+                  size_t reader_threads = 10) {
+    return detail::segmented_reduce_generic(d, bounds, m, [&](auto&& body) {
+        for_each_chunk(d, std::forward<decltype(body)>(body), reader_threads);
+    });
+}
+
+// Persistent-context overload: see PersistentReadContext's class doc and the
+// context-aware for_each_chunk overload above for the reuse mechanism and its
+// same-read-plan contract.
+template<class D, class Monoid>
+parlay::sequence<typename D::value_type>
+segmented_reduce(const D& d, const parlay::sequence<size_t>& bounds, Monoid m,
+                  PersistentReadContext<D>& ctx) {
+    return detail::segmented_reduce_generic(d, bounds, m, [&](auto&& body) {
+        for_each_chunk(d, std::forward<decltype(body)>(body), ctx);
+    });
 }
 
 // force: materialize a delayed sequence to a real chunk_seq on SSD (one file per
