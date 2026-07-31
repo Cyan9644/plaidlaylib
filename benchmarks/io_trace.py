@@ -272,10 +272,20 @@ MARKER_KINDS = ["fast_op", "build", "op"]
 
 
 def split_marker(label):
-    """'op_start_primitives' -> ('op', 'start', 'primitives'); else None."""
+    """'op_start_primitives' -> ('op', 'start', 'primitives'); else None.
+
+    Also accepts the *bare* form the older single-algorithm examples emit
+    (bigint_add, bigint_mul, primes, kmp, rabin_karp, convex_hull all mark
+    plain 'op_start'/'build_end' with no per-algorithm suffix) -> that becomes
+    the 'main' label, so those markers are drawn/paired just like the suffixed
+    ones instead of being silently dropped for lacking a trailing '_<label>'.
+    """
     for kind in sorted(MARKER_KINDS, key=len, reverse=True):
         for edge in ("start", "end"):
-            prefix = f"{kind}_{edge}_"
+            stem = f"{kind}_{edge}"
+            if label == stem:
+                return kind, edge, "main"
+            prefix = stem + "_"
             if label.startswith(prefix):
                 return kind, edge, label[len(prefix):]
     return None
