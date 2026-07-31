@@ -30,6 +30,14 @@
 // measures all three against one another in one run, on the identical keys and
 // drives.
 //
+// Both chunk_seq contestants ((2) and (3)) run with disk_span = every drive,
+// so each bucket's shards spread across all of them instead of one bucket
+// pinning to one drive (see the disk_span doc in direct_samplesort.h /
+// bucketed_file_writer.h). Peter's (1) can't do this -- it isn't built on the
+// chunk_seq model -- so the (1)-vs-(2) substrate gap now also reflects that
+// striping, not substrate alone; (2) vs (3) stays apples-to-apples since both
+// stripe the same way.
+//
 // All three sort key_at(i) = parlay::hash64(i) for i in [0,n).  The keys are
 // distinct, so the sorted order is unique and every output must equal the same
 // reference sort (element-wise cross-check when the input fits the RAM budget).
@@ -233,7 +241,13 @@ int main(int argc, char* argv[]) {
   };
   sorters[1].sort = [&] {
     auto t0 = Clock::now();
-    direct_out = ChunkSequenceOps::direct_sample_sort<uint64_t>(direct_in);
+    // disk_span = every drive, matching sample_sort's own default below --
+    // Peter's can't do this (not on the chunk_seq model), so this keeps the
+    // two "ours" contestants apples-to-apples with each other even though
+    // neither is with Peter's anymore. See the disk_span doc in
+    // direct_samplesort.h / bucketed_file_writer.h.
+    direct_out = ChunkSequenceOps::direct_sample_sort<uint64_t>(
+        direct_in, std::less<>{}, "dss", GetSSDList().size());
     return elapsed(t0);
   };
   sorters[1].read_back = [&] {

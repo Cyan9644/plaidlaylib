@@ -28,6 +28,7 @@
 #include "ChunkSequence/chunk_pack.h"
 #include "ChunkSequence/examples/external/primitive_quicksort.h"
 #include "configs.h"
+#include "utils/file_utils.h"
 
 // CLAUDE'S ssPhaseTimer IS NO LONGER NECESSARY, USE ug PETER'S TIMER
 
@@ -67,8 +68,15 @@ struct SsPhaseTimer {
 };
 
 // samplesort implementation with primitives
+//
+// disk_span defaults to every drive (GetSSDList().size()), so count_sort's
+// bucketing spreads each bucket's shards across all drives instead of
+// pinning a whole bucket to one -- see count_sort's disk_span doc
+// (ExternalPrimitives/count_sort.h) and BucketWriter's (bucketed_file_writer.h).
+// Pass disk_span=1 explicitly to get the old single-file-per-bucket layout.
 template <typename T, typename Less = std::less<>>
-chunk_seq sample_sort(chunk_seq& seq, Less less1 = {}, size_t disk_span = 1) {
+chunk_seq sample_sort(chunk_seq& seq, Less less1 = {},
+                      size_t disk_span = GetSSDList().size()) {
   static std::atomic<size_t> ss_counter{0};
   const std::string tag = std::to_string(ss_counter++);
   SsPhaseTimer _pt(tag.c_str());
