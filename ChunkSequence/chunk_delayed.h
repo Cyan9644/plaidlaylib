@@ -1059,21 +1059,26 @@ auto scan(const D& d, Monoid m) {
 // inherent to not maintaining a separate index of match positions, and is the
 // same shape of trade-off cut_source already accepts for boundary-straddling
 // slices.
+
+//I had claude write this up, but let's try to actually understand what's going on here to make sure 
+//it implemented the logic I designed
 template<class D, class Pred>
 auto lazy_filter(const D& d, Pred pred) {
     const size_t nc = d.num_chunks();
-    std::vector<size_t> counts(nc);
+    std::vector<size_t> counts(nc); //this is the vector that will store the scans for later access
     for_each_chunk(d, [&](size_t ci, size_t n, auto it) {
         size_t c = 0;
         for (size_t j = 0; j < n; j++, ++it) if (pred(*it)) c++;
         counts[ci] = c;
-    });
+    });//for each chunk, get a counter that represents the number of surviving elements for that chunk
 
     auto offsets = std::make_shared<std::vector<size_t>>(nc + 1);
     size_t run = 0;
     for (size_t i = 0; i < nc; i++) { (*offsets)[i] = run; run += counts[i]; }
     (*offsets)[nc] = run;
+    //this is the scan array
 
+    //and we just return that. Huh.
     return filter_node<D, Pred>{d, pred, offsets, run};
 }
 

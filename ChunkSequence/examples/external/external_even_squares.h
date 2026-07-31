@@ -1,5 +1,6 @@
 #ifndef EXTERNAL_EVEN_SQUARES_H
 #define EXTERNAL_EVEN_SQUARES_H
+#include <optional>
 #include <utility>
 
 #include <parlay/primitives.h>
@@ -37,6 +38,14 @@ template<typename T>
 size_t sum_of_even_squares_parlay_delayed(parlay::sequence<T> seq){
 
   return parlay::delayed::reduce(parlay::delayed::map(parlay::delayed::filter(seq,[&](T i){ return i % 2 == 0 ? true : false;}), [&](T k){return k * k;}));
+}
+
+
+template<typename T>
+size_t sum_of_even_squares_parlay_actually_delayed(parlay::sequence<T> seq){
+  return parlay::delayed::reduce(parlay::delayed::filter_op(seq, [&](T i) -> std::optional<T> {
+    return (i % 2 == 0) ? std::optional<T>(i * i) : std::nullopt;
+  }));
 }
 
 template<typename T>

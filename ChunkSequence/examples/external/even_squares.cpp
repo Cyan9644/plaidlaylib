@@ -1,4 +1,4 @@
-// even_squaresExample — the four `external_even_squares.h` implementations of
+// even_squaresExample — the five `external_even_squares.h` implementations of
 // "sum of squares of the even elements" head-to-head on the same input:
 //
 //   sum_of_even_squares_eager   out-of-core, ChunkFilter (materializes
@@ -9,18 +9,23 @@
 //                                pass, zero writes.
 //   sum_of_even_squares_parlay_eager    in-memory parlay::filter+map+reduce.
 //   sum_of_even_squares_parlay_delayed  in-memory parlay::delayed
-//                                        filter+map+reduce.
+//                                        filter+map+reduce (parlay::delayed::filter
+//                                        + map, two delayed stages fused at reduce).
+//   sum_of_even_squares_parlay_actually_delayed  in-memory parlay::delayed
+//                                        filter_op: filter and square fused
+//                                        into a single predicate returning
+//                                        std::optional<T>, one delayed stage.
 //
-// All four run over the same values (value_at(i), masked to 16 bits so the
+// All five run over the same values (value_at(i), masked to 16 bits so the
 // summed result can't overflow size_t at any example-scale n) and must agree
 // exactly -- this is an integer sum, so the cross-check is exact equality,
 // not a tolerance compare. Exits non-zero on any mismatch.
 //
 // The two out-of-core methods share one input build (build_s); the eager
-// method is the only one of the four that writes to disk, so its
+// method is the only one of the five that writes to disk, so its
 // "even_squares_tmp" output is cleared (and the drives settled) before the
 // delayed method's timed region, matching the fairness discipline
-// bench_drives.h documents for samplesort_three_way. The two in-memory
+// bench_drives.h documents for samplesort_three_way. The three in-memory
 // baselines only run below a DRAM budget (EXAMPLE_INMEM_BUDGET_BYTES,
 // default half of physical RAM; ~24n bytes for a parlay::sequence<uint64_t>
 // plus the eager path's filter/map intermediates -- same cliff convention as
@@ -30,7 +35,7 @@
 //     n   element count (default 1e6)
 //
 // CSV line:
-//   CSV,n,build_s,eager_op_s,delay_op_s,inmem_eager_op_s,inmem_delay_op_s,result,eager_gb_s,delay_gb_s
+//   CSV,n,build_s,eager_op_s,delay_op_s,inmem_eager_op_s,inmem_delay_op_s,inmem_actually_delay_op_s,result,eager_gb_s,delay_gb_s
 //   throughput = input bytes (n * 8) / op_s; inmem_*_op_s blank past the
 //   DRAM budget.
 
@@ -116,8 +121,8 @@ int main(int argc, char* argv[]) {
     std::cout << " done (" << std::setprecision(4) << delay_op_s << "s, "
               << std::setprecision(2) << delay_gb_s << " GB/s)\n";
 
-    size_t inmem_eager_result = 0, inmem_delay_result = 0;
-    double inmem_eager_op_s = 0, inmem_delay_op_s = 0;
+    size_t inmem_eager_result = 0, inmem_delay_result = 0, inmem_actually_delay_result = 0;
+    double inmem_eager_op_s = 0, inmem_delay_op_s = 0, inmem_actually_delay_op_s = 0;
     if (inmem_ok) {
         std::cout << "Building " << n << "-element in-memory input..." << std::flush;
         parlay::sequence<uint64_t> mem_input = parlay::tabulate(n, value_at);
@@ -134,6 +139,12 @@ int main(int argc, char* argv[]) {
         inmem_delay_result = ChunkSequenceOps::sum_of_even_squares_parlay_delayed<uint64_t>(mem_input);
         inmem_delay_op_s = elapsed(t0);
         std::cout << " done (" << std::setprecision(4) << inmem_delay_op_s << "s)\n";
+
+        std::cout << "Running in-memory actually-delayed (filter_op)..." << std::flush;
+        t0 = Clock::now();
+        inmem_actually_delay_result = ChunkSequenceOps::sum_of_even_squares_parlay_actually_delayed<uint64_t>(mem_input);
+        inmem_actually_delay_op_s = elapsed(t0);
+        std::cout << " done (" << std::setprecision(4) << inmem_actually_delay_op_s << "s)\n";
     } else {
         std::cout << "in-memory baselines: skipped (n*24=" << to_gb(n * 24)
                   << " GB exceeds budget " << to_gb(budget) << " GB)\n";
@@ -154,6 +165,7 @@ int main(int argc, char* argv[]) {
     if (inmem_ok) {
         check("in-mem eager vs eager", inmem_eager_result, eager_result);
         check("in-mem delayed vs eager", inmem_delay_result, eager_result);
+        check("in-mem actually-delayed vs eager", inmem_actually_delay_result, eager_result);
     }
 
     std::cout << "sum of even squares = " << eager_result
@@ -164,6 +176,7 @@ int main(int argc, char* argv[]) {
               << ',' << f9(delay_op_s)
               << ',' << (inmem_ok ? f9(inmem_eager_op_s) : std::string())
               << ',' << (inmem_ok ? f9(inmem_delay_op_s) : std::string())
+              << ',' << (inmem_ok ? f9(inmem_actually_delay_op_s) : std::string())
               << ',' << eager_result
               << ',' << f9(eager_gb_s) << ',' << f9(delay_gb_s) << '\n';
 
