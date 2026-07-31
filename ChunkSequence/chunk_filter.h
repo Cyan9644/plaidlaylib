@@ -3,10 +3,9 @@
 
 #include <string>
 
-#include "parlay/sequence.h"
-
 #include "ChunkSequence/chunk_seq.h"
 #include "ChunkSequence/dense_pack.h"
+#include "parlay/sequence.h"
 
 namespace ChunkSequenceOps {
 
@@ -26,22 +25,21 @@ static constexpr size_t FILTER_BATCH_SIZE = DENSE_PACK_BATCH_SIZE;
  * @tparam T  Element type (must match the type stored in the chunk_seq).
  * @tparam F  Predicate type; must be callable as bool(T).
  */
-template<typename T, typename F>
-chunk_seq ChunkFilter(const chunk_seq& seq,
-                      const std::string& result_prefix,
+template <typename T, typename F>
+chunk_seq ChunkFilter(const chunk_seq& seq, const std::string& result_prefix,
                       F pred) {
-    if (seq.chunks.empty()) return {};
+  if (seq.chunks.empty()) return {};
 
-    return DensePackStream<T, T>(seq, result_prefix, /*halo=*/0,
-        [pred](const T* buf, size_t n, uint64_t /*gpos*/,
-               const T* /*halo*/, size_t /*halo_n*/) {
-            parlay::sequence<T> out;
-            for (size_t j = 0; j < n; j++)
-                if (pred(buf[j])) out.push_back(buf[j]);
-            return out;
-        });
+  return DensePackStream<T, T>(seq, result_prefix, /*halo=*/0,
+                               [pred](const T* buf, size_t n, uint64_t /*gpos*/,
+                                      const T* /*halo*/, size_t /*halo_n*/) {
+                                 parlay::sequence<T> out;
+                                 for (size_t j = 0; j < n; j++)
+                                   if (pred(buf[j])) out.push_back(buf[j]);
+                                 return out;
+                               });
 }
 
-} // namespace ChunkSequenceOps
+}  // namespace ChunkSequenceOps
 
-#endif // CHUNK_FILTER_H
+#endif  // CHUNK_FILTER_H

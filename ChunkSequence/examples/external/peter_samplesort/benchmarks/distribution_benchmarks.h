@@ -5,8 +5,8 @@
 #ifndef SORTING_DISTRIBUTION_BENCHMARKS_H
 #define SORTING_DISTRIBUTION_BENCHMARKS_H
 
-void ScatterGatherNopTest(int argc, char **argv);
+void ScatterGatherNopTest(int argc, char** argv);
 
-void ScatterGatherNoIOTest(int argc, char **argv);
+void ScatterGatherNoIOTest(int argc, char** argv);
 
-#endif //SORTING_DISTRIBUTION_BENCHMARKS_H
+#endif  // SORTING_DISTRIBUTION_BENCHMARKS_H

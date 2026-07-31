@@ -5,12 +5,11 @@
 #include <string>
 #include <vector>
 
-#include "parlay/primitives.h"
-#include "parlay/sequence.h"
-
 #include "ChunkSequence/chunk_seq.h"
 #include "ChunkSequence/dense_pack.h"
 #include "configs.h"
+#include "parlay/primitives.h"
+#include "parlay/sequence.h"
 
 namespace ChunkSequenceOps {
 namespace detail {
@@ -21,16 +20,16 @@ namespace detail {
  * move-stable (the outer vector's element storage is heap-allocated), so the
  * pointer is valid even when parlay::sequence uses its small-buffer form.
  */
-template<typename R>
+template <typename R>
 struct FlatBatch {
-    std::vector<parlay::sequence<R>> results;
-    size_t size() const { return results.size(); }
-    DensePackRun<R> run(size_t b) const {
-        return {results[b].data(), results[b].size()};
-    }
+  std::vector<parlay::sequence<R>> results;
+  size_t size() const { return results.size(); }
+  DensePackRun<R> run(size_t b) const {
+    return {results[b].data(), results[b].size()};
+  }
 };
 
-} // namespace detail
+}  // namespace detail
 
 /**
  * Out-of-core analogue of parlay::flatten(parlay::tabulate(num_chunks, f)).
@@ -45,29 +44,33 @@ struct FlatBatch {
  * @tparam R  Output element type.
  * @tparam F  Callable: (size_t start, size_t end) -> parlay::sequence<R>
  */
-template<typename R, typename F>
+template <typename R, typename F>
 chunk_seq ChunkFlatTabulate(size_t n, const std::string& result_prefix, F f) {
-    if (n == 0) return {};
+  if (n == 0) return {};
 
-    const size_t epct        = CHUNK_SIZE / sizeof(R);
-    const size_t num_virtual = (n + epct - 1) / epct;
+  const size_t epct = CHUNK_SIZE / sizeof(R);
+  const size_t num_virtual = (n + epct - 1) / epct;
 
-    return DensePack<R>(num_virtual, result_prefix,
-        [&, n, epct](size_t base, size_t batch_n) {
-            detail::FlatBatch<R> batch;
-            batch.results.resize(batch_n);
-            // Virtual chunks are produced in index order (no reader completion
-            // scrambling), so no sort is needed before packing.
-            parlay::parallel_for(0, batch_n, [&](size_t i) {
-                const size_t ci    = base + i;
-                const size_t start = ci * epct;
-                const size_t end   = std::min(start + epct, n);
-                batch.results[i] = f(start, end);
-            }, /*granularity=*/1);
-            return batch;
-        });
+  return DensePack<R>(num_virtual, result_prefix,
+                      [&, n, epct](size_t base, size_t batch_n) {
+                        detail::FlatBatch<R> batch;
+                        batch.results.resize(batch_n);
+                        // Virtual chunks are produced in index order (no reader
+                        // completion scrambling), so no sort is needed before
+                        // packing.
+                        parlay::parallel_for(
+                            0, batch_n,
+                            [&](size_t i) {
+                              const size_t ci = base + i;
+                              const size_t start = ci * epct;
+                              const size_t end = std::min(start + epct, n);
+                              batch.results[i] = f(start, end);
+                            },
+                            /*granularity=*/1);
+                        return batch;
+                      });
 }
 
-} // namespace ChunkSequenceOps
+}  // namespace ChunkSequenceOps
 
-#endif // CHUNK_FLAT_TABULATE_H
+#endif  // CHUNK_FLAT_TABULATE_H

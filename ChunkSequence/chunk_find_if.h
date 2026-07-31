@@ -25,40 +25,40 @@ namespace ChunkSequenceOps {
  * @tparam T  Element type stored in the chunks.
  * @tparam F  Predicate type; must be callable as bool(T).
  */
-template<typename T, typename F>
+template <typename T, typename F>
 size_t ChunkFindIf(const chunk_seq& seq, F pred) {
-    const size_t epct = CHUNK_SIZE / sizeof(T);
+  const size_t epct = CHUNK_SIZE / sizeof(T);
 
-    // "Not found" sentinel = total element count.  seq.chunks.size() is the
-    // *chunk* count and must not be used here, or every real match collapses to
-    // that tiny value.
-    size_t n = 0;
-    for (const auto& c : seq.chunks) n += c.used / sizeof(T);
-    if (n == 0) return 0;
+  // "Not found" sentinel = total element count.  seq.chunks.size() is the
+  // *chunk* count and must not be used here, or every real match collapses to
+  // that tiny value.
+  size_t n = 0;
+  for (const auto& c : seq.chunks) n += c.used / sizeof(T);
+  if (n == 0) return 0;
 
-    auto locals = RemoveWorker<T>(seq, /*reader_threads=*/10,
-        [&, n, epct](ChunkSequenceReader<T>& reader) {
-            size_t best = n;
-            while (true) {
-                auto [ptr, m, idx] = reader.Poll();
-                if (ptr == nullptr) break;
-                for (size_t j = 0; j < m; j++) {
-                    if (pred(ptr[j])) {
-                        best = std::min(best, idx * epct + j);
-                        break;  // first match in this chunk is its smallest index
-                    }
-                }
-                reader.allocator.Free(ptr);
+  auto locals = RemoveWorker<T>(
+      seq, /*reader_threads=*/10, [&, n, epct](ChunkSequenceReader<T>& reader) {
+        size_t best = n;
+        while (true) {
+          auto [ptr, m, idx] = reader.Poll();
+          if (ptr == nullptr) break;
+          for (size_t j = 0; j < m; j++) {
+            if (pred(ptr[j])) {
+              best = std::min(best, idx * epct + j);
+              break;  // first match in this chunk is its smallest index
             }
-            return best;
-        });
+          }
+          reader.allocator.Free(ptr);
+        }
+        return best;
+      });
 
-    // Combine per-worker minima (num_workers entries — a trivial sequential min).
-    size_t result = n;
-    for (size_t v : locals) result = std::min(result, v);
-    return result;
+  // Combine per-worker minima (num_workers entries — a trivial sequential min).
+  size_t result = n;
+  for (size_t v : locals) result = std::min(result, v);
+  return result;
 }
 
-} // namespace ChunkSequenceOps
+}  // namespace ChunkSequenceOps
 
-#endif // CHUNK_FIND_IF_H
+#endif  // CHUNK_FIND_IF_H

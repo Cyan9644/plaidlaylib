@@ -94,6 +94,8 @@
 //   BFS_PER_VERTEX_MAX_BYTES; inmem_op_s is blank when the in-memory baseline
 //   is skipped (n past BFS_INMEM_MAX_N).
 
+#include <unistd.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -103,7 +105,6 @@
 #include <limits>
 #include <sstream>
 #include <string>
-#include <unistd.h>
 
 #include "absl/log/check.h"
 #include "parlay/primitives.h"
@@ -118,38 +119,40 @@
 // parameter (and every use of it) out from under them while they're being
 // preprocessed. (external_bfs.h's own BFS_simple sidesteps this by naming its
 // template parameter `V`, not `vertex` -- see its header comment.)
-#include "ChunkSequence/examples/in_memory/graph/graph_utils/graph_utils.h"
+#include "ChunkSequence/chunk_seq.h"
+#include "ChunkSequence/examples/external/bench_drives.h"
 #include "ChunkSequence/examples/in_memory/graph/bfs.h"
-
+#include "ChunkSequence/examples/in_memory/graph/graph_utils/graph_utils.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
 #include "utils/trace_marker.h"
-#include "ChunkSequence/chunk_seq.h"
-#include "ChunkSequence/examples/external/bench_drives.h"
 // Before external_bfs.h: this pulls in dense_pack/direct_samplesort, which
 // must be parsed before external_compressed_sparse_row.h's bare macros.
-#include "ChunkSequence/examples/external/graph_utils/external_rmat.h"
-#include "ChunkSequence/examples/external/external_bfs.h"
 #include "ChunkSequence/ExternalPrimitives/materialize.h"
+#include "ChunkSequence/examples/external/external_bfs.h"
+#include "ChunkSequence/examples/external/graph_utils/external_rmat.h"
 
 using Clock = std::chrono::steady_clock;
 static double elapsed(Clock::time_point t0) {
-    return std::chrono::duration<double>(Clock::now() - t0).count();
+  return std::chrono::duration<double>(Clock::now() - t0).count();
 }
-static double to_gb(size_t bytes) { return (double)bytes / (1024.0 * 1024.0 * 1024.0); }
+static double to_gb(size_t bytes) {
+  return (double)bytes / (1024.0 * 1024.0 * 1024.0);
+}
 
 static void cleanup_prefix(const std::string& prefix) {
-    const auto& ssds = GetSSDList();
-    for (size_t d = 0; d < ssds.size(); d++) unlink(GetFileName(prefix, d).c_str());
+  const auto& ssds = GetSSDList();
+  for (size_t d = 0; d < ssds.size(); d++)
+    unlink(GetFileName(prefix, d).c_str());
 }
 
 // chunk_seq only tracks byte counts per chunk (element type isn't known at
 // that layer), so the element count of a size_t-element chunk_seq is the sum
 // of each chunk's `used` bytes / sizeof(size_t) -- header-only, no I/O.
 static size_t level_size(const chunk_seq& level) {
-    size_t total = 0;
-    for (const chunk& c : level.chunks) total += c.used / sizeof(size_t);
-    return total;
+  size_t total = 0;
+  for (const chunk& c : level.chunks) total += c.used / sizeof(size_t);
+  return total;
 }
 
 using vertex_utils = graph_utils<size_t>;
@@ -161,301 +164,316 @@ using vertex_utils = graph_utils<size_t>;
 // line, and cleans up the files it wrote. Returns true iff every method that
 // ran agrees with the in-memory baseline (or the baseline was skipped --
 // nothing to compare).
-static bool run_case(const std::string& label, size_t n_req, size_t avg_degree) {
-    const std::string edge_prefix = "bfs_edges_" + label;
+static bool run_case(const std::string& label, size_t n_req,
+                     size_t avg_degree) {
+  const std::string edge_prefix = "bfs_edges_" + label;
 
-    std::cout << "\n=== case: " << label << " (avg_degree " << avg_degree
-              << ") ===\n";
+  std::cout << "\n=== case: " << label << " (avg_degree " << avg_degree
+            << ") ===\n";
 
-    // n is a pure function of n_req (RMAT rounds up to a power of two), so
-    // every budget decision below can be made BEFORE anything is allocated.
-    const size_t n = size_t{1} << (int)std::round(std::log2((double)n_req));
-    const size_t m_req = avg_degree * n_req;   // directed edges, pre-dedup
+  // n is a pure function of n_req (RMAT rounds up to a power of two), so
+  // every budget decision below can be made BEFORE anything is allocated.
+  const size_t n = size_t{1} << (int)std::round(std::log2((double)n_req));
+  const size_t m_req = avg_degree * n_req;  // directed edges, pre-dedup
 
-    // Two DRAM gates, both evaluated up front -- same shape as
-    // bellman_ford.cpp's, but far smaller: BFS_simple needs no `long double`
-    // distance arrays and the in-memory baseline needs no weighted graph.
-    //
-    // ext_bytes is what the out-of-core path itself cannot avoid: chunk_csr's
-    // degree_scan (8 bytes/vertex, DRAM-resident by construction --
-    // external_compressed_sparse_row.h) plus BFS_simple's atomic<bool>
-    // visited array (1 byte/vertex).
-    //
-    // inmem_bytes is the in-memory baseline's unweighted graph: ~16
-    // bytes/vertex of parlay::sequence outer-array overhead (G plus
-    // symmetrize's transpose) plus ~24 bytes per requested edge (8 in G, 8 in
-    // GT, 8 in symmetrize's append/remove_duplicates copies).
-    const size_t ext_bytes   = 8 * (n + 1) + n;
-    const size_t inmem_bytes = 16 * n + 24 * m_req;
+  // Two DRAM gates, both evaluated up front -- same shape as
+  // bellman_ford.cpp's, but far smaller: BFS_simple needs no `long double`
+  // distance arrays and the in-memory baseline needs no weighted graph.
+  //
+  // ext_bytes is what the out-of-core path itself cannot avoid: chunk_csr's
+  // degree_scan (8 bytes/vertex, DRAM-resident by construction --
+  // external_compressed_sparse_row.h) plus BFS_simple's atomic<bool>
+  // visited array (1 byte/vertex).
+  //
+  // inmem_bytes is the in-memory baseline's unweighted graph: ~16
+  // bytes/vertex of parlay::sequence outer-array overhead (G plus
+  // symmetrize's transpose) plus ~24 bytes per requested edge (8 in G, 8 in
+  // GT, 8 in symmetrize's append/remove_duplicates copies).
+  const size_t ext_bytes = 8 * (n + 1) + n;
+  const size_t inmem_bytes = 16 * n + 24 * m_req;
 
-    size_t inmem_max_n = 1ull << 30;
-    if (const char* e = getenv("BFS_INMEM_MAX_N"))
-        inmem_max_n = std::stoull(e);
-    bool inmem_ok = n <= inmem_max_n;
+  size_t inmem_max_n = 1ull << 30;
+  if (const char* e = getenv("BFS_INMEM_MAX_N")) inmem_max_n = std::stoull(e);
+  bool inmem_ok = n <= inmem_max_n;
 
-    const size_t phys = (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
-    size_t budget = phys / 2;
-    if (const char* e = getenv("BFS_BUILD_BUDGET_BYTES"))
-        budget = std::stoull(e);
+  const size_t phys =
+      (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
+  size_t budget = phys / 2;
+  if (const char* e = getenv("BFS_BUILD_BUDGET_BYTES")) budget = std::stoull(e);
 
-    if (budget != 0 && ext_bytes > budget) {
-        // Nothing here is runnable. Print no CSV line at all and return
-        // success: run_benches.py drops a CSV-less point with a warning and
-        // keeps sweeping, which is what we want instead of an OOM kill.
-        std::cout << "SKIPPED: n=" << n << " needs " << std::setprecision(3)
-                  << to_gb(ext_bytes) << " GB of DRAM for degree_scan + visited "
-                  << "alone, past the " << to_gb(budget) << " GB budget "
-                  << "(BFS_BUILD_BUDGET_BYTES)\n";
-        return true;
-    }
-    if (inmem_ok && budget != 0 && ext_bytes + inmem_bytes > budget) {
-        // Only the baseline doesn't fit -- drop it and still run (and report)
-        // BFS_simple rather than losing the whole point.
-        std::cout << "in-memory baseline disabled: its DRAM graph needs ~"
-                  << std::setprecision(3) << to_gb(inmem_bytes) << " GB, past the "
-                  << to_gb(budget) << " GB budget\n";
-        inmem_ok = false;
-    }
+  if (budget != 0 && ext_bytes > budget) {
+    // Nothing here is runnable. Print no CSV line at all and return
+    // success: run_benches.py drops a CSV-less point with a warning and
+    // keeps sweeping, which is what we want instead of an OOM kill.
+    std::cout << "SKIPPED: n=" << n << " needs " << std::setprecision(3)
+              << to_gb(ext_bytes) << " GB of DRAM for degree_scan + visited "
+              << "alone, past the " << to_gb(budget) << " GB budget "
+              << "(BFS_BUILD_BUDGET_BYTES)\n";
+    return true;
+  }
+  if (inmem_ok && budget != 0 && ext_bytes + inmem_bytes > budget) {
+    // Only the baseline doesn't fit -- drop it and still run (and report)
+    // BFS_simple rather than losing the whole point.
+    std::cout << "in-memory baseline disabled: its DRAM graph needs ~"
+              << std::setprecision(3) << to_gb(inmem_bytes) << " GB, past the "
+              << to_gb(budget) << " GB budget\n";
+    inmem_ok = false;
+  }
 
-    std::cout << "Generating " << n_req << "-vertex RMAT graph (avg degree "
-              << avg_degree << ") out-of-core..." << std::flush;
-    trace_mark(("build_start_" + label).c_str());
-    auto t0 = Clock::now();
+  std::cout << "Generating " << n_req << "-vertex RMAT graph (avg degree "
+            << avg_degree << ") out-of-core..." << std::flush;
+  trace_mark(("build_start_" + label).c_str());
+  auto t0 = Clock::now();
 
-    // Symmetric (undirected) weighted graph built straight onto the drives --
-    // BFS_simple only ever reads connecting_vertex, so the weights exist on
-    // disk but are unused. Nothing graph-sized is ever DRAM-resident here
-    // except degree_scan; see external_rmat.h.
-    chunk_csr graph = ExternalGraphUtils::external_rmat_symmetric_graph(
-        n_req, m_req, edge_prefix, /*minw=*/1.0L, /*maxw=*/20.0L);
-    const size_t m = graph.degree_scan[n];
+  // Symmetric (undirected) weighted graph built straight onto the drives --
+  // BFS_simple only ever reads connecting_vertex, so the weights exist on
+  // disk but are unused. Nothing graph-sized is ever DRAM-resident here
+  // except degree_scan; see external_rmat.h.
+  chunk_csr graph = ExternalGraphUtils::external_rmat_symmetric_graph(
+      n_req, m_req, edge_prefix, /*minw=*/1.0L, /*maxw=*/20.0L);
+  const size_t m = graph.degree_scan[n];
 
-    const double build_s = elapsed(t0);
-    trace_mark(("build_end_" + label).c_str());
-    std::cout << " done (" << n << " vertices, " << m << " edges, "
-              << std::fixed << std::setprecision(4) << build_s << "s)\n";
+  const double build_s = elapsed(t0);
+  trace_mark(("build_end_" + label).c_str());
+  std::cout << " done (" << n << " vertices, " << m << " edges, " << std::fixed
+            << std::setprecision(4) << build_s << "s)\n";
 
-    // The baseline's own copy of the same graph, in DRAM, unweighted (BFS
-    // doesn't need add_weights). Built independently rather than shared with
-    // the out-of-core path: both generators are deterministic functions of
-    // (n_req, m_req), so building twice turns the level-by-level cross-check
-    // below into an end-to-end check that they agree. Not counted in build_s,
-    // which times the out-of-core build only.
-    vertex_utils::graph G;
-    if (inmem_ok) {
-        std::cout << "Generating the in-memory baseline's copy..." << std::flush;
-        G = vertex_utils::rmat_symmetric_graph((long)n_req, (long)m_req);
-        std::cout << " done\n";
-    }
+  // The baseline's own copy of the same graph, in DRAM, unweighted (BFS
+  // doesn't need add_weights). Built independently rather than shared with
+  // the out-of-core path: both generators are deterministic functions of
+  // (n_req, m_req), so building twice turns the level-by-level cross-check
+  // below into an end-to-end check that they agree. Not counted in build_s,
+  // which times the out-of-core build only.
+  vertex_utils::graph G;
+  if (inmem_ok) {
+    std::cout << "Generating the in-memory baseline's copy..." << std::flush;
+    G = vertex_utils::rmat_symmetric_graph((long)n_req, (long)m_req);
+    std::cout << " done\n";
+  }
 
-    const size_t start = 0;
-    const size_t edge_bytes = m * sizeof(weighted_edge);
+  const size_t start = 0;
+  const size_t edge_bytes = m * sizeof(weighted_edge);
 
-    bench_drives::settle_drives();   // isolate the first timed read from the build's writeback
+  bench_drives::settle_drives();  // isolate the first timed read from the
+                                  // build's writeback
 
-    // BFS_simple: same algorithm as the in-memory BFS below, but each round
-    // materializes every frontier vertex's adjacency with a fresh delayed cut
-    // (a blocking pread per vertex, not buffered -- see external_bfs.h), so
-    // it's expected to be dramatically slower than the in-memory baseline and
-    // than external_bfs even at modest edge counts -- not useful benchmark
-    // data past a small budget, and impractically slow to just leave
-    // running. Skip it past a byte budget (edge bytes, matching
-    // bellman_ford.cpp's BELLMAN_FORD_PER_VERTEX_MAX_BYTES-style gate),
-    // leaving its CSV fields blank so the plotted "out-of-core (BFS_simple)"
-    // line simply stops there (run_benches.py's _series already drops
-    // blanks).
-    size_t per_vertex_budget = 512 * 1024;   // 512 KiB of edges
-    if (const char* e = getenv("BFS_PER_VERTEX_MAX_BYTES"))
-        per_vertex_budget = std::stoull(e);
-    const bool per_vertex_ok = edge_bytes <= per_vertex_budget;
+  // BFS_simple: same algorithm as the in-memory BFS below, but each round
+  // materializes every frontier vertex's adjacency with a fresh delayed cut
+  // (a blocking pread per vertex, not buffered -- see external_bfs.h), so
+  // it's expected to be dramatically slower than the in-memory baseline and
+  // than external_bfs even at modest edge counts -- not useful benchmark
+  // data past a small budget, and impractically slow to just leave
+  // running. Skip it past a byte budget (edge bytes, matching
+  // bellman_ford.cpp's BELLMAN_FORD_PER_VERTEX_MAX_BYTES-style gate),
+  // leaving its CSV fields blank so the plotted "out-of-core (BFS_simple)"
+  // line simply stops there (run_benches.py's _series already drops
+  // blanks).
+  size_t per_vertex_budget = 512 * 1024;  // 512 KiB of edges
+  if (const char* e = getenv("BFS_PER_VERTEX_MAX_BYTES"))
+    per_vertex_budget = std::stoull(e);
+  const bool per_vertex_ok = edge_bytes <= per_vertex_budget;
 
-    size_t ext_levels = 0, ext_reachable = 0;
-    double op_s = 0, gb_s = 0;
-    parlay::sequence<chunk_seq> ext_frontiers;
-    if (per_vertex_ok) {
-        std::cout << "Running out-of-core BFS (BFS_simple)..." << std::flush;
-        trace_mark(("op_start_" + label).c_str());
-        t0 = Clock::now();
-        ext_frontiers = BFS_simple(start, graph);
-        op_s = elapsed(t0);
-        trace_mark(("op_end_" + label).c_str());
-        std::cout << " done\n";
-
-        ext_levels = ext_frontiers.size();
-        for (const auto& level : ext_frontiers) ext_reachable += level_size(level);
-
-        gb_s = to_gb(edge_bytes) / op_s;
-        std::cout << ext_levels << " levels   " << ext_reachable << "/" << n
-                  << " vertices reachable   " << std::setprecision(4) << op_s
-                  << "s   " << std::setprecision(2) << gb_s << " GB/s (edges read)\n";
-
-        bench_drives::settle_drives();   // isolate the fast method's timer from this run
-    } else {
-        std::cout << "out-of-core BFS (BFS_simple): skipped (edges "
-                  << to_gb(edge_bytes) << " GB exceed per-vertex budget "
-                  << to_gb(per_vertex_budget) << " GB)\n";
-    }
-
-    // external_bfs: same algorithm, one streaming pass over the edges per
-    // round (delayed::segmented_reduce over a PersistentReadContext built
-    // once outside the round loop) instead of a per-vertex reader setup --
-    // see external_bfs.h for why that's expected to be dramatically faster.
-    std::cout << "Running out-of-core BFS (fast)..." << std::flush;
-    trace_mark(("fast_op_start_" + label).c_str());
+  size_t ext_levels = 0, ext_reachable = 0;
+  double op_s = 0, gb_s = 0;
+  parlay::sequence<chunk_seq> ext_frontiers;
+  if (per_vertex_ok) {
+    std::cout << "Running out-of-core BFS (BFS_simple)..." << std::flush;
+    trace_mark(("op_start_" + label).c_str());
     t0 = Clock::now();
-    size_t fast_rounds = 0;
-    parlay::sequence<chunk_seq> fast_frontiers = external_bfs(start, graph, &fast_rounds);
-    const double fast_op_s = elapsed(t0);
-    trace_mark(("fast_op_end_" + label).c_str());
+    ext_frontiers = BFS_simple(start, graph);
+    op_s = elapsed(t0);
+    trace_mark(("op_end_" + label).c_str());
     std::cout << " done\n";
 
-    const size_t fast_levels = fast_frontiers.size();
-    size_t fast_reachable = 0;
-    for (const auto& level : fast_frontiers) fast_reachable += level_size(level);
+    ext_levels = ext_frontiers.size();
+    for (const auto& level : ext_frontiers) ext_reachable += level_size(level);
 
-    // Rounds-corrected, same reasoning as bellman_ford.cpp's fast_gb_s:
-    // external_bfs's streaming pass re-reads the full edge list every round,
-    // not once.
-    const double fast_gb_s = to_gb(edge_bytes) * (double)fast_rounds / fast_op_s;
-    std::cout << fast_levels << " levels   " << fast_reachable << "/" << n
-              << " vertices reachable   " << std::setprecision(4) << fast_op_s
-              << "s   " << std::setprecision(2) << fast_gb_s << " GB/s (edges read)\n";
+    gb_s = to_gb(edge_bytes) / op_s;
+    std::cout << ext_levels << " levels   " << ext_reachable << "/" << n
+              << " vertices reachable   " << std::setprecision(4) << op_s
+              << "s   " << std::setprecision(2) << gb_s
+              << " GB/s (edges read)\n";
 
-    // `inmem_ok` was decided at the top of run_case (before the build) and G
-    // was only populated if it held -- same reasoning as bellman_ford.cpp:
-    // a sweep's smaller points all run this binary WITHOUT PLAID_TRACE
-    // (io_trace.py traces only the largest by default), so a sweep whose
-    // smaller points still exceed a couple billion vertices would otherwise
-    // pay full DRAM cost on every one of them, not just the largest.
-    double inmem_op_s = 0;
-    parlay::sequence<parlay::sequence<size_t>> mem_frontiers;
-    if (!inmem_ok) {
-        std::cout << "Running in-memory BFS: skipped (n " << n
-                  << ", inmem_max_n " << inmem_max_n << ")\n";
-    } else {
-        std::cout << "Running in-memory BFS..." << std::flush;
-        t0 = Clock::now();
-        mem_frontiers = BFS(start, G);
-        inmem_op_s = elapsed(t0);
-        std::cout << " done (" << std::setprecision(4) << inmem_op_s << "s)\n";
+    bench_drives::settle_drives();  // isolate the fast method's timer from this
+                                    // run
+  } else {
+    std::cout << "out-of-core BFS (BFS_simple): skipped (edges "
+              << to_gb(edge_bytes) << " GB exceed per-vertex budget "
+              << to_gb(per_vertex_budget) << " GB)\n";
+  }
+
+  // external_bfs: same algorithm, one streaming pass over the edges per
+  // round (delayed::segmented_reduce over a PersistentReadContext built
+  // once outside the round loop) instead of a per-vertex reader setup --
+  // see external_bfs.h for why that's expected to be dramatically faster.
+  std::cout << "Running out-of-core BFS (fast)..." << std::flush;
+  trace_mark(("fast_op_start_" + label).c_str());
+  t0 = Clock::now();
+  size_t fast_rounds = 0;
+  parlay::sequence<chunk_seq> fast_frontiers =
+      external_bfs(start, graph, &fast_rounds);
+  const double fast_op_s = elapsed(t0);
+  trace_mark(("fast_op_end_" + label).c_str());
+  std::cout << " done\n";
+
+  const size_t fast_levels = fast_frontiers.size();
+  size_t fast_reachable = 0;
+  for (const auto& level : fast_frontiers) fast_reachable += level_size(level);
+
+  // Rounds-corrected, same reasoning as bellman_ford.cpp's fast_gb_s:
+  // external_bfs's streaming pass re-reads the full edge list every round,
+  // not once.
+  const double fast_gb_s = to_gb(edge_bytes) * (double)fast_rounds / fast_op_s;
+  std::cout << fast_levels << " levels   " << fast_reachable << "/" << n
+            << " vertices reachable   " << std::setprecision(4) << fast_op_s
+            << "s   " << std::setprecision(2) << fast_gb_s
+            << " GB/s (edges read)\n";
+
+  // `inmem_ok` was decided at the top of run_case (before the build) and G
+  // was only populated if it held -- same reasoning as bellman_ford.cpp:
+  // a sweep's smaller points all run this binary WITHOUT PLAID_TRACE
+  // (io_trace.py traces only the largest by default), so a sweep whose
+  // smaller points still exceed a couple billion vertices would otherwise
+  // pay full DRAM cost on every one of them, not just the largest.
+  double inmem_op_s = 0;
+  parlay::sequence<parlay::sequence<size_t>> mem_frontiers;
+  if (!inmem_ok) {
+    std::cout << "Running in-memory BFS: skipped (n " << n << ", inmem_max_n "
+              << inmem_max_n << ")\n";
+  } else {
+    std::cout << "Running in-memory BFS..." << std::flush;
+    t0 = Clock::now();
+    mem_frontiers = BFS(start, G);
+    inmem_op_s = elapsed(t0);
+    std::cout << " done (" << std::setprecision(4) << inmem_op_s << "s)\n";
+  }
+
+  // Cross-check: level counts must match, and for each level, the sorted
+  // vertex sets must match. Level MEMBERSHIP is a deterministic function of
+  // the graph (shortest hop-count from start), but the order vertices land
+  // in within a level is racy (parallel CAS discovery among several
+  // in-frontier neighbors), so an unsorted compare would spuriously fail.
+  // Factored into a lambda so both out-of-core methods share it (mirrors
+  // bellman_ford.cpp's compare_to_mem).
+  auto compare_to_mem =
+      [&](const std::string& name,
+          const parlay::sequence<chunk_seq>& frontiers) -> bool {
+    const size_t levels = frontiers.size();
+    if (mem_frontiers.size() != levels) {
+      std::cout << "*** MISMATCH (" << name << "): in-mem "
+                << mem_frontiers.size() << " levels != out-of-core " << levels
+                << " ***\n";
+      return false;
     }
-
-    // Cross-check: level counts must match, and for each level, the sorted
-    // vertex sets must match. Level MEMBERSHIP is a deterministic function of
-    // the graph (shortest hop-count from start), but the order vertices land
-    // in within a level is racy (parallel CAS discovery among several
-    // in-frontier neighbors), so an unsorted compare would spuriously fail.
-    // Factored into a lambda so both out-of-core methods share it (mirrors
-    // bellman_ford.cpp's compare_to_mem).
-    auto compare_to_mem = [&](const std::string& name,
-                               const parlay::sequence<chunk_seq>& frontiers) -> bool {
-        const size_t levels = frontiers.size();
-        if (mem_frontiers.size() != levels) {
-            std::cout << "*** MISMATCH (" << name << "): in-mem " << mem_frontiers.size()
-                      << " levels != out-of-core " << levels << " ***\n";
-            return false;
+    for (size_t lvl = 0; lvl < levels; lvl++) {
+      parlay::sequence<size_t> ext_level =
+          ChunkSequenceOps::materialize<size_t>(frontiers[lvl]);
+      parlay::sequence<size_t> mem_level = mem_frontiers[lvl];
+      if (ext_level.size() != mem_level.size()) {
+        std::cout << "*** MISMATCH (" << name << ") at level " << lvl
+                  << ": in-mem " << mem_level.size()
+                  << " vertices != out-of-core " << ext_level.size()
+                  << " ***\n";
+        return false;
+      }
+      parlay::sort_inplace(ext_level);
+      parlay::sort_inplace(mem_level);
+      for (size_t i = 0; i < ext_level.size(); i++) {
+        if (ext_level[i] != mem_level[i]) {
+          std::cout << "*** MISMATCH (" << name << ") at level " << lvl
+                    << ", position " << i << ": in-mem " << mem_level[i]
+                    << " != out-of-core " << ext_level[i] << " ***\n";
+          return false;
         }
-        for (size_t lvl = 0; lvl < levels; lvl++) {
-            parlay::sequence<size_t> ext_level =
-                ChunkSequenceOps::materialize<size_t>(frontiers[lvl]);
-            parlay::sequence<size_t> mem_level = mem_frontiers[lvl];
-            if (ext_level.size() != mem_level.size()) {
-                std::cout << "*** MISMATCH (" << name << ") at level " << lvl
-                          << ": in-mem " << mem_level.size() << " vertices != out-of-core "
-                          << ext_level.size() << " ***\n";
-                return false;
-            }
-            parlay::sort_inplace(ext_level);
-            parlay::sort_inplace(mem_level);
-            for (size_t i = 0; i < ext_level.size(); i++) {
-                if (ext_level[i] != mem_level[i]) {
-                    std::cout << "*** MISMATCH (" << name << ") at level " << lvl
-                              << ", position " << i << ": in-mem "
-                              << mem_level[i] << " != out-of-core "
-                              << ext_level[i] << " ***\n";
-                    return false;
-                }
-            }
-        }
-        std::cout << "cross-check OK (" << name << "): " << levels << " levels agree\n";
-        return true;
-    };
-
-    bool agree = true;
-    if (inmem_ok) {
-        if (per_vertex_ok) agree &= compare_to_mem("BFS_simple", ext_frontiers);
-        agree &= compare_to_mem("fast", fast_frontiers);
-    } else {
-        std::cout << "cross-check skipped (in-memory BFS not run)\n";
+      }
     }
+    std::cout << "cross-check OK (" << name << "): " << levels
+              << " levels agree\n";
+    return true;
+  };
 
-    // Machine-readable line for benchmarks/run_benches.py.
-    // Columns: case,n,m,build_s,op_s,inmem_op_s,levels,reachable,
-    //          throughput_gb_s,fast_op_s,fast_levels,fast_reachable,
-    //          fast_throughput_gb_s
-    // (op_s/levels/reachable/throughput_gb_s blank when BFS_simple is
-    // skipped past BFS_PER_VERTEX_MAX_BYTES; inmem_op_s blank past
-    // inmem_max_n vertices, where it was never run.)
-    auto f9 = [](double v) { std::ostringstream o; o << std::setprecision(9) << v; return o.str(); };
-    std::cout << "CSV," << label << ',' << n << ',' << m << ',' << f9(build_s)
-              << ',' << (per_vertex_ok ? f9(op_s) : std::string())
-              << ',' << (inmem_ok ? f9(inmem_op_s) : std::string())
-              << ',' << (per_vertex_ok ? std::to_string(ext_levels) : std::string())
-              << ',' << (per_vertex_ok ? std::to_string(ext_reachable) : std::string())
-              << ',' << (per_vertex_ok ? f9(gb_s) : std::string())
-              << ',' << f9(fast_op_s)
-              << ',' << fast_levels << ',' << fast_reachable
-              << ',' << f9(fast_gb_s) << '\n';
+  bool agree = true;
+  if (inmem_ok) {
+    if (per_vertex_ok) agree &= compare_to_mem("BFS_simple", ext_frontiers);
+    agree &= compare_to_mem("fast", fast_frontiers);
+  } else {
+    std::cout << "cross-check skipped (in-memory BFS not run)\n";
+  }
 
-    cleanup_prefix(edge_prefix);
-    // Both out-of-core methods leave one chunk_seq per round
-    // ("bfs_frontier0", "bfs_frontier1", ... for BFS_simple;
-    // "bfs_frontier_fast0", ... for external_bfs -- see external_bfs.h for
-    // why they use distinct prefixes) -- an unknown count up front, each
-    // possibly sharded across several drives, which cleanup_prefix's fixed
-    // per-drive-index enumeration can't catch. A single directory-scan
-    // cleanup on the shared "bfs_frontier" prefix catches both.
-    bench_drives::clear_drives({"bfs_frontier"});
-    return agree;
+  // Machine-readable line for benchmarks/run_benches.py.
+  // Columns: case,n,m,build_s,op_s,inmem_op_s,levels,reachable,
+  //          throughput_gb_s,fast_op_s,fast_levels,fast_reachable,
+  //          fast_throughput_gb_s
+  // (op_s/levels/reachable/throughput_gb_s blank when BFS_simple is
+  // skipped past BFS_PER_VERTEX_MAX_BYTES; inmem_op_s blank past
+  // inmem_max_n vertices, where it was never run.)
+  auto f9 = [](double v) {
+    std::ostringstream o;
+    o << std::setprecision(9) << v;
+    return o.str();
+  };
+  std::cout << "CSV," << label << ',' << n << ',' << m << ',' << f9(build_s)
+            << ',' << (per_vertex_ok ? f9(op_s) : std::string()) << ','
+            << (inmem_ok ? f9(inmem_op_s) : std::string()) << ','
+            << (per_vertex_ok ? std::to_string(ext_levels) : std::string())
+            << ','
+            << (per_vertex_ok ? std::to_string(ext_reachable) : std::string())
+            << ',' << (per_vertex_ok ? f9(gb_s) : std::string()) << ','
+            << f9(fast_op_s) << ',' << fast_levels << ',' << fast_reachable
+            << ',' << f9(fast_gb_s) << '\n';
+
+  cleanup_prefix(edge_prefix);
+  // Both out-of-core methods leave one chunk_seq per round
+  // ("bfs_frontier0", "bfs_frontier1", ... for BFS_simple;
+  // "bfs_frontier_fast0", ... for external_bfs -- see external_bfs.h for
+  // why they use distinct prefixes) -- an unknown count up front, each
+  // possibly sharded across several drives, which cleanup_prefix's fixed
+  // per-drive-index enumeration can't catch. A single directory-scan
+  // cleanup on the shared "bfs_frontier" prefix catches both.
+  bench_drives::clear_drives({"bfs_frontier"});
+  return agree;
 }
 
 int main(int argc, char* argv[]) {
-    ParseGlobalArguments(argc, argv);
-    // BFS_simple materializes one delayed cut per frontier vertex per round
-    // against a per-worker SequentialReadContext (bounded-LRU fd cache, see
-    // external_bfs.h) -- num_workers() * SequentialReadContext::MAX_CACHED_FDS
-    // fds at steady state, plus the CSR build's own readers/writers, can still
-    // exceed the common 1024 soft RLIMIT_NOFILE. Lift the soft limit to the
-    // hard limit before any I/O starts (same fix every other external example
-    // applies).
-    RaiseFdLimit();
-    const size_t n_req = (argc > 1) ? std::stoull(argv[1]) : 200;
-    const size_t balanced_avg_degree = (argc > 2) ? std::stoull(argv[2]) : 8;
-    const std::string case_filter = (argc > 3) ? argv[3] : "all";
+  ParseGlobalArguments(argc, argv);
+  // BFS_simple materializes one delayed cut per frontier vertex per round
+  // against a per-worker SequentialReadContext (bounded-LRU fd cache, see
+  // external_bfs.h) -- num_workers() * SequentialReadContext::MAX_CACHED_FDS
+  // fds at steady state, plus the CSR build's own readers/writers, can still
+  // exceed the common 1024 soft RLIMIT_NOFILE. Lift the soft limit to the
+  // hard limit before any I/O starts (same fix every other external example
+  // applies).
+  RaiseFdLimit();
+  const size_t n_req = (argc > 1) ? std::stoull(argv[1]) : 200;
+  const size_t balanced_avg_degree = (argc > 2) ? std::stoull(argv[2]) : 8;
+  const std::string case_filter = (argc > 3) ? argv[3] : "all";
 
-    // Sparse/balanced/dense span avg_degree from a bare-spanning-tree-ish 2,
-    // through the parlaylib driver's own default of 8, up to n/2 (m ~ n^2/2)
-    // -- "dense" is only a jump in edge count, not a different generator; see
-    // bellman_ford.cpp's file header for why RMAT stays skewed even at that
-    // end.
-    const size_t dense_avg_degree = std::max<size_t>(1, n_req / 2);
+  // Sparse/balanced/dense span avg_degree from a bare-spanning-tree-ish 2,
+  // through the parlaylib driver's own default of 8, up to n/2 (m ~ n^2/2)
+  // -- "dense" is only a jump in edge count, not a different generator; see
+  // bellman_ford.cpp's file header for why RMAT stays skewed even at that
+  // end.
+  const size_t dense_avg_degree = std::max<size_t>(1, n_req / 2);
 
-    struct GraphCase { std::string label; size_t avg_degree; };
-    const GraphCase cases[] = {
-        {"sparse", 2},
-        {"balanced", balanced_avg_degree},
-        {"dense", dense_avg_degree},
-    };
+  struct GraphCase {
+    std::string label;
+    size_t avg_degree;
+  };
+  const GraphCase cases[] = {
+      {"sparse", 2},
+      {"balanced", balanced_avg_degree},
+      {"dense", dense_avg_degree},
+  };
 
-    bool all_agree = true;
-    bool ran_any = false;
-    for (const auto& c : cases) {
-        if (case_filter != "all" && case_filter != c.label) continue;
-        all_agree &= run_case(c.label, n_req, c.avg_degree);
-        ran_any = true;
-    }
-    CHECK(ran_any) << "unknown case " << case_filter
-                    << " (expected all|sparse|balanced|dense)";
+  bool all_agree = true;
+  bool ran_any = false;
+  for (const auto& c : cases) {
+    if (case_filter != "all" && case_filter != c.label) continue;
+    all_agree &= run_case(c.label, n_req, c.avg_degree);
+    ran_any = true;
+  }
+  CHECK(ran_any) << "unknown case " << case_filter
+                 << " (expected all|sparse|balanced|dense)";
 
-    return all_agree ? 0 : 1;
+  return all_agree ? 0 : 1;
 }

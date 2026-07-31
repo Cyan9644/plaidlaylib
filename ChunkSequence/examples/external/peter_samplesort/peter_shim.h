@@ -37,8 +37,8 @@ namespace peter_shim {
 // i in [0,n) — the same deterministic multiset the chunk-seq side sorts.
 // Requires n % 512 == 0 (512 uint64 == one 4096-byte O_DIRECT block), so every
 // file is O_DIRECT-aligned and marker-free (true_size == file_size), which is
-// what Peter's Sort() assumes when it calls GetFileInfo(files, eof_marker=false).
-// Returns the wall-clock build time in seconds.
+// what Peter's Sort() assumes when it calls GetFileInfo(files,
+// eof_marker=false). Returns the wall-clock build time in seconds.
 double BuildInput(const std::string& prefix, std::size_t n);
 
 // Sort the files found under `in_prefix` (via Peter's FindFiles) with
@@ -53,8 +53,9 @@ double Sort(const std::string& in_prefix, const std::string& out_prefix,
 // Read the sorted output back into DRAM (result_true_sizes[i] bytes from
 // result_files[i], concatenated in order) for the element-wise cross-check.
 // Only called under the RAM budget.
-std::vector<uint64_t> ReadBackSorted(const std::vector<std::string>& result_files,
-                                     const std::vector<std::size_t>& result_true_sizes);
+std::vector<uint64_t> ReadBackSorted(
+    const std::vector<std::string>& result_files,
+    const std::vector<std::size_t>& result_true_sizes);
 
 // Remove every file this shim / Peter's sort leaves on the drives for the given
 // prefixes: the `in_prefix` input, the `out_prefix` output, and Peter's

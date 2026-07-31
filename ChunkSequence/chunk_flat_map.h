@@ -3,12 +3,11 @@
 
 #include <string>
 
-#include "absl/log/check.h"
-#include "parlay/sequence.h"
-
 #include "ChunkSequence/chunk_seq.h"
 #include "ChunkSequence/dense_pack.h"
+#include "absl/log/check.h"
 #include "configs.h"
+#include "parlay/sequence.h"
 
 namespace ChunkSequenceOps {
 
@@ -25,8 +24,8 @@ namespace ChunkSequenceOps {
  * (e.g. a pattern match that starts in this chunk and finishes in the next).
  * The halo is the next chunk's head as delivered by the *same* streaming reader
  * (no separate seam read); a chunk's compute simply waits until both it and its
- * right neighbor have landed.  `halo == 0` gives a plain per-chunk flat-map with
- * no neighbor access.
+ * right neighbor have landed.  `halo == 0` gives a plain per-chunk flat-map
+ * with no neighbor access.
  *
  * The body must report only outputs "belonging to" its own chunk — i.e. events
  * whose logical start falls in [global_start, global_start + n) — so the halo
@@ -42,17 +41,17 @@ namespace ChunkSequenceOps {
  * @tparam F  Callable: (const T* data, size_t n, uint64_t global_start,
  *             const T* halo, size_t halo_n) -> parlay::sequence<R>
  */
-template<typename T, typename R, typename F>
+template <typename T, typename R, typename F>
 chunk_seq ChunkFlatMap(const chunk_seq& seq, const std::string& result_prefix,
                        size_t halo, F f) {
-    if (seq.chunks.empty()) return {};
-    CHECK(halo < CHUNK_SIZE / sizeof(T))
-        << "ChunkFlatMap: halo must be smaller than one chunk";
+  if (seq.chunks.empty()) return {};
+  CHECK(halo < CHUNK_SIZE / sizeof(T))
+      << "ChunkFlatMap: halo must be smaller than one chunk";
 
-    // Thin producer over the streaming dense-pack driver: it owns the persistent
-    // reader, sources each chunk's halo from the next chunk in the same stream,
-    // and packs the emitted runs.  `f` is the per-chunk body verbatim.
-    return DensePackStream<T, R>(seq, result_prefix, halo, f);
+  // Thin producer over the streaming dense-pack driver: it owns the persistent
+  // reader, sources each chunk's halo from the next chunk in the same stream,
+  // and packs the emitted runs.  `f` is the per-chunk body verbatim.
+  return DensePackStream<T, R>(seq, result_prefix, halo, f);
 }
 
 /**
@@ -71,21 +70,23 @@ chunk_seq ChunkFlatMap(const chunk_seq& seq, const std::string& result_prefix,
  * @tparam R  Output element type (sizeof(R) <= 8, the DensePack on-disk limit).
  * @tparam F  Callable: T -> parlay::sequence<R>
  */
-template<typename T, typename R, typename F>
-chunk_seq ChunkFlatMap(const chunk_seq& seq, const std::string& result_prefix, F f) {
-    if (seq.chunks.empty()) return {};
-    return DensePackStream<T, R>(seq, result_prefix, /*halo=*/0,
-        [f](const T* buf, size_t n, uint64_t /*gpos*/,
-            const T* /*halo*/, size_t /*halo_n*/) {
-            parlay::sequence<R> out;
-            for (size_t j = 0; j < n; j++) {
-                auto r = f(buf[j]);
-                for (auto&& x : r) out.push_back(std::move(x));
-            }
-            return out;
-        });
+template <typename T, typename R, typename F>
+chunk_seq ChunkFlatMap(const chunk_seq& seq, const std::string& result_prefix,
+                       F f) {
+  if (seq.chunks.empty()) return {};
+  return DensePackStream<T, R>(seq, result_prefix, /*halo=*/0,
+                               [f](const T* buf, size_t n, uint64_t /*gpos*/,
+                                   const T* /*halo*/, size_t /*halo_n*/) {
+                                 parlay::sequence<R> out;
+                                 for (size_t j = 0; j < n; j++) {
+                                   auto r = f(buf[j]);
+                                   for (auto&& x : r)
+                                     out.push_back(std::move(x));
+                                 }
+                                 return out;
+                               });
 }
 
-} // namespace ChunkSequenceOps
+}  // namespace ChunkSequenceOps
 
-#endif // CHUNK_FLAT_MAP_H
+#endif  // CHUNK_FLAT_MAP_H

@@ -9,4 +9,4 @@
 
 parlay::internal::timer timer("global", false);
 
-#endif //SORTING_TIMER_H
+#endif  // SORTING_TIMER_H

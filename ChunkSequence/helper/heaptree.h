@@ -1,13 +1,12 @@
 
-//parlaylib heap tree
+// parlaylib heap tree
 
 #ifndef CHUNKSEQ_HELPER_HEAP_TREE_H
 #define CHUNKSEQ_HELPER_HEAP_TREE_H
 
 #include <cstddef>
-
 #include <functional>
-#include <type_traits>   // IWYU pragma: keep
+#include <type_traits>  // IWYU pragma: keep
 
 #include "parlay/sequence.h"
 #include "parlay/utilities.h"
@@ -40,11 +39,8 @@ struct heap_tree {
   }
 
  public:
-
-  explicit heap_tree(const sequence<T>& keys) :
-      size(keys.size()), tree(size),
-      levels(log2_up(keys.size()+1)-1) {
-
+  explicit heap_tree(const sequence<T>& keys)
+      : size(keys.size()), tree(size), levels(log2_up(keys.size() + 1) - 1) {
     to_tree(keys, 0, 0, size);
   }
 
@@ -54,9 +50,9 @@ struct heap_tree {
     static_assert(std::is_invocable_r_v<bool, Less, T, T>);
     size_t j = 0;
     for (size_t k = 0; k < levels; k++) {
-      j = 1 + 2 * j + less(tree[j],key);
+      j = 1 + 2 * j + less(tree[j], key);
     }
-    j = 1 + 2 * j + !less(key,tree[j]);
+    j = 1 + 2 * j + !less(key, tree[j]);
     return j - size;
   }
 };

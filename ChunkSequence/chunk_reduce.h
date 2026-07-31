@@ -1,10 +1,9 @@
 #ifndef CHUNK_REDUCE_H
 #define CHUNK_REDUCE_H
 
-#include "parlay/primitives.h"
-
 #include "ChunkSequence/chunk_seq.h"
 #include "ChunkSequence/external_engine.h"
+#include "parlay/primitives.h"
 
 namespace ChunkSequenceOps {
 
@@ -19,22 +18,23 @@ namespace ChunkSequenceOps {
  * @tparam R       Accumulator type (defaults to T).
  * @tparam Monoid  Type providing identity and operator()(R, T) -> R.
  */
-template<typename T, typename R = T, typename Monoid>
+template <typename T, typename R = T, typename Monoid>
 R ChunkReduce(const chunk_seq& seq, Monoid monoid) {
-    auto locals = RemoveWorker<T>(seq, /*reader_threads=*/10,
-        [&](ChunkSequenceReader<T>& reader) {
-            R local = monoid.identity;
-            while (true) {
-                auto [ptr, n, _] = reader.Poll();
-                if (ptr == nullptr) break;
-                for (size_t i = 0; i < n; i++) local = monoid(local, ptr[i]);
-                reader.allocator.Free(ptr);
-            }
-            return local;
-        });
-    return parlay::reduce(locals, monoid);
+  auto locals = RemoveWorker<T>(seq, /*reader_threads=*/10,
+                                [&](ChunkSequenceReader<T>& reader) {
+                                  R local = monoid.identity;
+                                  while (true) {
+                                    auto [ptr, n, _] = reader.Poll();
+                                    if (ptr == nullptr) break;
+                                    for (size_t i = 0; i < n; i++)
+                                      local = monoid(local, ptr[i]);
+                                    reader.allocator.Free(ptr);
+                                  }
+                                  return local;
+                                });
+  return parlay::reduce(locals, monoid);
 }
 
-} // namespace ChunkSequenceOps
+}  // namespace ChunkSequenceOps
 
-#endif // CHUNK_REDUCE_H
+#endif  // CHUNK_REDUCE_H

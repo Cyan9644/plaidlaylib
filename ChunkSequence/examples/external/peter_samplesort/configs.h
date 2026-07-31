@@ -12,8 +12,9 @@ constexpr size_t MAIN_MEMORY_SIZE = 400ULL * (1 << 30);
 
 const std::string SSD_ROOT = "/mnt/ssd%lu";
 // number of SSD directories in the file system
-constexpr size_t SSD_COUNT= 30;
-// number of SSDs that can be utilized in parallel; this is different from SSD_COUNT if RAID is used
+constexpr size_t SSD_COUNT = 30;
+// number of SSDs that can be utilized in parallel; this is different from
+// SSD_COUNT if RAID is used
 constexpr size_t SSD_PARALLELISM = SSD_COUNT;
 
 // Override at build time with -DREADER_READ_SIZE_BYTES=<n>; default 512 KiB.
@@ -35,8 +36,9 @@ constexpr size_t IO_VECTOR_SIZE = 1024;
 // On other systems, make this 512 and see if it works.
 constexpr size_t O_DIRECT_MULTIPLE = 4096;
 constexpr size_t O_DIRECT_MEMORY_ALIGNMENT = O_DIRECT_MULTIPLE;
-// It should never be necessary to change this unless O_DIRECT_MULTIPLE is very large
+// It should never be necessary to change this unless O_DIRECT_MULTIPLE is very
+// large
 constexpr size_t METADATA_SIZE = 2;
 constexpr size_t IO_URING_BUFFER_SIZE = 64;
 
-#endif //SORTING_CONFIGS_H
+#endif  // SORTING_CONFIGS_H

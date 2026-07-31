@@ -1,46 +1,42 @@
-#include <limits>
-#include <optional>
-
+#include <parlay/io.h>
 #include <parlay/primitives.h>
 #include <parlay/sequence.h>
-#include <parlay/io.h>
+
+#include <limits>
+#include <optional>
 
 #include "ChunkSequence/ExternalGraph/external_compressed_sparse_row.h"
 #include "ChunkSequence/chunk_delayed.h"
 
-
- //using weighted_vertices = parlay::sequence<std::pair<vertex,wtype>>;
+// using weighted_vertices = parlay::sequence<std::pair<vertex,wtype>>;
 // **************************************************************
 // Parallel Bellman Ford
 // Returns an optional, which is empty if there is a negative weight
 // cycle, or otherwise returns the distance to each vertex.
 // **************************************************************
 
-
-//Note on parallel bellman-ford in general:
-//we accept transpose graphs, so the edges are just reversed in order.
-//this is to do pull-based bellman ford, which does not have write conflicts because the reads are on the shared data rather than the writes
-
-
-
-
+// Note on parallel bellman-ford in general:
+// we accept transpose graphs, so the edges are just reversed in order.
+// this is to do pull-based bellman ford, which does not have write conflicts
+// because the reads are on the shared data rather than the writes
 
 // //let's take a look at how bellman-ford actually works
 
-
-
-// //the basic process of bellman ford is to relax all edges number of vertices times
-// //our check is actually based on the edges of the graph rather than the vertices
-// //so we check for each edge whether d[other vertex] + d[other_vertex, target_vertex] < d[target_vertex]
-// //potentially n-1 iterations since the graph could just be a line, so you'd need to relax to the end point
-
+// //the basic process of bellman ford is to relax all edges number of vertices
+// times
+// //our check is actually based on the edges of the graph rather than the
+// vertices
+// //so we check for each edge whether d[other vertex] + d[other_vertex,
+// target_vertex] < d[target_vertex]
+// //potentially n-1 iterations since the graph could just be a line, so you'd
+// need to relax to the end point
 
 // //ok, so let's think about how we want to do this in csr.
 // //first let's make a parlay implementation that works with csr
 
-
-// //the class csr_graph doesn't actually exist, it's just to show how this might be implemneted in parlay
-// parlay::sequence<weight> csr_bellman_ford_paired(csr_graph graph, vertex start){
+// //the class csr_graph doesn't actually exist, it's just to show how this
+// might be implemneted in parlay parlay::sequence<weight>
+// csr_bellman_ford_paired(csr_graph graph, vertex start){
 
 // auto N = graph.degree_scan;
 // parlay::sequence<std::pair<size_t, weight>> F = graph.edges;
@@ -53,15 +49,18 @@
 // auto iterate = parlay::iota(n);
 // for(int i = 0; i < n; i++){
 
-
-// auto pass = parlay::map(iterate, [&](size_t v){ //iterate over the csr_graph by its vertex "adjacency list," which here is really just a size_t
+// auto pass = parlay::map(iterate, [&](size_t v){ //iterate over the csr_graph
+// by its vertex "adjacency list," which here is really just a size_t
 //   //since there's no physical adjacency list
 
-// //yeah this should probably be a pair in the external sequence proper if we need to cut like this
+// //yeah this should probably be a pair in the external sequence proper if we
+// need to cut like this
 
-// auto adjacent = parlay::cut(F, N[v], N[v+1]); //get the adjacency list for this vertex
+// auto adjacent = parlay::cut(F, N[v], N[v+1]); //get the adjacency list for
+// this vertex
 // // auto corresponding_edge_weights = parlay::cut(k, N[v], N[v+1]);
-// return parlay::reduce(parlay::delayed_tabulate(adjacent.size(), [&](size_t e){
+// return parlay::reduce(parlay::delayed_tabulate(adjacent.size(), [&](size_t
+// e){
 
 //   return d[adjacent[e].first] + adjacent[e].second;
 
@@ -71,7 +70,6 @@
 
 // pass[start] = 0;
 
-
 // if(pass == d){
 //   return d;
 // }
@@ -80,178 +78,177 @@
 
 // return parlay::sequence<weight>();
 
-
 // }
 
+// ok, now that we have a semi-working parlay method, let's think about how we
+// can actually port this to external memory, starting with this same outline:
 
+// 1st optimization is to remove the iota call, since we don't want to
+// instantiate it on disk. so instead of chunk_map, we'll use chunk_tabulate
 
-//ok, now that we have a semi-working parlay method, let's think about how we can actually port this to external memory, starting with this same outline:
+// one thing that's also important is that we have a write-free algorithm --
+// because our (and most) csr is inherently read-only, we should use a delayed
+// cut to avoid instantiating the subsequences on disk
 
-//1st optimization is to remove the iota call, since we don't want to instantiate it on disk.
-//so instead of chunk_map, we'll use chunk_tabulate
-
-//one thing that's also important is that we have a write-free algorithm -- because our (and most) csr is inherently read-only,
-//we should use a delayed cut to avoid instantiating the subsequences on disk
-
-
-//this function accepts a transposed graph
+// this function accepts a transposed graph
 parlay::sequence<weight> external_bellman_ford(chunk_csr& graph, vertex start,
-                                                size_t* rounds_out = nullptr){
+                                               size_t* rounds_out = nullptr) {
+  auto N = graph.degree_scan;
+  // you can't materialize the edge list, which is the whole point
+  //  parlay::sequence<std::pair<size_t, weight>> F
+  //  =ChunkSequenceOps::materialize<std::pair<size_t, weight>>(graph.edges);
 
-auto N = graph.degree_scan;
-//you can't materialize the edge list, which is the whole point
-// parlay::sequence<std::pair<size_t, weight>> F =ChunkSequenceOps::materialize<std::pair<size_t, weight>>(graph.edges);
+  chunk_seq& F = graph.edges;  // one point of note here is that chunk_sequence
+                               // doesn't accept a particular type.
+  // we actually want these edges to be pairs of size_t, weight to indicate
+  // their destination and weighting
 
-chunk_seq& F = graph.edges; //one point of note here is that chunk_sequence doesn't accept a particular type.
-//we actually want these edges to be pairs of size_t, weight to indicate their destination and weighting
+  size_t n = graph.degree_scan.size() - 1;
+  // size_t max_size = (size_t)-1;
+  auto max_size = std::numeric_limits<long double>::max();
+  parlay::sequence<long double> d(n, max_size);
 
-size_t n = graph.degree_scan.size() - 1;
-// size_t max_size = (size_t)-1;
-auto max_size = std::numeric_limits<long double>::max();
-parlay::sequence<long double> d(n, max_size);
+  d[start] = 0;
 
-d[start] = 0;
+  std::vector<ChunkSequenceOps::delayed::SequentialReadContext> ctxs(
+      std::max<size_t>(1, parlay::num_workers()));
 
-std::vector<ChunkSequenceOps::delayed::SequentialReadContext> ctxs(
-    std::max<size_t>(1, parlay::num_workers()));
+  // auto iterate = parlay::iota(n);
+  for (size_t i = 0; i < n; i++) {
+    auto pass = parlay::tabulate(
+        n,
+        [&](size_t v) {  // iterate over the csr_graph by its vertex "adjacency
+                         // list," which here is really just a size_t
+          // since there's no physical adjacency list
 
-// auto iterate = parlay::iota(n);
-for(size_t i = 0; i < n; i++){
+          // yeah this should probably be a pair in the external sequence proper
+          // if we need to cut like this
 
+          // ChunkSequenceOps::delayed::materialize should instantiate the
+          // delayed sequence one key point is that we need to have a sequential
+          // materialize here since we're already calling it in tabulate it
+          // might also help to use sequential versions of the other methods
+          // here
 
-auto pass = parlay::tabulate(n, [&](size_t v){ //iterate over the csr_graph by its vertex "adjacency list," which here is really just a size_t
-  //since there's no physical adjacency list
+          // this is not actually a complete delay operation, it just prevents
+          // the cut from writing back intermediates
+          auto& ctx = ctxs[parlay::worker_id()];
+          auto adjacent = ChunkSequenceOps::delayed::sequential_materialize(
+              ChunkSequenceOps::delayed::cut<weighted_edge>(F, N[v], N[v + 1]),
+              ctx);  // get the adjacency list for this vertex
+          // auto corresponding_edge_weights = parlay::cut(k, N[v], N[v+1]);
+          return parlay::reduce(parlay::delayed_tabulate(
+                                    adjacent.size(),
+                                    [&](size_t e) {
+                                      return d[adjacent[e].connecting_vertex] +
+                                             adjacent[e].edge_weight;
+                                    }),
+                                parlay::minimum<long double>());
 
-//yeah this should probably be a pair in the external sequence proper if we need to cut like this
+        });
 
-//ChunkSequenceOps::delayed::materialize should instantiate the delayed sequence
-//one key point is that we need to have a sequential materialize here since we're already calling it in tabulate
-//it might also help to use sequential versions of the other methods here
+    // ChunkSequeneOps::tabulate returns a chunk_sequence disk that lives on
+    // disk, sadly however, our assumption is that the EDGES cannot live in
+    // memory, not that the vertices cannot; this means we
+    //   actually need a version of tabulate that returns the result in-memory,
+    //   which is why we use parlay tabulate instead of chunk_tabulate
 
-//this is not actually a complete delay operation, it just prevents the cut from writing back intermediates
-auto& ctx = ctxs[parlay::worker_id()];
-auto adjacent = ChunkSequenceOps::delayed::sequential_materialize(ChunkSequenceOps::delayed::cut<weighted_edge>(F, N[v], N[v+1]), ctx); //get the adjacency list for this vertex
-// auto corresponding_edge_weights = parlay::cut(k, N[v], N[v+1]);
-return parlay::reduce(parlay::delayed_tabulate(adjacent.size(), [&](size_t e){
+    pass[start] = 0;
 
-  return d[adjacent[e].connecting_vertex] + adjacent[e].edge_weight;
+    if (pass == d) {
+      if (rounds_out) *rounds_out = i + 1;
+      return d;
+    }
+    d = std::move(pass);
+  }
 
-}), parlay::minimum<long double>());
-
-});
-
-//ChunkSequeneOps::tabulate returns a chunk_sequence disk that lives on disk, sadly
-//however, our assumption is that the EDGES cannot live in memory, not that the vertices cannot;
-//this means we
-//  actually need a version of tabulate that returns the result in-memory, which is why we use parlay tabulate instead of chunk_tabulate
-
-pass[start] = 0;
-
-
-if(pass == d){
-  if(rounds_out) *rounds_out = i + 1;
-  return d;
+  if (rounds_out) *rounds_out = n;
+  return parlay::sequence<weight>();
 }
-d= std::move(pass);
-}
 
-if(rounds_out) *rounds_out = n;
-return parlay::sequence<weight>();
+// the performance gain in the fast_external_bellman_ford is that it doesn't
+// issue individual preads per vertex instead we just do a long pass over the
+// full edge sequence and adds the cost (if lower than existing) to the running
+// minimum for the "to" part of the edge (the vertex it's going to) this is
+// considerably better in all cases but especially the dense case, where edges
+// in a single chunk are likely to belong to one specific vertex
 
+// Quick point on how this actually works: looking up each edge to find where it
+// fits in the degree scan is not efficient so we locate the vertex the chunk's
+// first and last element fall in in a dense case these are probably equivalent,
+// but supposing that they're different, we know that any vertex's edges between
+// those are ALL of that vertex's edges since the edge list is sorted by vertex
+// ID -- this means that for that vertex, all updates have been found and we can
+// compute the distance directly. for the vertices on either end of the chunk,
+// we don't know whether we have all of their contributions yet we CAN directly
+// check whether we've moved into the territory of a specific vertex with the
+// degree scan, though, so if we do so for an end vertex we need to stash the
+// partial edge data for those vertices this boundary stash is sorted by index,
+// so at the very end of the algorithm, we just need to combine them and then
+// calculate the final distances for that pass based on the combined data we may
+// wonder whether this boundary stash can actually fit in memory, but it
+// definitely should be able to: there are at most 2 vertices that spill over
+// per chunk, so the size of the total boundary array is at most ~2 * #chunks
+// which means that it's O(#chunks) which is smaller than the edge sequence size
+// by a factor of elements per chunk, which is ~large maybe like 32000 times
+// Every round used to build its own ChunkSequenceReader (io_uring rings +
+// reader threads + fd opens) from scratch via segmented_reduce/for_each_chunk,
+// tearing it all down again at the end of the round -- expensive in general,
+// and on WSL2 specifically it can hit io_uring's asynchronous RLIMIT_MEMLOCK
+// reclaim (InitIoUringWithRetry, utils/file_utils.h) on every round's ring
+// creation, burning real wall-clock time with neither disk nor CPU active.
+// graph.edges/graph.degree_scan never change across rounds (only `d`'s
+// captured values do), so per_edge's physical read plan is identical every
+// round -- build ONE PersistentReadContext before the loop and reuse it for
+// every round's segmented_reduce call instead.
+parlay::sequence<weight> external_bellman_ford_fast(
+    chunk_csr& graph, vertex start, size_t* rounds_out = nullptr) {
+  size_t n = graph.degree_scan.size() - 1;
+  auto max_size = std::numeric_limits<long double>::max();
+  parlay::sequence<long double> d(n, max_size);
 
-}
+  d[start] = 0;
 
-//the performance gain in the fast_external_bellman_ford is that it doesn't issue individual preads per vertex
-//instead we just do a long pass over the full edge sequence and adds the cost (if lower than existing) to the running minimum for the "to"
-//part of the edge (the vertex it's going to)
-//this is considerably better in all cases but especially the dense case, where edges in a single chunk are likely to belong to one specific vertex
-
-//Quick point on how this actually works: looking up each edge to find where it fits in the degree scan is not efficient
-//so we locate the vertex the chunk's first and last element fall in
-//in a dense case these are probably equivalent, but supposing that they're different, we know that any vertex's edges between
-//those are ALL of that vertex's edges since the edge list is sorted by vertex ID -- this means that for that vertex,
-//all updates have been found and we can compute the distance directly.
-//for the vertices on either end of the chunk, we don't know whether we have all of their contributions yet
-//we CAN directly check whether we've moved into the territory of a specific vertex with the degree scan, though,
-//so if we do so for an end vertex we need to stash the partial edge data for those vertices
-//this boundary stash is sorted by index, so at the very end of the algorithm, we just need to combine them and then calculate the final distances for that pass based on the combined data
-//we may wonder whether this boundary stash can actually fit in memory, but it definitely should be able to:
-//there are at most 2 vertices that spill over per chunk, so the size of the total boundary array is at most ~2 * #chunks
-//which means that it's O(#chunks) which is smaller than the edge sequence size by a factor of elements per chunk, which is ~large
-//maybe like 32000 times
-//Every round used to build its own ChunkSequenceReader (io_uring rings +
-//reader threads + fd opens) from scratch via segmented_reduce/for_each_chunk,
-//tearing it all down again at the end of the round -- expensive in general,
-//and on WSL2 specifically it can hit io_uring's asynchronous RLIMIT_MEMLOCK
-//reclaim (InitIoUringWithRetry, utils/file_utils.h) on every round's ring
-//creation, burning real wall-clock time with neither disk nor CPU active.
-//graph.edges/graph.degree_scan never change across rounds (only `d`'s
-//captured values do), so per_edge's physical read plan is identical every
-//round -- build ONE PersistentReadContext before the loop and reuse it for
-//every round's segmented_reduce call instead.
-parlay::sequence<weight> external_bellman_ford_fast(chunk_csr& graph, vertex start,
-                                                      size_t* rounds_out = nullptr){
-
-size_t n = graph.degree_scan.size() - 1;
-auto max_size = std::numeric_limits<long double>::max();
-parlay::sequence<long double> d(n, max_size);
-
-d[start] = 0;
-
-struct MinDistMonoid {
+  struct MinDistMonoid {
     long double identity = std::numeric_limits<long double>::max();
-    long double operator()(long double a, long double b) const { return std::min(a, b); }
-};
+    long double operator()(long double a, long double b) const {
+      return std::min(a, b);
+    }
+  };
 
-//`d` is captured BY REFERENCE, so per_edge itself needs to be built only
-//ONCE: reassigning the *variable* `d` below (d = std::move(pass)) is visible
-//through the reference on every subsequent round without rebuilding the
-//node.  (Building a fresh per_edge each round would also give it a distinct
-//closure type from round to round's -- lambda types are unique per
-//lexical lambda-expression -- which would defeat reusing one `ctx`.)
-auto per_edge = ChunkSequenceOps::delayed::map(
-    ChunkSequenceOps::delayed::delay<weighted_edge>(graph.edges),
-    [&](weighted_edge e) { return d[e.connecting_vertex] + e.edge_weight; });
-ChunkSequenceOps::delayed::PersistentReadContext<decltype(per_edge)> ctx(per_edge);
+  //`d` is captured BY REFERENCE, so per_edge itself needs to be built only
+  // ONCE: reassigning the *variable* `d` below (d = std::move(pass)) is visible
+  // through the reference on every subsequent round without rebuilding the
+  // node.  (Building a fresh per_edge each round would also give it a distinct
+  // closure type from round to round's -- lambda types are unique per
+  // lexical lambda-expression -- which would defeat reusing one `ctx`.)
+  auto per_edge = ChunkSequenceOps::delayed::map(
+      ChunkSequenceOps::delayed::delay<weighted_edge>(graph.edges),
+      [&](weighted_edge e) { return d[e.connecting_vertex] + e.edge_weight; });
+  ChunkSequenceOps::delayed::PersistentReadContext<decltype(per_edge)> ctx(
+      per_edge);
 
-size_t i = 0;
-for(; i < n; i++){
+  size_t i = 0;
+  for (; i < n; i++) {
+    auto pass = ChunkSequenceOps::delayed::segmented_reduce(
+        per_edge, graph.degree_scan, MinDistMonoid{}, ctx);
 
-auto pass = ChunkSequenceOps::delayed::segmented_reduce(per_edge, graph.degree_scan, MinDistMonoid{}, ctx);
+    pass[start] = 0;
 
-pass[start] = 0;
+    if (pass == d) {
+      if (rounds_out) *rounds_out = i + 1;
+      return d;
+    }
+    d = std::move(pass);
+  }
 
-if(pass == d){
-  if(rounds_out) *rounds_out = i + 1;
-  return d;
+  if (rounds_out) *rounds_out = i;
+  return parlay::sequence<weight>();
 }
-d = std::move(pass);
-}
 
-if(rounds_out) *rounds_out = i;
-return parlay::sequence<weight>();
-
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// //the class csr_graph doesn't actually exist, it's just to show how this might be implemneted in parlay
-// parlay::sequence<weight> csr_bellman_ford_disjoint(csr_graph graph, vertex start){
+// //the class csr_graph doesn't actually exist, it's just to show how this
+// might be implemneted in parlay parlay::sequence<weight>
+// csr_bellman_ford_disjoint(csr_graph graph, vertex start){
 
 // auto N = graph.degree_scan;
 // auto F = graph.adjacent;
@@ -265,15 +262,17 @@ return parlay::sequence<weight>();
 // auto iterate = parlay::iota(n);
 // for(int i = 0; i < n; i++){
 
-
-// auto pass = parlay::map(iterate, [&](size_t v){ //iterate over the csr_graph by its vertex "adjacency list," which here is really just a size_t
+// auto pass = parlay::map(iterate, [&](size_t v){ //iterate over the csr_graph
+// by its vertex "adjacency list," which here is really just a size_t
 //   //since there's no physical adjacency list
 
-// //yeah this should probably be a pair in the external sequence proper if we need to cut like this
+// //yeah this should probably be a pair in the external sequence proper if we
+// need to cut like this
 
-// auto adjacent = parlay::cut(F, N[v], N[v+1]); //get the adjacency list for this vertex
-// auto corresponding_edge_weights = parlay::cut(k, N[v], N[v+1]);
-// return parlay::reduce(parlay::delayed_tabulate(adjacent.size(), [&](size_t e){
+// auto adjacent = parlay::cut(F, N[v], N[v+1]); //get the adjacency list for
+// this vertex auto corresponding_edge_weights = parlay::cut(k, N[v], N[v+1]);
+// return parlay::reduce(parlay::delayed_tabulate(adjacent.size(), [&](size_t
+// e){
 
 //   return d[adjacent[e]] + corresponding_edge_weights[e];
 
@@ -283,7 +282,6 @@ return parlay::sequence<weight>();
 
 // pass[start] = 0;
 
-
 // if(pass == d){
 //   return d;
 // }
@@ -292,17 +290,7 @@ return parlay::sequence<weight>();
 
 // return parlay::sequence<weight>();
 
-
 // }
-
-
-
-
-
-
-
-
-
 
 // // **************************************************************
 // // An "Easter Egg"
@@ -353,8 +341,8 @@ return parlay::sequence<weight>();
 //         parlay::parallel_for(0, n, [&] (long i) {da[i] = d[i];});
 //       lazy = true;
 
-//       // get out edges of the active set along with the distance to the far side
-//       auto edges = delayed::flatten(parlay::map(active, [&] (vertex u) {
+//       // get out edges of the active set along with the distance to the far
+//       side auto edges = delayed::flatten(parlay::map(active, [&] (vertex u) {
 //         return delayed::map(G[u], [&,u] (auto e) {
 //           return std::pair{e.first, da[u] + e.second};});}));
 
@@ -387,7 +375,8 @@ return parlay::sequence<weight>();
 //       dn[start] = 0.0;
 
 //       // gather those that have changed into active
-//       active = parlay::pack_index<vertex>(parlay::delayed_tabulate(n, [&] (long i) {
+//       active = parlay::pack_index<vertex>(parlay::delayed_tabulate(n, [&]
+//       (long i) {
 //         return dn[i] != d[i];}));
 //       d = std::move(dn);
 //     }
@@ -399,56 +388,13 @@ return parlay::sequence<weight>();
 //   return (cnt <= n) ? std::optional(std::move(d)) : std::nullopt;
 // }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// //original weighted_graph: using weighted_graph = parlay::sequence<weighted_vertices<wtype>>;
+// //original weighted_graph: using weighted_graph =
+// parlay::sequence<weighted_vertices<wtype>>;
 // //using weighted_vertices = parlay::sequence<std::pair<vertex,wtype>>;
 // auto bellman_ford(size_t start_ID, const weighted_chunk_csr csr) {
 //   long n = ChunkSequenceOps::size(csr); //total number of edges in the graph
-//   parlay::sequence<long double> d(n, std::numeric_limits<long double>::max());
-//   d[start] = 0.0;
+//   parlay::sequence<long double> d(n, std::numeric_limits<long
+//   double>::max()); d[start] = 0.0;
 
 //   for (int i=0; i < n; i++) {
 //     auto dn = ChunkSequenceOps::map(csr.edge_weights, [&] (auto& ngh) {
@@ -460,23 +406,6 @@ return parlay::sequence<weight>();
 //   }
 //   return std::optional<parlay::sequence<long double>>();
 // }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // //from parlaylib, will implement later
 // // **************************************************************
@@ -528,8 +457,8 @@ return parlay::sequence<weight>();
 //         parlay::parallel_for(0, n, [&] (long i) {da[i] = d[i];});
 //       lazy = true;
 
-//       // get out edges of the active set along with the distance to the far side
-//       auto edges = delayed::flatten(parlay::map(active, [&] (vertex u) {
+//       // get out edges of the active set along with the distance to the far
+//       side auto edges = delayed::flatten(parlay::map(active, [&] (vertex u) {
 //         return delayed::map(G[u], [&,u] (auto e) {
 //           return std::pair{e.first, da[u] + e.second};});}));
 
@@ -562,7 +491,8 @@ return parlay::sequence<weight>();
 //       dn[start] = 0.0;
 
 //       // gather those that have changed into active
-//       active = parlay::pack_index<vertex>(parlay::delayed_tabulate(n, [&] (long i) {
+//       active = parlay::pack_index<vertex>(parlay::delayed_tabulate(n, [&]
+//       (long i) {
 //         return dn[i] != d[i];}));
 //       d = std::move(dn);
 //     }

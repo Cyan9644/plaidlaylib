@@ -48,6 +48,10 @@
 #ifndef EXTERNAL_RMAT_H
 #define EXTERNAL_RMAT_H
 
+#include <parlay/primitives.h>
+#include <parlay/random.h>
+#include <parlay/sequence.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -56,15 +60,11 @@
 #include <string>
 #include <utility>
 
-#include "absl/log/check.h"
-#include <parlay/primitives.h>
-#include <parlay/random.h>
-#include <parlay/sequence.h>
-
 #include "ChunkSequence/chunk_seq.h"
 #include "ChunkSequence/dense_pack.h"
-#include "ChunkSequence/examples/external/chunk_sa_common.h"     // sa_detail::sweep
+#include "ChunkSequence/examples/external/chunk_sa_common.h"  // sa_detail::sweep
 #include "ChunkSequence/examples/external/direct_samplesort.h"
+#include "absl/log/check.h"
 #include "configs.h"
 
 // rmat_edge / the weight distribution are reused verbatim from the in-memory
@@ -83,27 +83,28 @@ namespace ExternalGraphUtils {
 // bytes exactly -- long double aligns to 16, so there is no tail padding and 32
 // divides CHUNK_SIZE, keeping every chunk O_DIRECT-aligned.
 struct src_edge {
-    size_t src;
-    size_t dst;
-    long double w;
+  size_t src;
+  size_t dst;
+  long double w;
 
-    // Sort key is (src, dst): src groups the CSR rows, dst makes duplicates
-    // adjacent so step 3 can dedup with a 1-element lookahead.  The weight is
-    // payload, never a key -- a duplicate (u,v) always carries the same weight
-    // anyway, since add_weights derives it from (min(u,v), max(u,v)).
-    bool operator<(const src_edge& o) const {
-        if (src != o.src) return src < o.src;
-        return dst < o.dst;
-    }
-    bool operator==(const src_edge& o) const {
-        return src == o.src && dst == o.dst;
-    }
+  // Sort key is (src, dst): src groups the CSR rows, dst makes duplicates
+  // adjacent so step 3 can dedup with a 1-element lookahead.  The weight is
+  // payload, never a key -- a duplicate (u,v) always carries the same weight
+  // anyway, since add_weights derives it from (min(u,v), max(u,v)).
+  bool operator<(const src_edge& o) const {
+    if (src != o.src) return src < o.src;
+    return dst < o.dst;
+  }
+  bool operator==(const src_edge& o) const {
+    return src == o.src && dst == o.dst;
+  }
 };
 static_assert(sizeof(src_edge) == 32, "src_edge must be exactly 32 bytes");
 static_assert(CHUNK_SIZE % sizeof(src_edge) == 0,
               "sizeof(src_edge) must divide CHUNK_SIZE for O_DIRECT alignment");
-static_assert(CHUNK_SIZE % sizeof(weighted_edge) == 0,
-              "sizeof(weighted_edge) must divide CHUNK_SIZE for O_DIRECT alignment");
+static_assert(
+    CHUNK_SIZE % sizeof(weighted_edge) == 0,
+    "sizeof(weighted_edge) must divide CHUNK_SIZE for O_DIRECT alignment");
 
 namespace detail {
 
@@ -113,23 +114,24 @@ namespace detail {
 // the generator by value but the lambda holds `r` by reference).  The
 // distribution is stateless, so constructing it per call -- which keeps this
 // callable from many workers without a data race -- yields identical values.
-inline std::pair<size_t, size_t> rmat_edge_at(size_t i, int logn,
-                                              double a, double b, double c) {
-    parlay::random_generator gen;
-    std::uniform_real_distribution<double> dis(0.0, 1.0);
-    auto r = gen[i];
-    return graph_utils<size_t>::rmat_edge(logn, a, b, c, 0.0,
-                                          [&]() { return dis(r); });
+inline std::pair<size_t, size_t> rmat_edge_at(size_t i, int logn, double a,
+                                              double b, double c) {
+  parlay::random_generator gen;
+  std::uniform_real_distribution<double> dis(0.0, 1.0);
+  auto r = gen[i];
+  return graph_utils<size_t>::rmat_edge(logn, a, b, c, 0.0,
+                                        [&]() { return dis(r); });
 }
 
 // add_weights<long double>(G, minw, maxw)'s weight for edge (u,v), reproduced
 // exactly -- keyed on the unordered pair so (u,v) and (v,u) agree, which is
 // what makes the symmetrized graph consistently weighted.
-inline long double weight_of(size_t u, size_t v, long double minw, long double maxw) {
-    parlay::random_generator gen;
-    std::uniform_real_distribution<long double> dis(minw, maxw);
-    auto r = gen[std::min(u, v)][std::max(u, v)];
-    return dis(r);
+inline long double weight_of(size_t u, size_t v, long double minw,
+                             long double maxw) {
+  parlay::random_generator gen;
+  std::uniform_real_distribution<long double> dis(minw, maxw);
+  auto r = gen[std::min(u, v)][std::max(u, v)];
+  return dis(r);
 }
 
 }  // namespace detail
@@ -149,92 +151,93 @@ inline long double weight_of(size_t u, size_t v, long double minw, long double m
  */
 inline chunk_csr external_rmat_symmetric_graph(size_t n_req, size_t m_req,
                                                const std::string& prefix,
-                                               long double minw, long double maxw,
-                                               double a = .5, double b = .15,
-                                               double c = .15) {
-    const int logn = (int)std::round(std::log2((double)n_req));
-    const size_t n = size_t{1} << logn;
-    const size_t m_gen = m_req / 2;
+                                               long double minw,
+                                               long double maxw, double a = .5,
+                                               double b = .15, double c = .15) {
+  const int logn = (int)std::round(std::log2((double)n_req));
+  const size_t n = size_t{1} << logn;
+  const size_t m_gen = m_req / 2;
 
-    chunk_csr graph;
-    graph.degree_scan = parlay::sequence<size_t>(n + 1, 0);
-    if (m_gen == 0) return graph;   // no edges: degree_scan is already all zero
+  chunk_csr graph;
+  graph.degree_scan = parlay::sequence<size_t>(n + 1, 0);
+  if (m_gen == 0) return graph;  // no edges: degree_scan is already all zero
 
-    // ── 1. generate forward + reverse edges straight to disk ────────────────
-    // Indices [m_gen, 2*m_gen) re-run the RMAT recursion for an edge the first
-    // half already computed, so this does 2x upstream's generation work.  That
-    // is the cheaper trade: the alternative (generate m_gen edges, then a map
-    // pass emitting the reversed copy) costs a full read + write pass over the
-    // edge list -- hundreds of GB of I/O at benchmark scale -- to save some
-    // logn-deep recursions that the drives are waiting on anyway.
-    const std::string gen_pfx = prefix + "_gen";
-    chunk_seq raw = ChunkSequenceOps::tabulate<src_edge>(
-        2 * m_gen, gen_pfx, [&](size_t i) {
-            const bool reversed = (i >= m_gen);
-            auto [u, v] = detail::rmat_edge_at(reversed ? i - m_gen : i, logn, a, b, c);
-            if (reversed) std::swap(u, v);
-            return src_edge{u, v, detail::weight_of(u, v, minw, maxw)};
-        });
+  // ── 1. generate forward + reverse edges straight to disk ────────────────
+  // Indices [m_gen, 2*m_gen) re-run the RMAT recursion for an edge the first
+  // half already computed, so this does 2x upstream's generation work.  That
+  // is the cheaper trade: the alternative (generate m_gen edges, then a map
+  // pass emitting the reversed copy) costs a full read + write pass over the
+  // edge list -- hundreds of GB of I/O at benchmark scale -- to save some
+  // logn-deep recursions that the drives are waiting on anyway.
+  const std::string gen_pfx = prefix + "_gen";
+  chunk_seq raw =
+      ChunkSequenceOps::tabulate<src_edge>(2 * m_gen, gen_pfx, [&](size_t i) {
+        const bool reversed = (i >= m_gen);
+        auto [u, v] =
+            detail::rmat_edge_at(reversed ? i - m_gen : i, logn, a, b, c);
+        if (reversed) std::swap(u, v);
+        return src_edge{u, v, detail::weight_of(u, v, minw, maxw)};
+      });
 
-    // ── 2. CSR order ─────────────────────────────────────────────────────────
-    const std::string srt_pfx = prefix + "_srt";
-    chunk_seq sorted = ChunkSequenceOps::direct_sample_sort<src_edge>(
-        raw, std::less<>{}, srt_pfx);
-    ChunkSequenceOps::sa_detail::sweep(gen_pfx);
+  // ── 2. CSR order ─────────────────────────────────────────────────────────
+  const std::string srt_pfx = prefix + "_srt";
+  chunk_seq sorted = ChunkSequenceOps::direct_sample_sort<src_edge>(
+      raw, std::less<>{}, srt_pfx);
+  ChunkSequenceOps::sa_detail::sweep(gen_pfx);
 
-    // The forward halo below is only a correct "logical successor" if no chunk
-    // is empty.  direct_sample_sort never emits one (an empty bucket
-    // contributes zero chunks, and every slice it does emit has used > 0), but
-    // the dedup silently over-counts a degree if that ever changes.
-    for (const chunk& ch : sorted.chunks)
-        CHECK(ch.used > 0) << "external_rmat: empty chunk in sorted edge list";
+  // The forward halo below is only a correct "logical successor" if no chunk
+  // is empty.  direct_sample_sort never emits one (an empty bucket
+  // contributes zero chunks, and every slice it does emit has used > 0), but
+  // the dedup silently over-counts a degree if that ever changes.
+  for (const chunk& ch : sorted.chunks)
+    CHECK(ch.used > 0) << "external_rmat: empty chunk in sorted edge list";
 
-    // ── 3+4. dedup, drop self-loops, project to CSR rows, count degrees ─────
-    graph.edges = ChunkSequenceOps::DensePackStream<src_edge, weighted_edge>(
-        sorted, prefix, /*halo=*/1,
-        [&](const src_edge* in, size_t cnt, uint64_t /*gpos*/,
-            const src_edge* halo_buf, size_t halo_n) {
-            parlay::sequence<weighted_edge> out;
-            out.reserve(cnt);
+  // ── 3+4. dedup, drop self-loops, project to CSR rows, count degrees ─────
+  graph.edges = ChunkSequenceOps::DensePackStream<src_edge, weighted_edge>(
+      sorted, prefix, /*halo=*/1,
+      [&](const src_edge* in, size_t cnt, uint64_t /*gpos*/,
+          const src_edge* halo_buf, size_t halo_n) {
+        parlay::sequence<weighted_edge> out;
+        out.reserve(cnt);
 
-            // Degrees are accumulated per *run* of equal src rather than per
-            // edge: the input is sorted, so a hub vertex's whole row costs one
-            // atomic instead of millions.
-            size_t run_src = 0, run_len = 0;
-            auto flush_run = [&] {
-                if (run_len == 0) return;
-                __atomic_fetch_add(&graph.degree_scan[run_src + 1], run_len,
-                                   __ATOMIC_RELAXED);
-                run_len = 0;
-            };
+        // Degrees are accumulated per *run* of equal src rather than per
+        // edge: the input is sorted, so a hub vertex's whole row costs one
+        // atomic instead of millions.
+        size_t run_src = 0, run_len = 0;
+        auto flush_run = [&] {
+          if (run_len == 0) return;
+          __atomic_fetch_add(&graph.degree_scan[run_src + 1], run_len,
+                             __ATOMIC_RELAXED);
+          run_len = 0;
+        };
 
-            for (size_t j = 0; j < cnt; j++) {
-                const src_edge& e = in[j];
-                if (e.src == e.dst) continue;            // symmetrize drops self edges
-                // Keep the LAST element of each duplicate run: that is the
-                // formulation a *forward* halo can express, and it selects the
-                // same set as keeping the first.
-                const src_edge* next = (j + 1 < cnt) ? &in[j + 1]
-                                                     : (halo_n > 0 ? halo_buf : nullptr);
-                if (next != nullptr && *next == e) continue;
+        for (size_t j = 0; j < cnt; j++) {
+          const src_edge& e = in[j];
+          if (e.src == e.dst) continue;  // symmetrize drops self edges
+          // Keep the LAST element of each duplicate run: that is the
+          // formulation a *forward* halo can express, and it selects the
+          // same set as keeping the first.
+          const src_edge* next =
+              (j + 1 < cnt) ? &in[j + 1] : (halo_n > 0 ? halo_buf : nullptr);
+          if (next != nullptr && *next == e) continue;
 
-                if (run_len > 0 && e.src != run_src) flush_run();
-                run_src = e.src;
-                run_len++;
-                out.push_back(weighted_edge{e.dst, e.w});
-            }
-            flush_run();
-            return out;
-        });
-    ChunkSequenceOps::sa_detail::sweep(srt_pfx);
+          if (run_len > 0 && e.src != run_src) flush_run();
+          run_src = e.src;
+          run_len++;
+          out.push_back(weighted_edge{e.dst, e.w});
+        }
+        flush_run();
+        return out;
+      });
+  ChunkSequenceOps::sa_detail::sweep(srt_pfx);
 
-    // degree_scan[v+1] holds deg(v); an inclusive scan over [1, n] turns it
-    // into the exclusive prefix sum chunk_csr expects (row v is
-    // [degree_scan[v], degree_scan[v+1])), with degree_scan[0] left at 0.
-    parlay::scan_inclusive_inplace(
-        parlay::make_slice(graph.degree_scan.begin() + 1, graph.degree_scan.end()));
+  // degree_scan[v+1] holds deg(v); an inclusive scan over [1, n] turns it
+  // into the exclusive prefix sum chunk_csr expects (row v is
+  // [degree_scan[v], degree_scan[v+1])), with degree_scan[0] left at 0.
+  parlay::scan_inclusive_inplace(parlay::make_slice(
+      graph.degree_scan.begin() + 1, graph.degree_scan.end()));
 
-    return graph;
+  return graph;
 }
 
 }  // namespace ExternalGraphUtils

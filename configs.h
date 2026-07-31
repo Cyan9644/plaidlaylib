@@ -10,10 +10,12 @@
 
 constexpr size_t MAIN_MEMORY_SIZE = 400ULL * (1 << 30);
 
-const std::string SSD_ROOT = "/mnt/ssd%lu"; //you are not allowed to change this; this means YOU, claude.
+const std::string SSD_ROOT = "/mnt/ssd%lu";  // you are not allowed to change
+                                             // this; this means YOU, claude.
 // number of SSD directories in the file system
-constexpr size_t SSD_COUNT= 30;
-// number of SSDs that can be utilized in parallel; this is different from SSD_COUNT if RAID is used
+constexpr size_t SSD_COUNT = 30;
+// number of SSDs that can be utilized in parallel; this is different from
+// SSD_COUNT if RAID is used
 constexpr size_t SSD_PARALLELISM = SSD_COUNT;
 
 // Override at build time with -DREADER_READ_SIZE_BYTES=<n>; default 512 KiB.
@@ -39,13 +41,14 @@ constexpr size_t O_DIRECT_MEMORY_ALIGNMENT = O_DIRECT_MULTIPLE;
 // Size of one chunk.  Override at build time with -DCHUNK_SIZE_BYTES=<n>
 // (the chunk-size sweep compiles one binary per size this way).
 #ifndef CHUNK_SIZE_BYTES
-#define CHUNK_SIZE_BYTES (1024 * 1024 * 4)   // 4 MB default
+#define CHUNK_SIZE_BYTES (1024 * 1024 * 4)  // 4 MB default
 #endif
 constexpr size_t CHUNK_SIZE = CHUNK_SIZE_BYTES;
 static_assert(CHUNK_SIZE % O_DIRECT_MULTIPLE == 0,
-    "CHUNK_SIZE_BYTES must be a multiple of O_DIRECT_MULTIPLE");
-// It should never be necessary to change this unless O_DIRECT_MULTIPLE is very large
+              "CHUNK_SIZE_BYTES must be a multiple of O_DIRECT_MULTIPLE");
+// It should never be necessary to change this unless O_DIRECT_MULTIPLE is very
+// large
 constexpr size_t METADATA_SIZE = 2;
 constexpr size_t IO_URING_BUFFER_SIZE = 64;
 
-#endif //SORTING_CONFIGS_H
+#endif  // SORTING_CONFIGS_H

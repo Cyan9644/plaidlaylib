@@ -14,30 +14,30 @@
 // the standardized reader/writer to handle buckets that did not fit; that job
 // now belongs to the sampling level, so this collapses to just the base case.)
 
+#include <parlay/primitives.h>
+
 #include <atomic>
 #include <functional>
 #include <string>
 
-#include <parlay/primitives.h>
-
-#include "ChunkSequence/chunk_seq.h"
 #include "ChunkSequence/ExternalPrimitives/materialize.h"
+#include "ChunkSequence/chunk_seq.h"
 
 namespace ChunkSequenceOps {
 
 template <typename T = uint64_t, typename Less = std::less<>>
 chunk_seq primitive_quicksort(chunk_seq& seq, Less less = {}) {
-    static std::atomic<size_t> qs_counter{0};
-    const std::string tag = std::to_string(qs_counter++);
+  static std::atomic<size_t> qs_counter{0};
+  const std::string tag = std::to_string(qs_counter++);
 
-    // Single sorting pass: the bucket fits in memory (guaranteed by the sample
-    // count chosen in external_samplesort), so pull it into DRAM, sort it, and
-    // write it back out as a chunk_seq.
-    auto v = ChunkSequenceOps::materialize<T>(seq);
-    parlay::sort_inplace(v, less);
-    return ChunkSequenceOps::to_chunk_seq(v, "qs_base_" + tag);
+  // Single sorting pass: the bucket fits in memory (guaranteed by the sample
+  // count chosen in external_samplesort), so pull it into DRAM, sort it, and
+  // write it back out as a chunk_seq.
+  auto v = ChunkSequenceOps::materialize<T>(seq);
+  parlay::sort_inplace(v, less);
+  return ChunkSequenceOps::to_chunk_seq(v, "qs_base_" + tag);
 }
 
-} // namespace ChunkSequenceOps
+}  // namespace ChunkSequenceOps
 
-#endif // PRIMITIVE_QUICK_SORT_H
+#endif  // PRIMITIVE_QUICK_SORT_H
