@@ -13,7 +13,45 @@
 //this is the external version of the parallel bfs algorithm
 
 //Ok, now that we've implemented a simple csr version below, let's make a simple external version.
+// template <typename V>
+// auto BFS_simple_delay(V start, const chunk_csr& G){
 
+//   //our assumption
+//   //make sequence: if i is the start, mark it as visited
+//   auto visited = parlay::tabulate<std::atomic<bool>>(G.degree_scan.size()-1, [&] (long i){
+//     return (i==start) ? true : false;});
+
+
+//     //the current frontier is just the first vertex
+//     //spinning up a whole tabulate is wasteful here
+//   chunk_seq frontier = ChunkSequenceOps::tabulate<size_t>(1, "bfs_frontier0", [&](short i){
+//     return start;
+//   });
+//   parlay::sequence<chunk_seq> frontiers;
+//   size_t round=0;
+
+// //need to figure out how this works
+//   std::vector<ChunkSequenceOps::delayed::SequentialReadContext> ctxs(
+//       std::max<size_t>(1, parlay::num_workers()));
+
+//   while (!frontier.chunks.empty()){
+//     //add the current frontier to the frontiers list
+
+//     frontiers.push_back(frontier);
+//     auto out = ChunkSequenceOps::ChunkFlatMap((frontier), [&](vertex u){
+
+//       return ChunkSequenceOps::delayed::lazy_filter(G.delay_get_adjacent(u), [&](weighted_edge e){
+//       // visited[e.connecting_vertex] ? 0 : 1;
+//       bool expected = false;
+//       return (!visited[e.connecting_vertex]) && visited[e.connecting_vertex].compare_exchange_strong(expected, true);});
+
+//       });
+//   frontier = ChunkSequenceOps::delayed::force(out, "filter_prefix");
+//     }
+
+//     // frontier = ChunkSequenceOps::delayed::force(out);
+//     return frontiers;
+// }
 
 
 //let's implement a quick csr bfs to get the hang of this again since it's been a while since I wrote a graph algorithm
@@ -21,16 +59,11 @@
 
 //we're assuming that the weights are all set to something uniform so it may as well be an unweighted graph
 //another assumption is that the vertex list can live in memory, but the edge list cannot
-//
-// NOTE: the template parameter is named V, not "vertex" -- external_compressed_sparse_row.h
-// #defines `vertex` to size_t (and `weight` to long double) as pseudo-typedefs, with no #undef.
-// A template parameter literally named `vertex` gets silently rewritten by the preprocessor to
-// `size_t`, which shadows the real ::size_t for the rest of the function body.
 template <typename V>
-auto BFS_simple(V start, const chunk_csr& G) {
+auto BFS_simple(V start, const chunk_csr& G){
 
   //our assumption
-  //make sequence: if i is the start, mark it as visited, otherwise, false.
+  //make sequence: if i is the start, mark it as visited
   auto visited = parlay::tabulate<std::atomic<bool>>(G.degree_scan.size()-1, [&] (long i){
     return (i==start) ? true : false;});
 
@@ -50,12 +83,6 @@ auto BFS_simple(V start, const chunk_csr& G) {
   while (!frontier.chunks.empty()){
     //add the current frontier to the frontiers list
     frontiers.push_back(frontier);
-
-    //for each vertex u in the frontier, return its adjacency list. Flattening this gives us the full next frontier list
-    //of nodes that could be visited, filtered inline via the visited CAS below (so no separate filter pass is needed)
-
-    //this is different from the rabin-karp chunk_flatmap because it maps over elements rather than chunks --
-    //ChunkFlatMap's elementwise overload (chunk_flat_map.h) takes f: T -> parlay::sequence<R>
     frontier = ChunkSequenceOps::ChunkFlatMap<size_t, size_t>(frontier, "bfs_frontier" + std::to_string(++round),[&] (size_t u) {
 
     auto& ctx = ctxs[parlay::worker_id()];

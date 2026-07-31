@@ -66,6 +66,7 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/fft_transposeExample \
                     $(BINDIR)/bellman_fordExample \
                     $(BINDIR)/bfsExample \
+                    $(BINDIR)/even_squaresExample \
 
 # Peter's external sample sort (the second contestant in the
 # external_samplesort_vs_peter comparison) ships its own configs.h /
@@ -324,6 +325,12 @@ $(BINDIR)/bellman_fordExample: ChunkSequence/examples/external/bellman_ford.cpp 
 # bellman_ford.h's `#include "helper/ligra_light.h"`), so the plain include
 # path suffices.
 $(BINDIR)/bfsExample: ChunkSequence/examples/external/bfs.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(LINK)
+
+# even_squares: the four external_even_squares.h implementations (out-of-core
+# eager/delayed, in-memory parlay eager/delayed) head-to-head on one input,
+# same examples/external/ location/recipe as bfs/chunk_cut.
+$(BINDIR)/even_squaresExample: ChunkSequence/examples/external/even_squares.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # external_samplesort_vs_peter: our sample sort vs Peter's, head-to-head.  The

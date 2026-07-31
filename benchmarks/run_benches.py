@@ -588,6 +588,32 @@ EXAMPLES = [
      "title": "BFS (dense, avg_degree=n/2): out-of-core vs in-mem",
      "data_globs": ["bfs_edges_dense*", "bfs_frontier*"]},
 
+    # even_squaresExample: the four external_even_squares.h implementations of
+    # "sum of squares of the even elements" head-to-head on one shared
+    # input -- out-of-core eager (ChunkFilter, then a fused delayed map+reduce)
+    # vs out-of-core fully-fused delayed (lazy_filter -> map -> reduce, one
+    # read pass, zero writes) vs the two in-memory parlay baselines (eager,
+    # delayed). All four are cross-checked for exact equality (an integer
+    # sum, so no tolerance compare); the in-mem pair stops at the ~24n DRAM
+    # cliff (EXAMPLE_INMEM_BUDGET_BYTES), same convention as samplesort's
+    # in-mem series.
+    #
+    # NOT in the make bench-examples/-mid/-full target lists (opt-in via
+    # --example only, same precedent as samplesort_three_way/bellman_ford_*/
+    # bfs_*): a comparison-focused example, not part of the default dev-box
+    # sweep.
+    {"name": "even_squares", "target": "bin/even_squaresExample",
+     "cols": ["n", "build_s", "eager_op_s", "delay_op_s", "inmem_eager_op_s",
+              "inmem_delay_op_s", "result", "eager_gb_s", "delay_gb_s"],
+     "time_col": "delay_op_s", "inmem_col": "inmem_delay_op_s",
+     "series_labels": ("in-mem parlaylib delayed (DRAM)", "out-of-core, fused delayed"),
+     "extra_series": [("eager_op_s", "out-of-core, eager (ChunkFilter)", "^-"),
+                      ("inmem_eager_op_s", "in-mem parlaylib eager (DRAM)", "d-")],
+     "elem_bytes": 8, "input_seqs": 1,
+     "xlabel": "input size",
+     "title": "Sum of even squares: fused-delayed vs eager, out-of-core vs in-mem",
+     "data_globs": ["es_in*", "even_squares_tmp*"]},
+
 ]
 
 
