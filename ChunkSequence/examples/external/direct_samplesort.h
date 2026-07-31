@@ -419,6 +419,7 @@ class PhaseTimer {
  * flatten()ed result it is not densely packed (each bucket's last chunk is
  * partial), so read it with the chunk-wise primitives, not chunk_seq::size().
  * The intermediate (unsorted) bucket files are left on the drives, as Peter's
+<<<<<<< Updated upstream
  * `spfx_` files are; they share the `prefix` so a caller sweeping it removes
  * both.
  */
@@ -428,6 +429,25 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
   namespace ds = direct_ss;
   static_assert(CHUNK_SIZE % sizeof(T) == 0,
                 "sizeof(T) must divide CHUNK_SIZE");
+=======
+ * `spfx_` files are; they share the `prefix` so a caller sweeping it removes both.
+ *
+ * disk_span spreads each bucket's data -- both the scatter phase's temporary
+ * files and the gather phase's final sorted output -- across `disk_span`
+ * independent per-drive files instead of one (see BucketWriter's disk_span
+ * doc in bucketed_file_writer.h).  Default 1 reproduces the original
+ * one-file-per-bucket layout, which throttles reading any contiguous slice
+ * of the output (e.g. its lowest-key bucket) to a single drive; passing
+ * GetSSDList().size() spreads every bucket's reads and writes across every
+ * drive instead.
+ */
+template <typename T = uint64_t, typename Less = std::less<>>
+chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
+                             const std::string& prefix = "dss",
+                             size_t disk_span = 1) {
+    namespace ds = direct_ss;
+    static_assert(CHUNK_SIZE % sizeof(T) == 0, "sizeof(T) must divide CHUNK_SIZE");
+>>>>>>> Stashed changes
 
   // Distinct file prefix per call, so concurrent/repeated sorts don't collide.
   static std::atomic<size_t> counter{0};
@@ -449,10 +469,17 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
       ds::GetPivots<T>(seq, prefix_sum, n, num_pivots, less), less);
   timer.Next("sample");
 
+<<<<<<< Updated upstream
   // ── scatter  (ScatterGather::AssignToBucket + OrderedFileWriter) ─────────
   constexpr size_t kBufElems = SAMPLE_SORT_BUCKET_SIZE / sizeof(T);
   ds::BucketWriter<T> writer(tmp_tag, num_buckets);
   std::vector<typename ds::BucketWriter<T>::Result> buckets;
+=======
+    // ── scatter  (ScatterGather::AssignToBucket + OrderedFileWriter) ─────────
+    constexpr size_t kBufElems = SAMPLE_SORT_BUCKET_SIZE / sizeof(T);
+    ds::BucketWriter<T> writer(tmp_tag, num_buckets, disk_span);
+    std::vector<typename ds::BucketWriter<T>::Result> buckets;
+>>>>>>> Stashed changes
 
   ChunkSequenceReader<T> reader;
   reader.PrepChunks(seq);
@@ -460,6 +487,7 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
                ds::kReaderQueueDepth, ds::kReaderMaxInFlight,
                ds::kReaderQueueSize);
 
+<<<<<<< Updated upstream
   // The writer's I/O threads and the scatter workers share the worker pool, as
   // in Peter's par_do: two workers drive the rings, the rest assign elements.
   const size_t scatter_workers = parlay::num_workers() - ds::kWriterIoThreads;
@@ -493,10 +521,46 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
                     buf[b] = (T*)ds::bucket_allocator::alloc();
                     fill[b] = 0;
                   }
+=======
+    // The writer's I/O threads and the scatter workers share the worker pool, as
+    // in Peter's par_do: two workers drive the rings, the rest assign elements.
+    const size_t scatter_workers = parlay::num_workers() - ds::kWriterIoThreads;
+    CHECK(scatter_workers > 0) << "direct_sample_sort: need > " << ds::kWriterIoThreads
+                               << " parlay workers";
+    parlay::par_do(
+        [&] {
+            parlay::parallel_for(0, ds::kWriterIoThreads, [&](size_t) {
+                writer.RunIoThread();
+            }, /*granularity=*/1);
+        },
+        [&] {
+            parlay::parallel_for(0, scatter_workers, [&](size_t) {
+                std::vector<T*> buf(num_buckets);
+                std::vector<size_t> fill(num_buckets, 0);   // elements held per bucket
+                std::vector<size_t> shard_rr(num_buckets, 0);  // next shard to flush to, per bucket
+                for (size_t b = 0; b < num_buckets; b++)
+                    buf[b] = (T*)ds::bucket_allocator::alloc();
+
+                while (true) {
+                    auto [data, count, index] = reader.Poll();
+                    if (data == nullptr) break;
+                    const size_t index_start = prefix_sum[index];
+                    for (size_t i = 0; i < count; i++) {
+                        const size_t b = assign(data[i], index_start + i);
+                        buf[b][fill[b]++] = data[i];
+                        if (fill[b] == kBufElems) {
+                            writer.Write(b, buf[b], kBufElems, shard_rr[b]++ % disk_span);
+                            buf[b] = (T*)ds::bucket_allocator::alloc();
+                            fill[b] = 0;
+                        }
+                    }
+                    reader.allocator.Free(data);
+>>>>>>> Stashed changes
                 }
                 reader.allocator.Free(data);
               }
 
+<<<<<<< Updated upstream
               for (size_t b = 0; b < num_buckets; b++) {
                 if (fill[b] > 0)
                   writer.Write(b, buf[b], fill[b]);
@@ -562,6 +626,82 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
           int fd = -1;
           T* buffer = nullptr;
           size_t id = 0;
+=======
+                for (size_t b = 0; b < num_buckets; b++) {
+                    if (fill[b] > 0) writer.Write(b, buf[b], fill[b], shard_rr[b]++ % disk_span);
+                    else ds::bucket_allocator::free((ds::BucketData*)buf[b]);
+                }
+            }, /*granularity=*/1);
+            // Flush the partial requests and close the pending queue, which is
+            // what lets the I/O threads in the other branch of the par_do exit.
+            buckets = writer.ReapResult();
+        });
+    reader.Wait();
+    writer.CloseFiles();
+    ds::bucket_allocator::finish();
+    timer.Next("scatter");
+
+    // ── gather  (ScatterGather::WorkerOnlyPhase2) ────────────────────────────
+    // Every parlay worker runs its own 3-stage pipeline over the bucket files:
+    // reap the read of the bucket it fetched last round, submit the read of the
+    // next one, sort the current one in DRAM, then reap the previous write and
+    // submit this bucket's.  Reads, sorts and writes of different buckets thus
+    // overlap on every worker — a plain parallel_for over buckets would instead
+    // have every worker read at once, then sort at once (drives idle), then write
+    // at once (CPUs idle).  At disk_span==1 (the default) each stage reads/sorts
+    // /writes a single buffer in place, exactly as before, and peak DRAM is ~3
+    // buckets per worker.  At disk_span>1 a bucket's disk_span shards are read
+    // into separate buffers, compacted into one merged buffer for the sort (the
+    // shards' padding must not land in the middle of the sorted range), then
+    // re-split into disk_span aligned output buffers before writing -- so
+    // `process` below briefly holds both the merged buffer and every output
+    // shard at once, pushing peak DRAM to ~4 buckets per worker.
+    std::vector<size_t> ids;   // logical buckets with data, in pivot order
+    for (size_t b = 0; b < num_buckets; b++) {
+        bool has_data = false;
+        for (size_t s = 0; s < disk_span; s++)
+            if (buckets[b * disk_span + s].file_bytes > 0) { has_data = true; break; }
+        if (has_data) ids.push_back(b);
+    }
+
+    // Output shard filenames are set up front; true_bytes/file_bytes are
+    // filled in during the gather phase below, since an output shard is a
+    // fresh split of the merged, sorted bucket -- not a copy of any one
+    // input shard's extent (unlike the disk_span==1 case, where the whole
+    // bucket's data could just be copied through).
+    std::vector<typename ds::BucketWriter<T>::Result> out_files(num_buckets * disk_span);
+    for (size_t b = 0; b < num_buckets; b++)
+        for (size_t s = 0; s < disk_span; s++)
+            out_files[b * disk_span + s].filename = GetFileName(tag, b * disk_span + s);
+
+    std::atomic<size_t> next_bucket{0};
+    // Worker-seconds spent in each stage, summed across the pipelines and printed
+    // under DSS_PHASE_TIMING: which stage a slow gather is stuck in is not
+    // recoverable from the phase wall clock alone.  (The sums exceed the wall
+    // clock -- the stages run concurrently, and parlay may nest one pipeline
+    // inside another's sort.)
+    std::atomic<uint64_t> t_read{0}, t_sort{0}, t_write{0}, t_alloc{0};
+    auto tick = [](std::atomic<uint64_t>& acc, std::chrono::steady_clock::time_point t0) {
+        acc += (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(
+                   std::chrono::steady_clock::now() - t0).count();
+    };
+    parlay::parallel_for(0, parlay::num_workers(), [&](size_t) {
+        // Stagger the workers so they don't all hit the drives on the same beat.
+        usleep(ds::kGatherStaggerUs * parlay::worker_id());
+
+        struct io_uring read_ring, write_ring;
+        // A pipeline round submits up to disk_span sqes at once on each ring.
+        const size_t ring_depth = std::max(ds::kGatherRingDepth, disk_span);
+        SYSCALL(InitIoUringWithRetry(ring_depth, &read_ring, IORING_SETUP_SINGLE_ISSUER));
+        SYSCALL(InitIoUringWithRetry(ring_depth, &write_ring, IORING_SETUP_SINGLE_ISSUER));
+
+        struct Local {
+            size_t id = (size_t)-1;        // logical bucket index
+            std::vector<int> read_fds;     // disk_span input shard fds  (-1 = no shard)
+            std::vector<T*>  read_bufs;    // disk_span aligned shard buffers
+            std::vector<int> write_fds;    // disk_span output shard fds (-1 = no shard)
+            std::vector<T*>  write_bufs;   // disk_span aligned, padded output buffers
+>>>>>>> Stashed changes
         };
         Local previous, current, next;
         bool reap_read = false, submit_read = true, process = false,
@@ -571,6 +711,7 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
           previous = current;
           current = next;
 
+<<<<<<< Updated upstream
           // reap the read submitted last round (it filled `current`)
           if (reap_read) {
             auto t0 = std::chrono::steady_clock::now();
@@ -590,6 +731,22 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
             const size_t k = next_bucket++;
             if (k >= ids.size()) {
               submit_read = false;
+=======
+            // reap the reads submitted last round (they filled `current`)
+            if (reap_read) {
+                auto t0 = std::chrono::steady_clock::now();
+                size_t pending = 0;
+                for (int fd : current.read_fds) if (fd >= 0) pending++;
+                for (size_t i = 0; i < pending; i++) {
+                    struct io_uring_cqe* cqe;
+                    SYSCALL(io_uring_wait_cqe(&read_ring, &cqe));
+                    SYSCALL(cqe->res);
+                    io_uring_cqe_seen(&read_ring, cqe);
+                }
+                for (int fd : current.read_fds) if (fd >= 0) SYSCALL(close(fd));
+                tick(t_read, t0);
+                process = true;
+>>>>>>> Stashed changes
             } else {
               auto t0 = std::chrono::steady_clock::now();
               const auto& b = buckets[ids[k]];
@@ -611,6 +768,7 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
           }
           reap_read = submit_read;
 
+<<<<<<< Updated upstream
           // sort the bucket whose read just landed, and open its result file
           if (process) {
             auto t0 = std::chrono::steady_clock::now();
@@ -650,6 +808,147 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
             SYSCALL(io_uring_submit(&write_ring));
           }
           reap_write = submit_write;
+=======
+            // submit the reads of the next bucket's disk_span shards
+            if (submit_read) {
+                const size_t k = next_bucket++;
+                if (k >= ids.size()) {
+                    submit_read = false;
+                } else {
+                    auto t0 = std::chrono::steady_clock::now();
+                    next.id = ids[k];
+                    next.read_fds.assign(disk_span, -1);
+                    next.read_bufs.assign(disk_span, nullptr);
+                    for (size_t s = 0; s < disk_span; s++) {
+                        const auto& r = buckets[next.id * disk_span + s];
+                        if (r.file_bytes == 0) continue;   // this shard is empty
+                        next.read_fds[s] = open(r.filename.c_str(), O_RDONLY | O_DIRECT);
+                        SYSCALL(next.read_fds[s]);
+                        next.read_bufs[s] =
+                            (T*)std::aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, r.file_bytes);
+                        CHECK(next.read_bufs[s] != nullptr)
+                            << "direct_sample_sort: bucket shard alloc failed (" << r.file_bytes
+                            << " bytes)";
+                        struct io_uring_sqe* sqe = io_uring_get_sqe(&read_ring);
+                        CHECK(sqe != nullptr) << "direct_sample_sort: gather read ring out of sqes";
+                        io_uring_prep_read(sqe, next.read_fds[s], next.read_bufs[s], r.file_bytes, 0);
+                    }
+                    SYSCALL(io_uring_submit(&read_ring));
+                    tick(t_alloc, t0);
+                }
+            }
+            reap_read = submit_read;
+
+            // compact the bucket's shards (if any), sort, split into disk_span
+            // output shards, and open their result files
+            if (process) {
+                auto t0 = std::chrono::steady_clock::now();
+                const size_t b = current.id;
+                current.write_fds.assign(disk_span, -1);
+                current.write_bufs.assign(disk_span, nullptr);
+
+                if (disk_span == 1) {
+                    // No merge/split needed: sort the single shard's buffer in
+                    // place and reuse it directly as the write buffer, exactly
+                    // as before disk_span existed -- no extra copy.
+                    const auto& r = buckets[b];
+                    const size_t nelem = r.true_bytes / sizeof(T);
+                    T* buffer = current.read_bufs[0];
+                    current.read_bufs[0] = nullptr;
+                    parlay::sort_inplace(parlay::make_slice(buffer, buffer + nelem), less);
+                    auto& out = out_files[b];
+                    out.true_bytes = r.true_bytes;
+                    out.file_bytes = r.file_bytes;
+                    current.write_bufs[0] = buffer;
+                    current.write_fds[0] =
+                        open(out.filename.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
+                    SYSCALL(current.write_fds[0]);
+                } else {
+                    size_t bucket_true_bytes = 0;
+                    for (size_t s = 0; s < disk_span; s++)
+                        bucket_true_bytes += buckets[b * disk_span + s].true_bytes;
+                    const size_t nelem = bucket_true_bytes / sizeof(T);
+
+                    T* merged = (T*)std::aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT,
+                                                       AlignUp(bucket_true_bytes));
+                    CHECK(merged != nullptr) << "direct_sample_sort: merge alloc failed ("
+                                             << bucket_true_bytes << " bytes)";
+                    size_t off = 0;
+                    for (size_t s = 0; s < disk_span; s++) {
+                        const size_t tb = buckets[b * disk_span + s].true_bytes;
+                        if (tb > 0) {
+                            memcpy((char*)merged + off, current.read_bufs[s], tb);
+                            off += tb;
+                        }
+                        if (current.read_bufs[s] != nullptr) std::free(current.read_bufs[s]);
+                    }
+
+                    parlay::sort_inplace(parlay::make_slice(merged, merged + nelem), less);
+
+                    const size_t base = nelem / disk_span, rem = nelem % disk_span;
+                    size_t consumed = 0;
+                    for (size_t s = 0; s < disk_span; s++) {
+                        const size_t cnt = base + (s < rem ? 1 : 0);
+                        if (cnt == 0) continue;   // degenerate: fewer live elements than shards
+                        const size_t true_b = cnt * sizeof(T);
+                        const size_t file_b = AlignUp(true_b);
+                        auto& out = out_files[b * disk_span + s];
+                        out.true_bytes = true_b;
+                        out.file_bytes = file_b;
+                        current.write_bufs[s] =
+                            (T*)std::aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, file_b);
+                        CHECK(current.write_bufs[s] != nullptr)
+                            << "direct_sample_sort: output shard alloc failed (" << file_b
+                            << " bytes)";
+                        memcpy(current.write_bufs[s], (char*)merged + consumed * sizeof(T), true_b);
+                        if (file_b > true_b)
+                            memset((char*)current.write_bufs[s] + true_b, 0, file_b - true_b);
+                        current.write_fds[s] =
+                            open(out.filename.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
+                        SYSCALL(current.write_fds[s]);
+                        consumed += cnt;
+                    }
+                    std::free(merged);
+                }
+
+                tick(t_sort, t0);
+                submit_write = true;
+            } else {
+                submit_write = false;
+            }
+
+            // reap the writes submitted last round (they drained `previous`)
+            if (reap_write) {
+                auto t0 = std::chrono::steady_clock::now();
+                size_t pending = 0;
+                for (int fd : previous.write_fds) if (fd >= 0) pending++;
+                for (size_t i = 0; i < pending; i++) {
+                    struct io_uring_cqe* cqe;
+                    SYSCALL(io_uring_wait_cqe(&write_ring, &cqe));
+                    SYSCALL(cqe->res);
+                    io_uring_cqe_seen(&write_ring, cqe);
+                }
+                for (size_t s = 0; s < previous.write_fds.size(); s++) {
+                    if (previous.write_fds[s] < 0) continue;
+                    SYSCALL(close(previous.write_fds[s]));
+                    std::free(previous.write_bufs[s]);
+                }
+                tick(t_write, t0);
+            }
+
+            // submit this bucket's disk_span writes
+            if (submit_write) {
+                for (size_t s = 0; s < disk_span; s++) {
+                    if (current.write_fds[s] < 0) continue;
+                    struct io_uring_sqe* sqe = io_uring_get_sqe(&write_ring);
+                    CHECK(sqe != nullptr) << "direct_sample_sort: gather write ring out of sqes";
+                    io_uring_prep_write(sqe, current.write_fds[s], current.write_bufs[s],
+                                        out_files[current.id * disk_span + s].file_bytes, 0);
+                }
+                SYSCALL(io_uring_submit(&write_ring));
+            }
+            reap_write = submit_write;
+>>>>>>> Stashed changes
         }
 
         io_uring_queue_exit(&read_ring);
@@ -664,6 +963,7 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
             ids.size());
   timer.Next("gather");
 
+<<<<<<< Updated upstream
   // ── the result files, carved into chunks ─────────────────────────────────
   // Each bucket is one contiguous file, so its chunks are just CHUNK_SIZE
   // slices of it; concatenating buckets in pivot order gives the sorted seq.
@@ -676,6 +976,22 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
                             index++});
   }
   return out;
+=======
+    // ── the result files, carved into chunks ─────────────────────────────────
+    // Each (bucket, shard) is one contiguous file, so its chunks are just
+    // CHUNK_SIZE slices of it; out_files is already laid out bucket-major,
+    // shard-minor (index b*disk_span+s), so a linear scan concatenates every
+    // bucket's shards in shard order, then buckets in pivot order, giving the
+    // sorted seq (a no-op nesting at disk_span==1, one shard per bucket).
+    chunk_seq out;
+    size_t index = 0;
+    for (const auto& r : out_files) {
+        for (size_t off = 0; off < r.true_bytes; off += CHUNK_SIZE)
+            out.chunks.push_back({r.filename, off,
+                                  std::min<size_t>(CHUNK_SIZE, r.true_bytes - off), index++});
+    }
+    return out;
+>>>>>>> Stashed changes
 }
 
 }  // namespace ChunkSequenceOps

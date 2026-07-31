@@ -46,6 +46,7 @@ TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/dc3Test \
                  $(BINDIR)/bigintMulTest \
                  $(BINDIR)/samplesortStripedTest \
+                 $(BINDIR)/directSamplesortStripedTest \
                  $(BINDIR)/externalRmatTest
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
@@ -273,11 +274,15 @@ $(BINDIR)/convexHullTest: ChunkSequence/tests/convex_hull_test.cpp $(UTIL_OBJS) 
 $(BINDIR)/tempMain: ChunkSequence/examples/temp_main.cpp $(UTIL_OBJS)
 	$(LINK)
 
-# samplesortStripedTest: correctness + drive-placement check for the
-# drive-striped sample sorts (sample_sort_striped / direct_sample_sort_striped).
-# Pulls in the samplesort example headers directly (header-only algorithms, no
-# upstream baseline needed), so no extra deps prerequisite.
+# samplesortStripedTest / directSamplesortStripedTest: correctness +
+# drive-placement checks for the drive-striped sample sorts (sample_sort's and
+# direct_sample_sort's disk_span parameter, respectively). Pull in the
+# samplesort example headers directly (header-only algorithms, no upstream
+# baseline needed), so no extra deps prerequisite.
 $(BINDIR)/samplesortStripedTest: ChunkSequence/tests/samplesort_striped_test.cpp $(UTIL_OBJS)
+	$(LINK)
+
+$(BINDIR)/directSamplesortStripedTest: ChunkSequence/tests/direct_samplesort_striped_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
 # externalRmatTest: the out-of-core RMAT generator (external_rmat.h) against the
