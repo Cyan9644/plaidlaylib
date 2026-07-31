@@ -79,7 +79,26 @@ PETER_DIR := ChunkSequence/examples/external/peter_samplesort
 
 LINK = $(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
-.PHONY: all clean distclean deps test examples bench bench-full bench-examples bench-examples-full trace
+.PHONY: all clean distclean deps test examples bench bench-full bench-examples bench-examples-full trace format format-check
+
+# ── formatting ──────────────────────────────────────────────────────────────────
+# Google style via .clang-format at the repo root.  Formats this repo's own
+# sources only — deps/ (fetched upstream) and results/ (generated) are excluded.
+# clang-format comes from shell.nix (clang-tools); fall back to the Nix store if
+# it is not on PATH.
+CLANG_FORMAT := $(shell command -v clang-format 2>/dev/null || echo $(firstword $(wildcard /nix/store/*-clang-tools-*/bin/clang-format)))
+FORMAT_FILES  = $(shell find . -path ./deps -prune -o -path ./results -prune -o \
+                  \( -name '*.cpp' -o -name '*.h' -o -name '*.cc' -o -name '*.hpp' \) -print)
+
+# Rewrite every source in place.
+format:
+	@test -n "$(CLANG_FORMAT)" || { echo "clang-format not found (enter nix-shell, or install clang-tools)"; exit 1; }
+	$(CLANG_FORMAT) -i --style=file $(FORMAT_FILES)
+
+# Non-mutating check: exits non-zero if anything is unformatted (hook-friendly).
+format-check:
+	@test -n "$(CLANG_FORMAT)" || { echo "clang-format not found (enter nix-shell, or install clang-tools)"; exit 1; }
+	$(CLANG_FORMAT) --dry-run -Werror --style=file $(FORMAT_FILES)
 
 all:
 	$(MAKE) deps
