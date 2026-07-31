@@ -33,19 +33,6 @@ namespace ChunkSequenceOps {
 // simultaneously (512 MB at the default of 128).
 static constexpr size_t DENSE_PACK_BATCH_SIZE = 128;
 
-// DensePackStream: how many chunks a worker may compute ahead of the packer's
-// sequential drain progress before blocking.  Bounds the "computed but not
-// yet packed" backlog in `results[]` to roughly window * CHUNK_SIZE bytes,
-// instead of the unbounded (up to n_in * CHUNK_SIZE) backlog that can build up
-// if the packer/writer falls behind the reader+compute rate.  Expressed as a
-// multiple of DENSE_PACK_BATCH_SIZE rather than an unrelated constant.
-// Override at build time (e.g. -DDENSE_PACK_STREAM_WINDOW_CHUNKS=4) for tests
-// that want to force the gate to bind on nearly every chunk.
-#ifndef DENSE_PACK_STREAM_WINDOW_CHUNKS
-#define DENSE_PACK_STREAM_WINDOW_CHUNKS (4 * DENSE_PACK_BATCH_SIZE)
-#endif
-static constexpr size_t DENSE_PACK_STREAM_WINDOW_CHUNKS_DEFAULT = DENSE_PACK_STREAM_WINDOW_CHUNKS;
-
 // One virtual chunk's contribution: `count` R elements at `data`, in logical
 // order.  The storage is owned by the producer's Batch (see DensePack).
 template<typename R>
@@ -306,22 +293,6 @@ chunk_seq DensePackStream(const chunk_seq& seq,
     std::mutex pmtx;                                   // guards packer wait/notify
     std::condition_variable pcv;
 
-    // Backpressure between workers and the packer: `ready`'s cap only bounds
-    // how far the reader/dispatcher can run ahead of workers, not how far
-    // workers (which compute immediately after popping, with no other gate)
-    // can run ahead of the single sequential packer.  Without this, a packer
-    // that falls behind (e.g. read+write I/O contention on the same drives)
-    // lets `results[]` accumulate an unbounded backlog, up to n_in chunks'
-    // worth.  `window` is clamped to >= 8 * num_workers() so a pathologically
-    // delayed single chunk can't leave every worker gate-blocked on later
-    // chunks with nobody free to poll it once it lands (see dense_pack.h
-    // notes on DENSE_PACK_STREAM_WINDOW_CHUNKS).
-    std::atomic<size_t> packer_progress{0};             // # input chunks fully drained
-    std::mutex wmtx;                                    // guards worker-gate wait/notify
-    std::condition_variable wcv;                        // workers block here when too far ahead
-    const size_t window = std::max<size_t>(DENSE_PACK_STREAM_WINDOW_CHUNKS_DEFAULT,
-                                            8 * parlay::num_workers());
-
     // Dispatcher: assemble out-of-order completions; release a chunk the moment
     // it (and, for halo>0, its right neighbor) has landed.  Single-threaded, so
     // present[]/pushed[] need no atomics; the ready queue gives workers the
@@ -394,9 +365,6 @@ chunk_seq DensePackStream(const chunk_seq& seq,
                 }
             }
             results[next] = parlay::sequence<R>();       // release run storage early
-            packer_progress.store(next + 1, std::memory_order_release);
-            { std::lock_guard<std::mutex> lk(wmtx); }    // pair with workers' wait
-            wcv.notify_all();
         }
         if (cur_n > 0) {                                 // final partial chunk
             memset((char*)cur + cur_n * sizeof(R), 0, CHUNK_SIZE - cur_n * sizeof(R));
@@ -415,16 +383,6 @@ chunk_seq DensePackStream(const chunk_seq& seq,
         while (true) {
             auto [i, code] = ready.Poll((size_t)0);
             if (code == QueueCode::FINISH) break;
-
-            // Backpressure: don't let compute race more than `window` chunks
-            // ahead of the packer's sequential drain progress.
-            {
-                std::unique_lock<std::mutex> lk(wmtx);
-                wcv.wait(lk, [&] {
-                    return i < packer_progress.load(std::memory_order_acquire) + window;
-                });
-            }
-
             const size_t n = seq.chunks[i].used / sizeof(T);
             const T* hbuf = nullptr; size_t hn = 0;
             if (halo > 0 && i + 1 < n_in) {
