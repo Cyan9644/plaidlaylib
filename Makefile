@@ -46,7 +46,8 @@ TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/dc3Test \
                  $(BINDIR)/bigintMulTest \
                  $(BINDIR)/samplesortStripedTest \
-                 $(BINDIR)/externalRmatTest
+                 $(BINDIR)/externalRmatTest \
+                 $(BINDIR)/densePackWindowTest
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
@@ -237,6 +238,15 @@ $(BINDIR)/bigintMulTest: ChunkSequence/tests/bigint_mul_test.cpp $(UTIL_OBJS)
 
 $(BINDIR)/partitionTest: ChunkSequence/tests/partition_test.cpp $(UTIL_OBJS)
 	$(LINK)
+
+# densePackWindowTest: stress test for DensePackStream's worker/packer
+# backpressure gate (dense_pack.h, DENSE_PACK_STREAM_WINDOW_CHUNKS). Built
+# with a tiny window override so the gate binds on nearly every chunk instead
+# of only under real I/O contention, matching the CHUNK_SIZE_BYTES override
+# pattern used by bigintMulTest above.
+$(BINDIR)/densePackWindowTest: ChunkSequence/tests/dense_pack_window_test.cpp $(UTIL_OBJS)
+	$(CXX) $(CXXFLAGS) -DDENSE_PACK_STREAM_WINDOW_CHUNKS=4 $(INCLUDES) $^ -o $@ $(LDFLAGS) \
+	    -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
 $(BINDIR)/segmentedReduceTest: ChunkSequence/tests/segmented_reduce_test.cpp $(UTIL_OBJS)
 	$(LINK)
