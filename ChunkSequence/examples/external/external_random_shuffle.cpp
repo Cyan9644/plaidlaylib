@@ -9,7 +9,7 @@
 //   2. ChunkSequenceOps::Permutation::Permute -- the same algorithm on the
 //      low-level reader/writer paradigm (ported from Peter's scatter-gather):
 //      identical bucketing, but each bucket is rewritten **in place** over the
-//      count-sort's own chunks (process_buckets_inplace), so it moves one fewer
+//      count-sort's own chunks (process_inplace), so it moves one fewer
 //      copy of the data.
 //   3. parlay::random_shuffle -- the in-memory parlaylib baseline (stops at the
 //      RAM cliff, like every other example's in-mem series).

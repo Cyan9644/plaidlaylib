@@ -1,5 +1,5 @@
-#ifndef INPLACE_BUCKET_SORT_H
-#define INPLACE_BUCKET_SORT_H
+#ifndef SMALL_SEQUENCE_OPS_H
+#define SMALL_SEQUENCE_OPS_H
 
 #include <fcntl.h>
 #include <liburing.h>
@@ -27,25 +27,32 @@ namespace detail {
 constexpr size_t kBucketPipelineStaggerUs = 5000;
 }  // namespace detail
 
-// Rewrite each bucket in `buckets` in place on disk (see file comment): bucket
-// b is read into one contiguous DRAM buffer and handed to `processor(b, buf,
-// nelem)`, which permutes/overwrites those nelem elements; the buffer is then
-// written back over the bucket's own chunks.  The chunk headers are unchanged,
-// so `buckets` remains a valid vector of external sequences that the caller can
-// flatten().
+// Rewrite each sequence in `seqs` in place on disk (see file comment):
+// sequence b is read into one contiguous DRAM buffer and handed to
+// `processor(b, buf, nelem)`, which permutes/overwrites those nelem elements;
+// the buffer is then written back over that sequence's own chunks.  The chunk
+// headers are unchanged, so `seqs` remains a valid vector of external
+// sequences that the caller can flatten().  `processor` may not change how
+// many elements a sequence has -- this is an in-place transform (sort,
+// shuffle, ...), not a producer.
 //
-// Every parlay worker runs its own 3-stage pipeline over the bucket list
-// (read the next bucket via io_uring, run `processor` on the current one,
+// This is the general engine behind `sort_inplace` below; it is not
+// samplesort- or bucket-specific despite the common case of `seqs` being
+// samplesort/count_sort bucket outputs -- e.g. random_shuffle.h drives the
+// same engine with a shuffle processor instead of a sort.
+//
+// Every parlay worker runs its own 3-stage pipeline over the sequence list
+// (read the next sequence via io_uring, run `processor` on the current one,
 // write the previous one back via io_uring), so reads/compute/writes of
-// different buckets overlap on every worker instead of each bucket paying
+// different sequences overlap on every worker instead of each one paying
 // its own read-then-compute-then-write latency serially — the same
 // technique as direct_samplesort.h's WorkerOnlyPhase2 / Peter's
-// ScatterGather.  A bucket's chunks are grouped into maximal contiguous runs
-// (same filename, back-to-back begin_addr) before I/O is issued: one open(),
-// one read SQE, one write SQE per run, instead of per chunk.  With a
-// single-shard (single-file) bucket this collapses to exactly one run per
-// bucket, matching direct_samplesort.h's single open/read/write per bucket;
-// a bucket spanning multiple files (e.g. a drive-striped count_sort, one file
+// ScatterGather.  A sequence's chunks are grouped into maximal contiguous
+// runs (same filename, back-to-back begin_addr) before I/O is issued: one
+// open(), one read SQE, one write SQE per run, instead of per chunk.  With a
+// single-shard (single-file) sequence this collapses to exactly one run,
+// matching direct_samplesort.h's single open/read/write per bucket; a
+// sequence spanning multiple files (e.g. a drive-striped count_sort, one file
 // per shard) degrades to one run per shard.  Each run's fd is opened O_RDWR
 // once and reused for both its read and its write (closed only after the
 // write completes), rather than reopened per direction, halving the
@@ -66,18 +73,17 @@ constexpr size_t kBucketPipelineStaggerUs = 5000;
 // to worry about) and the untouched slot padding is left exactly as it was
 // read -- already correctly zeroed by whatever wrote it originally.
 template <typename T = uint64_t, typename Processor>
-void process_buckets_inplace(std::vector<chunk_seq>& buckets,
-                             Processor processor) {
+void process_inplace(std::vector<chunk_seq>& seqs, Processor processor) {
   static_assert(CHUNK_SIZE % sizeof(T) == 0,
                 "sizeof(T) must divide CHUNK_SIZE for O_DIRECT alignment");
   const size_t ept = CHUNK_SIZE / sizeof(T);
 
-  std::vector<size_t> ids;  // non-empty buckets, in bucket order
+  std::vector<size_t> ids;  // non-empty sequences, in seqs order
   size_t max_nc = 1;
-  for (size_t b = 0; b < buckets.size(); b++) {
-    if (!buckets[b].chunks.empty()) {
+  for (size_t b = 0; b < seqs.size(); b++) {
+    if (!seqs[b].chunks.empty()) {
       ids.push_back(b);
-      max_nc = std::max(max_nc, buckets[b].chunks.size());
+      max_nc = std::max(max_nc, seqs[b].chunks.size());
     }
   }
   if (ids.empty()) return;
@@ -144,7 +150,7 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets,
               submit_read = false;
             } else {
               const size_t b = ids[k];
-              const chunk_seq& bs = buckets[b];
+              const chunk_seq& bs = seqs[b];
               const size_t nc = bs.chunks.size();
               next = Stage{};
               next.bucket = b;
@@ -152,7 +158,7 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets,
               next.buf =
                   (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, nc * CHUNK_SIZE);
               CHECK(next.buf != nullptr)
-                  << "process_buckets_inplace: buffer alloc failed";
+                  << "process_inplace: buffer alloc failed";
 
               size_t nelem = 0;
               size_t ci = 0;
@@ -180,7 +186,7 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets,
                 SYSCALL(fd);
                 struct io_uring_sqe* sqe = io_uring_get_sqe(&read_ring);
                 CHECK(sqe != nullptr)
-                    << "process_buckets_inplace: read ring out of sqes";
+                    << "process_inplace: read ring out of sqes";
                 io_uring_prep_read(sqe, fd, next.buf + start * ept, read_bytes,
                                    (off_t)first.begin_addr);
                 next.runs.push_back(Run{fd, start, count, read_bytes});
@@ -191,7 +197,7 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets,
                   O_DIRECT_MEMORY_ALIGNMENT,
                   std::max<size_t>(nelem, 1) * sizeof(T));
               CHECK(next.compact != nullptr)
-                  << "process_buckets_inplace: compact alloc failed";
+                  << "process_inplace: compact alloc failed";
               SYSCALL(io_uring_submit(&read_ring));
             }
           }
@@ -203,7 +209,7 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets,
           // from.  Slot padding outside each chunk's `used` prefix is never
           // touched here, so it stays exactly as read (see file comment).
           if (process) {
-            const chunk_seq& bs = buckets[current.bucket];
+            const chunk_seq& bs = seqs[current.bucket];
 
             char* cdst = (char*)current.compact;
             for (size_t ci = 0; ci < current.nc; ci++) {
@@ -243,11 +249,11 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets,
 
           // Submit this bucket's write.
           if (submit_write) {
-            const chunk_seq& bs = buckets[current.bucket];
+            const chunk_seq& bs = seqs[current.bucket];
             for (const Run& run : current.runs) {
               struct io_uring_sqe* sqe = io_uring_get_sqe(&write_ring);
               CHECK(sqe != nullptr)
-                  << "process_buckets_inplace: write ring out of sqes";
+                  << "process_inplace: write ring out of sqes";
               io_uring_prep_write(sqe, run.fd, current.buf + run.start_ci * ept,
                                   run.count * CHUNK_SIZE,
                                   (off_t)bs.chunks[run.start_ci].begin_addr);
@@ -263,15 +269,37 @@ void process_buckets_inplace(std::vector<chunk_seq>& buckets,
       /*granularity=*/1);
 }
 
-// Sort each bucket in place on disk: the phase-2 base sorter for
-// external_samplesort.
+// Single-sequence form of process_inplace: read `seq` fully into DRAM, hand
+// it to `processor(0, buf, nelem)`, and write the result back over `seq`'s
+// own chunks.  Built on the vector overload above (a one-element vector) so
+// the two share the exact same read/compact/write pipeline.
+template <typename T = uint64_t, typename Processor>
+void process_inplace(chunk_seq& seq, Processor processor) {
+  std::vector<chunk_seq> tmp{seq};
+  process_inplace<T>(tmp, std::move(processor));
+  seq = std::move(tmp[0]);
+}
+
+// Read `seq` fully into DRAM, sort it in place, and write it back over its
+// own chunks -- the single-sequence form of process_inplace, for a whole
+// out-of-core sequence known to fit in DRAM (a samplesort/fitmem_sort base
+// case, for instance).
 template <typename T = uint64_t, typename Less = std::less<>>
-void sort_buckets_inplace(std::vector<chunk_seq>& buckets, Less less = {}) {
-  process_buckets_inplace<T>(buckets, [&](size_t, T* buf, size_t nelem) {
+void sort_inplace(chunk_seq& seq, Less less = {}) {
+  process_inplace<T>(seq, [&](size_t, T* buf, size_t nelem) {
+    parlay::sort_inplace(parlay::make_slice(buf, buf + nelem), less);
+  });
+}
+
+// Sort each sequence in `seqs` in place on disk: the phase-2 base sorter for
+// external_samplesort's count_sort buckets.
+template <typename T = uint64_t, typename Less = std::less<>>
+void sort_inplace(std::vector<chunk_seq>& seqs, Less less = {}) {
+  process_inplace<T>(seqs, [&](size_t, T* buf, size_t nelem) {
     parlay::sort_inplace(parlay::make_slice(buf, buf + nelem), less);
   });
 }
 
 }  // namespace ChunkSequenceOps
 
-#endif  // INPLACE_BUCKET_SORT_H
+#endif  // SMALL_SEQUENCE_OPS_H

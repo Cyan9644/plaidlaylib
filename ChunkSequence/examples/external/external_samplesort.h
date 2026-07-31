@@ -19,7 +19,7 @@
 
 #include "ChunkSequence/ExternalPrimitives/count_sort.h"
 #include "ChunkSequence/ExternalPrimitives/flatten.h"
-#include "ChunkSequence/ExternalPrimitives/inplace_bucket_sort.h"
+#include "ChunkSequence/ExternalPrimitives/small_sequence_ops.h"
 #include "ChunkSequence/ExternalPrimitives/materialize.h"
 #include "ChunkSequence/ExternalPrimitives/scan_find.h"
 #include "ChunkSequence/ExternalPrimitives/sort_buckets.h"
@@ -69,14 +69,22 @@ struct SsPhaseTimer {
 
 // samplesort implementation with primitives
 //
-// disk_span defaults to every drive (GetSSDList().size()), so count_sort's
-// bucketing spreads each bucket's shards across all drives instead of
-// pinning a whole bucket to one -- see count_sort's disk_span doc
-// (ExternalPrimitives/count_sort.h) and BucketWriter's (bucketed_file_writer.h).
-// Pass disk_span=1 explicitly to get the old single-file-per-bucket layout.
+// disk_span defaults to 1 (one file per bucket).  sort_inplace
+// (ExternalPrimitives/small_sequence_ops.h) already achieves full aggregate
+// drive parallelism here: GetFileName's round-robin already spreads
+// *different* buckets one-per-drive, and sort_inplace runs one pipeline per
+// parlay worker pulling buckets off a shared counter, so with far more
+// buckets than drives (the common case), many drives are busy on many
+// buckets at once regardless of disk_span.  Striping a single bucket's own
+// ~128MB of data across disk_span drives instead just fragments its
+// sort_inplace read/write into disk_span small io_uring runs (see
+// bucketed_file_writer.h's disk_span doc) for no bandwidth benefit -- a net
+// loss, confirmed by benchmark.  Pass disk_span > 1 explicitly only if a
+// downstream consumer needs the *final flattened output* spread across
+// drives for a fast large contiguous read (see count_sort's disk_span doc,
+// ExternalPrimitives/count_sort.h).
 template <typename T, typename Less = std::less<>>
-chunk_seq sample_sort(chunk_seq& seq, Less less1 = {},
-                      size_t disk_span = GetSSDList().size()) {
+chunk_seq sample_sort(chunk_seq& seq, Less less1 = {}, size_t disk_span = 1) {
   static std::atomic<size_t> ss_counter{0};
   const std::string tag = std::to_string(ss_counter++);
   SsPhaseTimer _pt(tag.c_str());
@@ -225,7 +233,7 @@ chunk_seq sample_sort(chunk_seq& seq, Less less1 = {},
   // we can replace this with a more general pass method once we figure out a
   // framework for streaming or perhaps a bucket-operation method still, this is
   // a useful-ish method so I don't feel like it's cheating too badly
-  ChunkSequenceOps::sort_buckets_inplace<T>(externalSequenceVector, less1);
+  ChunkSequenceOps::sort_inplace<T>(externalSequenceVector, less1);
   _pt.mark("bucket_sort");
 
   auto result = ChunkSequenceOps::flatten(externalSequenceVector);
@@ -416,7 +424,7 @@ chunk_seq sample_sort_singledrive(chunk_seq& seq, Less less1 = {}) {
   // we can replace this with a more general pass method once we figure out a
   // framework for streaming or perhaps a bucket-operation method still, this is
   // a useful-ish method so I don't feel like it's cheating too badly
-  ChunkSequenceOps::sort_buckets_inplace<T>(externalSequenceVector, less1);
+  ChunkSequenceOps::sort_inplace<T>(externalSequenceVector, less1);
   _pt.mark("bucket_sort");
 
   auto result = ChunkSequenceOps::flatten(externalSequenceVector);

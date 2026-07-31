@@ -11,13 +11,13 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include "ChunkSequence/ExternalPrimitives/inplace_bucket_sort.h"
+#include "ChunkSequence/ExternalPrimitives/small_sequence_ops.h"
 
 #include <parlay/primitives.h>
 #include <parlay/random.h>
 #include "ChunkSequence/ExternalPrimitives/count_sort.h"
 #include "ChunkSequence/ExternalPrimitives/flatten.h"
-#include "ChunkSequence/ExternalPrimitives/inplace_bucket_sort.h"
+#include "ChunkSequence/ExternalPrimitives/small_sequence_ops.h"
 #include "ChunkSequence/ExternalPrimitives/materialize.h"
 #include "ChunkSequence/ExternalPrimitives/scan_find.h"
 #include "ChunkSequence/ExternalPrimitives/sort_buckets.h"
@@ -83,7 +83,7 @@ chunk_seq sample_sort(chunk_seq& seq, Less less1 = {}) {
   std::vector<chunk_seq> externalSequenceVector(num_buckets);
   ChunkSequenceOps::count_sort(ids, num_buckets, externalSequenceVector, "ss_bucket_" + tag);
 
-  ChunkSequenceOps::sort_buckets_inplace<T>(externalSequenceVector, less1);
+  ChunkSequenceOps::sort_inplace<T>(externalSequenceVector, less1);
 
   return ChunkSequenceOps::flatten(externalSequenceVector);
 }

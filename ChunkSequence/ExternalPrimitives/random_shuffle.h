@@ -12,7 +12,7 @@
 
 #include "ChunkSequence/ExternalPrimitives/count_sort.h"
 #include "ChunkSequence/ExternalPrimitives/flatten.h"
-#include "ChunkSequence/ExternalPrimitives/inplace_bucket_sort.h"
+#include "ChunkSequence/ExternalPrimitives/small_sequence_ops.h"
 #include "ChunkSequence/ExternalPrimitives/materialize.h"
 #include "ChunkSequence/chunk_delayed.h"
 #include "ChunkSequence/chunk_seq.h"
@@ -140,7 +140,7 @@ chunk_seq random_shuffle_method(chunk_seq& seq,
   //    });
   auto seed = 42;
   parlay::random rng(seed);
-  ChunkSequenceOps::process_buckets_inplace<T>(
+  ChunkSequenceOps::process_inplace<T>(
       externalSequenceVector, [&](size_t b, T* buf, size_t nelem) {
         auto shuffled = parlay::random_shuffle(
             parlay::make_slice(buf, buf + nelem), rng.fork(b));
@@ -242,7 +242,7 @@ class Permutation {
 
     // Phase 2 (ProcessBucket): every bucket is DRAM-sized by construction, so
     // each is read back, processed, and written over its own chunks.
-    process_buckets_inplace<T>(buckets, processor);
+    process_inplace<T>(buckets, processor);
 
     // Gather: the buckets, in bucket order, are the output sequence.
     return flatten(buckets);

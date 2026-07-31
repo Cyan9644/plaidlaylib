@@ -482,7 +482,7 @@ void count_sort_serial(const D& dseq, size_t num_buckets,
 // per-drive files instead of one (see BucketWriter's disk_span doc): default
 // 1 reproduces the exact single-file-per-bucket layout above; passing
 // GetSSDList().size() stripes every bucket across every drive, so a bucket's
-// later read (sort_buckets_inplace) touches all drives instead of one.
+// later read (sort_inplace) touches all drives instead of one.
 template <class D>
 void count_sort(const D& dseq, size_t num_buckets,
                 std::vector<chunk_seq>& externalSequenceVector,
@@ -582,7 +582,7 @@ void count_sort(const D& dseq, size_t num_buckets,
   // repack pass" carving direct_sample_sort uses for its output, just per
   // shard now instead of per whole bucket.  At disk_span==1 this is exactly
   // the prior single-file carve; order across shards within a bucket doesn't
-  // matter (sort_buckets_inplace re-sorts the whole bucket afterward).
+  // matter (sort_inplace re-sorts the whole bucket afterward).
   for (size_t b = 0; b < num_buckets; b++) {
     size_t idx = 0;
     for (size_t s = 0; s < disk_span; s++) {
