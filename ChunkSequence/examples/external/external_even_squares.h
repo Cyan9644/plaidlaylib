@@ -36,7 +36,7 @@ size_t sum_of_even_squares_eager(chunk_seq& seq){
 template<typename T>
 size_t sum_of_even_squares_parlay_delayed(parlay::sequence<T> seq){
 
-  return parlay::reduce(parlay::delayed::map(parlay::delayed::filter(seq,[&](T i){ return i % 2 == 0 ? true : false;}), [&](T k){return k * k;}));
+  return parlay::delayed::reduce(parlay::delayed::map(parlay::delayed::filter(seq,[&](T i){ return i % 2 == 0 ? true : false;}), [&](T k){return k * k;}));
 }
 
 template<typename T>
