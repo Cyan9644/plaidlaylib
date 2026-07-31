@@ -417,13 +417,8 @@ chunk_seq DensePackStream(const chunk_seq& seq,
             if (code == QueueCode::FINISH) break;
 
             // Backpressure: don't let compute race more than `window` chunks
-            // ahead of the packer's sequential drain progress.  Lock-free fast
-            // path first — the common case is not gated at all, and with
-            // parlay::num_workers() threads hitting this per chunk, taking
-            // `wmtx` unconditionally here would be a lock convoy (same failure
-            // mode as ChunkPartition's shared-bucket assembly, see its notes).
-            // Only threads that are actually too far ahead pay for the lock.
-            if (i >= packer_progress.load(std::memory_order_acquire) + window) {
+            // ahead of the packer's sequential drain progress.
+            {
                 std::unique_lock<std::mutex> lk(wmtx);
                 wcv.wait(lk, [&] {
                     return i < packer_progress.load(std::memory_order_acquire) + window;
