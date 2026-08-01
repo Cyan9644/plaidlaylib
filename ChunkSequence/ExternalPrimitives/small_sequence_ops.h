@@ -63,15 +63,17 @@ constexpr size_t kBucketPipelineStaggerUs = 5000;
 // (`used`) — needed so a run's read/write is one SQE at a fixed offset. A
 // *partial* chunk's slot therefore has live bytes only at its front; with a
 // single run (one partial chunk, at the very end) that leaves one contiguous
-// live prefix, which is what let `processor` operate directly on `buf`
-// before. With multiple runs (multiple shards), each run's own partial
-// chunk leaves a gap *mid-buffer*, breaking that contiguity — so `buf` is
-// compacted into a separate `nelem`-sized `compact` buffer (chunk order, no
-// gaps) before `processor` runs, and expanded back into `buf`'s per-chunk
-// slots afterward.  The two are physically distinct allocations, so the
-// compact/expand copies need no particular chunk order (no in-place aliasing
-// to worry about) and the untouched slot padding is left exactly as it was
-// read -- already correctly zeroed by whatever wrote it originally.
+// live prefix, so `processor` operates directly on `buf` in place -- no
+// compact/expand copies (the single-shard/single-file case, e.g. a
+// count_sort bucket at disk_span=1). With multiple runs (multiple shards),
+// each run's own partial chunk leaves a gap *mid-buffer*, breaking that
+// contiguity — so `buf` is compacted into a separate `nelem`-sized `compact`
+// buffer (chunk order, no gaps) before `processor` runs, and expanded back
+// into `buf`'s per-chunk slots afterward.  The two are physically distinct
+// allocations, so the compact/expand copies need no particular chunk order
+// (no in-place aliasing to worry about) and the untouched slot padding is
+// left exactly as it was read -- already correctly zeroed by whatever wrote
+// it originally.
 template <typename T = uint64_t, typename Processor>
 void process_inplace(std::vector<chunk_seq>& seqs, Processor processor) {
   static_assert(CHUNK_SIZE % sizeof(T) == 0,
@@ -193,11 +195,17 @@ void process_inplace(std::vector<chunk_seq>& seqs, Processor processor) {
               }
               for (const chunk& c : bs.chunks) nelem += c.used / sizeof(T);
               next.nelem = nelem;
-              next.compact = (T*)std::aligned_alloc(
-                  O_DIRECT_MEMORY_ALIGNMENT,
-                  std::max<size_t>(nelem, 1) * sizeof(T));
-              CHECK(next.compact != nullptr)
-                  << "process_inplace: compact alloc failed";
+              // A single run's live bytes are already a contiguous prefix of
+              // `buf` (see file comment) -- `processor` runs on `buf`
+              // directly in that case, so `compact` is only needed, and only
+              // allocated, when there's more than one run.
+              if (next.runs.size() > 1) {
+                next.compact = (T*)std::aligned_alloc(
+                    O_DIRECT_MEMORY_ALIGNMENT,
+                    std::max<size_t>(nelem, 1) * sizeof(T));
+                CHECK(next.compact != nullptr)
+                    << "process_inplace: compact alloc failed";
+              }
               SYSCALL(io_uring_submit(&read_ring));
             }
           }
@@ -211,20 +219,27 @@ void process_inplace(std::vector<chunk_seq>& seqs, Processor processor) {
           if (process) {
             const chunk_seq& bs = seqs[current.bucket];
 
-            char* cdst = (char*)current.compact;
-            for (size_t ci = 0; ci < current.nc; ci++) {
-              const size_t used = bs.chunks[ci].used;
-              std::memcpy(cdst, (char*)current.buf + ci * CHUNK_SIZE, used);
-              cdst += used;
-            }
+            if (current.runs.size() == 1) {
+              // Single contiguous run: buf's live bytes are already a
+              // gap-free prefix (only the run's last chunk is partial), so
+              // processor runs on buf directly -- no compact/expand copies.
+              processor(current.bucket, current.buf, current.nelem);
+            } else {
+              char* cdst = (char*)current.compact;
+              for (size_t ci = 0; ci < current.nc; ci++) {
+                const size_t used = bs.chunks[ci].used;
+                std::memcpy(cdst, (char*)current.buf + ci * CHUNK_SIZE, used);
+                cdst += used;
+              }
 
-            processor(current.bucket, current.compact, current.nelem);
+              processor(current.bucket, current.compact, current.nelem);
 
-            char* csrc = (char*)current.compact;
-            for (size_t ci = 0; ci < current.nc; ci++) {
-              const size_t used = bs.chunks[ci].used;
-              std::memcpy((char*)current.buf + ci * CHUNK_SIZE, csrc, used);
-              csrc += used;
+              char* csrc = (char*)current.compact;
+              for (size_t ci = 0; ci < current.nc; ci++) {
+                const size_t used = bs.chunks[ci].used;
+                std::memcpy((char*)current.buf + ci * CHUNK_SIZE, csrc, used);
+                csrc += used;
+              }
             }
 
             // current.runs[*].fd is still the O_RDWR fd opened for the
