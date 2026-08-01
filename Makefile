@@ -48,7 +48,8 @@ TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/samplesortStripedTest \
                  $(BINDIR)/directSamplesortStripedTest \
                  $(BINDIR)/externalRmatTest \
-                 $(BINDIR)/chunkOperationTest
+                 $(BINDIR)/chunkOperationTest \
+                 $(BINDIR)/directRandomShuffleTest
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
@@ -61,7 +62,9 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/external_samplesort_vs_peterExample \
                     $(BINDIR)/direct_samplesort_vs_peterExample \
                     $(BINDIR)/samplesort_three_wayExample \
+                    $(BINDIR)/apply_sort_vs_samplesortExample \
                     $(BINDIR)/external_random_shuffleExample \
+                    $(BINDIR)/random_shuffle_three_wayExample \
                     $(BINDIR)/convex_hullExample \
                     $(BINDIR)/convex_hull_lazy_filterExample \
                     $(BINDIR)/fftExample \
@@ -286,6 +289,13 @@ $(BINDIR)/samplesortStripedTest: ChunkSequence/tests/samplesort_striped_test.cpp
 $(BINDIR)/directSamplesortStripedTest: ChunkSequence/tests/direct_samplesort_striped_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
+# directRandomShuffleTest: correctness + drive-placement checks for
+# direct_random_shuffle (examples/external/direct_random_shuffle.h), the
+# shuffle counterpart to directSamplesortStripedTest. Header-only algorithm,
+# no upstream baseline needed, so no extra deps prerequisite.
+$(BINDIR)/directRandomShuffleTest: ChunkSequence/tests/direct_random_shuffle_test.cpp $(UTIL_OBJS)
+	$(LINK)
+
 # externalRmatTest: the out-of-core RMAT generator (external_rmat.h) against the
 # in-memory graph_utils reference it claims to reproduce.  Its in-DRAM baseline
 # is the LOCAL examples/in_memory/graph/graph_utils/graph_utils.h, not an
@@ -329,6 +339,15 @@ $(BINDIR)/external_linefitExample: ChunkSequence/examples/external/external_line
 	$(LINK)
 
 $(BINDIR)/external_random_shuffleExample: ChunkSequence/examples/external/external_random_shuffle.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(LINK)
+
+# random_shuffle_three_way: our primitives-based shuffle (external_random_shuffle.h)
+# vs our direct-I/O shuffle (direct_random_shuffle.h) vs in-mem
+# parlay::random_shuffle, all on the same keys in one run -- the shuffle
+# counterpart to samplesort_three_way, minus the vendored-reference leg (no
+# Peter shuffle exists). Both contestants are ours, so no peter_shim needed --
+# plain recipe like external_samplesortExample.
+$(BINDIR)/random_shuffle_three_wayExample: ChunkSequence/examples/external/random_shuffle_three_way.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # fitmem variants: single-level (buckets fit in DRAM) sample sort / kth-smallest,
@@ -389,6 +408,13 @@ $(BINDIR)/direct_samplesort_vs_peterExample: ChunkSequence/examples/external/dir
 # across rounds so no sort is always the one paying for the previous one's
 # deleted files.  Same shim as the pairwise drivers.
 $(BINDIR)/samplesort_three_wayExample: ChunkSequence/examples/external/samplesort_three_way.cpp $(UTIL_OBJS) $(OBJDIR)/peter_shim.o | deps/parlaylib-examples
+	$(LINK)
+
+# apply_sort_vs_samplesort: ChunkSequenceOps::apply<ChunkOperation::Sort> (whole-
+# sequence, DRAM-budgeted, no bucketing) vs sample_sort (recursive out-of-core).
+# Both are ours, no Peter contestant, so no peter_shim needed -- plain recipe
+# like external_samplesortExample.
+$(BINDIR)/apply_sort_vs_samplesortExample: ChunkSequence/examples/external/apply_sort_vs_samplesort.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # suffix_array: out-of-core prefix-doubling suffix array (built on the direct-I/O

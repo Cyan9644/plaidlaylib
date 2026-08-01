@@ -348,6 +348,28 @@ EXAMPLES = [
                     "ss_base_*", "ss_deg_*", "qs_base_*",
                     "pss_in*", "pss_out*", "spfx_*"]},
 
+    # apply_sort_vs_samplesortExample: ChunkSequenceOps::apply<ChunkOperation::Sort>
+    # (whole-sequence, DRAM-budgeted, no bucketing -- process_inplace_budgeted's
+    # own CHECK caps how large an input it can take) vs sample_sort (recursive
+    # out-of-core, external_samplesort.h), which itself uses apply<Sort> as its
+    # per-bucket base case.  apply_sort_s/apply_build_s/apply_gb_s are left BLANK
+    # by the driver once n exceeds apply<Sort>'s own DRAM budget (mirrors how
+    # inmem_sort_s goes blank past the RAM cliff), so the extra_series line stops
+    # at that cliff instead of dropping to zero.
+    {"name": "apply_sort_vs_samplesort",
+     "target": "bin/apply_sort_vs_samplesortExample",
+     "cols": ["n", "apply_sort_s", "samplesort_sort_s", "inmem_sort_s",
+              "apply_build_s", "samplesort_build_s", "apply_gb_s",
+              "samplesort_gb_s"],
+     "time_col": "samplesort_sort_s", "inmem_col": "inmem_sort_s",
+     "extra_series": [("apply_sort_s",
+                       "apply<Sort> (whole-sequence, DRAM-budgeted)", "^-")],
+     "elem_bytes": 8, "input_seqs": 1,
+     "xlabel": "input size",
+     "title": "sort: recursive external_samplesort vs whole-sequence apply<Sort>",
+     "data_globs": ["as_in*", "ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*",
+                    "ss_deg_*", "qs_base_*"]},
+
     # external_random_shuffleExample sweeps n and times THREE shuffles of the same
     # keys: random_shuffle_method (the bucketing shuffle on the high-level
     # abstractions), ChunkSequenceOps::Permutation (the same algorithm on the
@@ -368,6 +390,27 @@ EXAMPLES = [
      "xlabel": "input size",
      "title": "random shuffle: two out-of-core methods vs in-mem parlaylib",
      "data_globs": ["rs_in*", "rs_bucket_*", "rs_out_*", "rs_base_*", "perm*"]},
+
+    # random_shuffle_three_wayExample: the shuffle counterpart to
+    # samplesort_three_way -- our primitives-based shuffle
+    # (external_random_shuffle.h) vs our direct-I/O shuffle
+    # (direct_random_shuffle.h) vs in-mem parlay::random_shuffle, all on the
+    # same keys in one run. No vendored reference shuffle exists (unlike
+    # sample sort's Peter's leg), so this is two out-of-core contestants
+    # instead of three. Correctness is a permutation check (the keys are
+    # distinct), not element-wise equality. inmem_shuffle_s is left BLANK
+    # past the RAM budget, so the plotted DRAM line stops at the cliff.
+    {"name": "random_shuffle_three_way",
+     "target": "bin/random_shuffle_three_wayExample",
+     "cols": ["n", "prim_shuffle_s", "direct_shuffle_s", "inmem_shuffle_s",
+              "prim_build_s", "direct_build_s", "prim_gb_s", "direct_gb_s"],
+     "time_col": "direct_shuffle_s", "inmem_col": "inmem_shuffle_s",
+     "series_labels": ("parlay::random_shuffle (DRAM)", "Ours, Direct Port"),
+     "extra_series": [("prim_shuffle_s", "Ours, Composed External", "^-")],
+     "elem_bytes": 8, "input_seqs": 1,
+     "xlabel": "input size",
+     "title": "Random Shuffle: Direct I/O vs Composed Primitives vs In-Memory",
+     "data_globs": ["rs3_in*", "ss_bucket_*", "drs3_in*", "drs3*"]},
 
     # fitmem_kth_smallestExample: same driver shape as kth_smallest, but the
     # single-level "fitmem" variant (one bucketing round, then select the winning
