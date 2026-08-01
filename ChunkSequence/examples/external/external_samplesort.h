@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "ChunkSequence/ExternalPrimitives/chunk_operation.h"
 #include "ChunkSequence/ExternalPrimitives/count_sort.h"
 #include "ChunkSequence/ExternalPrimitives/flatten.h"
 #include "ChunkSequence/ExternalPrimitives/small_sequence_ops.h"
@@ -69,15 +70,16 @@ struct SsPhaseTimer {
 
 // samplesort implementation with primitives
 //
-// disk_span defaults to 1 (one file per bucket).  sort_inplace
-// (ExternalPrimitives/small_sequence_ops.h) already achieves full aggregate
+// disk_span defaults to 1 (one file per bucket).  apply<Sort>
+// (ExternalPrimitives/chunk_operation.h, on process_inplace_budgeted from
+// ExternalPrimitives/small_sequence_ops.h) already achieves full aggregate
 // drive parallelism here: GetFileName's round-robin already spreads
-// *different* buckets one-per-drive, and sort_inplace runs one pipeline per
+// *different* buckets one-per-drive, and each wave runs one pipeline per
 // parlay worker pulling buckets off a shared counter, so with far more
 // buckets than drives (the common case), many drives are busy on many
 // buckets at once regardless of disk_span.  Striping a single bucket's own
 // ~128MB of data across disk_span drives instead just fragments its
-// sort_inplace read/write into disk_span small io_uring runs (see
+// read/write into disk_span small io_uring runs (see
 // bucketed_file_writer.h's disk_span doc) for no bandwidth benefit -- a net
 // loss, confirmed by benchmark.  Pass disk_span > 1 explicitly only if a
 // downstream consumer needs the *final flattened output* spread across
@@ -230,10 +232,7 @@ chunk_seq sample_sort(chunk_seq& seq, Less less1 = {}, size_t disk_span = 1) {
 
   // });
 
-  // we can replace this with a more general pass method once we figure out a
-  // framework for streaming or perhaps a bucket-operation method still, this is
-  // a useful-ish method so I don't feel like it's cheating too badly
-  ChunkSequenceOps::sort_inplace<T>(externalSequenceVector, less1);
+  ChunkSequenceOps::apply<ChunkOperation::Sort, T>(externalSequenceVector, less1);
   _pt.mark("bucket_sort");
 
   auto result = ChunkSequenceOps::flatten(externalSequenceVector);
@@ -421,10 +420,7 @@ chunk_seq sample_sort_singledrive(chunk_seq& seq, Less less1 = {}) {
 
   // });
 
-  // we can replace this with a more general pass method once we figure out a
-  // framework for streaming or perhaps a bucket-operation method still, this is
-  // a useful-ish method so I don't feel like it's cheating too badly
-  ChunkSequenceOps::sort_inplace<T>(externalSequenceVector, less1);
+  ChunkSequenceOps::apply<ChunkOperation::Sort, T>(externalSequenceVector, less1);
   _pt.mark("bucket_sort");
 
   auto result = ChunkSequenceOps::flatten(externalSequenceVector);

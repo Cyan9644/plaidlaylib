@@ -47,7 +47,8 @@ TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/bigintMulTest \
                  $(BINDIR)/samplesortStripedTest \
                  $(BINDIR)/directSamplesortStripedTest \
-                 $(BINDIR)/externalRmatTest
+                 $(BINDIR)/externalRmatTest \
+                 $(BINDIR)/chunkOperationTest
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
@@ -290,6 +291,16 @@ $(BINDIR)/directSamplesortStripedTest: ChunkSequence/tests/direct_samplesort_str
 # is the LOCAL examples/in_memory/graph/graph_utils/graph_utils.h, not an
 # upstream header, so no deps/parlaylib-examples prerequisite is needed.
 $(BINDIR)/externalRmatTest: ChunkSequence/tests/external_rmat_test.cpp $(UTIL_OBJS)
+	$(LINK)
+
+# chunkOperationTest: correctness test for the ChunkOperation dispatch front
+# door (ExternalPrimitives/chunk_operation.h) and the DRAM-budget-checked,
+# wave-batched process_inplace_budgeted engine it's built on
+# (ExternalPrimitives/small_sequence_ops.h) -- exercises Sort and Shuffle
+# under both a default (single-wave) and an artificially small (forced
+# multi-wave) DRAM budget.  Header-only, no upstream baseline needed, so no
+# extra deps prerequisite.
+$(BINDIR)/chunkOperationTest: ChunkSequence/tests/chunk_operation_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
 # ── examples ───────────────────────────────────────────────────────────────────

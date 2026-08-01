@@ -79,8 +79,9 @@ ChunkSequence/
   helper/heaptree.h           vendored parlay heap_tree rank search (cache-efficient pivot lookup for sampling)
   chunk_delayed.h             delayed (fused) recursive-node layer: delay/tabulate/map/scan/zip + reduce/force/filter
   ExternalPrimitives/         out-of-core sort/shuffle substrate (see engine section)
-    count_sort.h  bucketed_file_writer.h  sort_buckets.h  inplace_bucket_sort.h
-    chunk_cut.h  flatten.h  materialize.h  random_shuffle.h  scan_find.h  LinearFind.h
+    count_sort.h  bucketed_file_writer.h  sort_buckets.h  small_sequence_ops.h
+    chunk_operation.h  chunk_cut.h  flatten.h  materialize.h  random_shuffle.h
+    scan_find.h  LinearFind.h
   ExternalGraph/
     external_compressed_sparse_row.h  chunk_csr (degree_scan + edges; get_adjacent / delay_get_adjacent / segmented_reduce_over_edges / from_file)
   tests/                      correctness tests (iota, map, reduce, filter, scan, combined, delayed,
@@ -360,14 +361,25 @@ the `examples/external/` sorts are built on: `count_sort.h` distributes elements
 into per-bucket external sequences through the `BucketWriter` scatter
 (`bucketed_file_writer.h`; per-worker staging → sequential `writev`); a bucket
 list is then finished either by `sort_buckets.h` (pull DRAM-budget waves into
-memory and `parlay::sort_inplace`) or `inplace_bucket_sort.h` (on-disk
-read/compute/write pipeline coalescing contiguous chunk runs).  Supporting pieces:
-`chunk_cut.h` (slice / shift / guard-limb cuts, used by bigint), `flatten.h`
-(concatenate a list of `chunk_seq`s by reindexing), `materialize.h` (read a
-`chunk_seq` — or a delayed source — into a DRAM `parlay::sequence`),
+memory, sort, and rewrite as fresh files — currently unused/dead code, kept for
+reference) or `small_sequence_ops.h`'s `process_inplace` (on-disk
+read/compute/write pipeline coalescing contiguous chunk runs, in place over
+each sequence's own chunks, driven by an arbitrary `Processor` lambda) /
+`process_inplace_budgeted` (the same, but DRAM-budget-checked and
+wave-batched — mirrors `sort_buckets.h`'s wave-packing but keeps the in-place,
+original-layout write-back — so the caller doesn't have to pre-size every
+sequence to fit DRAM the way `count_sort`'s bucket count already does for
+`sort_inplace` and `Permutation::Run`).  `chunk_operation.h`'s `ChunkOperation`
+enum (`Sort`/`Shuffle`) + `apply<Op>(seqs, ...)` is the named-operation
+front door on top of `process_inplace_budgeted`, for callers who'd rather
+select a named operation than hand-write a raw `Processor` lambda.  Supporting
+pieces: `chunk_cut.h` (slice / shift / guard-limb cuts, used by bigint),
+`flatten.h` (concatenate a list of `chunk_seq`s by reindexing), `materialize.h`
+(read a `chunk_seq` — or a delayed source — into a DRAM `parlay::sequence`),
 `random_shuffle.h` (count-sort bucketing + per-bucket shuffle), and the
 single-element probes `scan_find.h` / `LinearFind.h`.  These are exercised by the
-`examples/external/` programs rather than the `tests/` suite.
+`examples/external/` programs rather than the `tests/` suite (`chunk_operation.h`
+is the exception — see `tests/chunk_operation_test.cpp`).
 
 **Out-of-core graph generation** (`examples/external/graph_utils/external_rmat.h`,
 tested by `externalRmatTest`): an RMAT edge is a pure function of its index

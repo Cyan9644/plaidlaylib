@@ -280,6 +280,88 @@ void process_inplace(chunk_seq& seq, Processor processor) {
   seq = std::move(tmp[0]);
 }
 
+// Env override: PROCESS_INPLACE_BUDGET_BYTES (same naming pattern as
+// sort_buckets.h's SORT_BUCKETS_BUDGET_BYTES). Default: physical RAM / 4 --
+// identical formula to sort_buckets.h.
+inline size_t GetProcessInplaceBudgetBytes() {
+  size_t budget =
+      ((size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE)) / 4;
+  if (const char* e = getenv("PROCESS_INPLACE_BUDGET_BYTES"))
+    budget = std::stoull(e);
+  return budget;
+}
+
+// Budget-checked, wave-batched process_inplace: instead of requiring every
+// sequence in `seqs` to already be pre-sized to fit DRAM (process_inplace's
+// assumption), greedily packs consecutive sequences into DRAM-budget-sized
+// "waves" (mirroring sort_buckets.h's wave-packing idea) and calls
+// process_inplace on one wave at a time -- so it is safe to call on a
+// chunk_seq/bucket list of arbitrary size. Unlike sort_buckets.h, each wave
+// is still processed via process_inplace, so write-back is in place over
+// each sequence's own original chunks/files (no fresh-file rewrite).
+//
+// budget_bytes == 0 (the default) resolves via GetProcessInplaceBudgetBytes()
+// (env override PROCESS_INPLACE_BUDGET_BYTES, else physical RAM / 4).
+//
+// A single sequence's own bytes exceeding the budget is a CHECK failure, not
+// silently honored: process_inplace hands `processor` the *entire* sequence's
+// nelem in one DRAM buffer (that's the whole point -- e.g. parlay::sort_inplace
+// needs the whole bucket at once), so a bucket that doesn't fit the budget on
+// its own cannot be waved without changing the algorithm (re-bucketing), which
+// is out of scope here; the caller should either raise the budget
+// (PROCESS_INPLACE_BUDGET_BYTES) or presize its buckets smaller (e.g. a larger
+// num_buckets out of count_sort/GetBucketCount).
+//
+// `processor`'s bucket_idx is translated back to `seqs`'s own global index
+// (wave start offset + the wave-local index process_inplace hands it), so a
+// processor that depends on a stable per-bucket identity (e.g. random_shuffle's
+// rng.fork(bucket) keying) sees the exact same bucket_idx regardless of how the
+// DRAM budget happens to split seqs into waves.
+template <typename T = uint64_t, typename Processor>
+void process_inplace_budgeted(std::vector<chunk_seq>& seqs, Processor processor,
+                              size_t budget_bytes = 0) {
+  if (seqs.empty()) return;
+  if (budget_bytes == 0) budget_bytes = GetProcessInplaceBudgetBytes();
+
+  std::vector<size_t> nb(seqs.size(), 0);
+  for (size_t i = 0; i < seqs.size(); i++)
+    for (const chunk& c : seqs[i].chunks) nb[i] += c.used;
+
+  size_t lo = 0;
+  while (lo < seqs.size()) {
+    size_t hi = lo, wave_bytes = 0;
+    while (hi < seqs.size() &&
+           (hi == lo || wave_bytes + nb[hi] <= budget_bytes)) {
+      wave_bytes += nb[hi];
+      hi++;
+    }
+    CHECK(nb[lo] <= budget_bytes)
+        << "process_inplace_budgeted: sequence " << lo << " alone is "
+        << nb[lo] << " bytes, exceeding the " << budget_bytes
+        << "-byte budget (override via PROCESS_INPLACE_BUDGET_BYTES, or "
+           "presize buckets smaller upstream)";
+
+    std::vector<chunk_seq> wave(std::make_move_iterator(seqs.begin() + lo),
+                                std::make_move_iterator(seqs.begin() + hi));
+    process_inplace<T>(wave, [&, lo](size_t local_b, T* buf, size_t nelem) {
+      processor(lo + local_b, buf, nelem);
+    });
+    std::move(wave.begin(), wave.end(), seqs.begin() + lo);
+    lo = hi;
+  }
+}
+
+// Single-sequence form: CHECK the sequence's own size against the budget (no
+// waving is possible for just one sequence -- see the vector overload's
+// oversized-bucket note), then run process_inplace directly.
+template <typename T = uint64_t, typename Processor>
+void process_inplace_budgeted(chunk_seq& seq, Processor processor,
+                              size_t budget_bytes = 0) {
+  std::vector<chunk_seq> tmp{std::move(seq)};
+  process_inplace_budgeted<T>(tmp, std::move(processor), budget_bytes);
+  seq = std::move(tmp[0]);
+}
+
 // Read `seq` fully into DRAM, sort it in place, and write it back over its
 // own chunks -- the single-sequence form of process_inplace, for a whole
 // out-of-core sequence known to fit in DRAM (a samplesort/fitmem_sort base
