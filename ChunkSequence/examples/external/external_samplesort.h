@@ -69,22 +69,7 @@ struct SsPhaseTimer {
 };
 
 // samplesort implementation with primitives
-//
-// disk_span defaults to 1 (one file per bucket).  apply<Sort>
-// (ExternalPrimitives/chunk_operation.h, on process_inplace_budgeted from
-// ExternalPrimitives/small_sequence_ops.h) already achieves full aggregate
-// drive parallelism here: GetFileName's round-robin already spreads
-// *different* buckets one-per-drive, and each wave runs one pipeline per
-// parlay worker pulling buckets off a shared counter, so with far more
-// buckets than drives (the common case), many drives are busy on many
-// buckets at once regardless of disk_span.  Striping a single bucket's own
-// ~128MB of data across disk_span drives instead just fragments its
-// read/write into disk_span small io_uring runs (see
-// bucketed_file_writer.h's disk_span doc) for no bandwidth benefit -- a net
-// loss, confirmed by benchmark.  Pass disk_span > 1 explicitly only if a
-// downstream consumer needs the *final flattened output* spread across
-// drives for a fast large contiguous read (see count_sort's disk_span doc,
-// ExternalPrimitives/count_sort.h).
+
 template <typename T, typename Less = std::less<>>
 chunk_seq sample_sort(chunk_seq& seq, Less less1 = {}, size_t disk_span = 1) {
   static std::atomic<size_t> ss_counter{0};
