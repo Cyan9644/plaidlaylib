@@ -11,6 +11,8 @@
 #include <random>
 
 #include "ChunkSequence/ExternalPrimitives/materialize.h"
+#include "ChunkSequence/chunk_histogram_by_index.h"
+#include "ChunkSequence/chunk_pack.h"
 #include "ChunkSequence/chunk_partition.h"
 // parlay::internal::heap_tree comes in via <parlay/primitives.h> above; its
 // header has no include guard, so do NOT include it a second time here.
@@ -21,9 +23,6 @@
 // obvious reasons.
 namespace ChunkSequenceOps {
 
-// we are currently assuming that not all elemsents go into 1 bucket, for
-// obvious reasons.
-namespace ChunkSequenceOps {
 // randomized ~O(n) algorithm
 template <typename T, typename Less = std::less<>>
 T kth_smallest(chunk_seq& seq, long k, Less less1 = {}) {
@@ -117,8 +116,6 @@ T kth_smallest(chunk_seq& seq, long k, Less less1 = {}) {
   // recur on much smaller set, adjusting k as needed
   return kth_smallest<T>(next, k - offsets[id], less1);
 }
-
-}  // namespace ChunkSequenceOps
 
 // Monotonic id source for unique per-call scratch prefixes -- same shape as
 // chunk_convex_hull.h's prefix_counter, so two recursion levels (or two

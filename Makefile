@@ -54,6 +54,7 @@ TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/rabin_karpExample $(BINDIR)/kth_smallestExample \
+                    $(BINDIR)/kth_smallest_delayedExample \
                     $(BINDIR)/external_samplesortExample $(BINDIR)/external_linefitExample \
                     $(BINDIR)/fitmem_sortExample $(BINDIR)/fitmem_kth_smallestExample \
                     $(BINDIR)/bigint_addExample $(BINDIR)/bigint_add_eagerExample \
@@ -330,6 +331,12 @@ $(BINDIR)/%Example: ChunkSequence/examples/%.cpp $(UTIL_OBJS) | deps/parlaylib-e
 # than the %Example pattern rule reaches, so they need explicit rules.  Same
 # recipe.
 $(BINDIR)/kth_smallestExample: ChunkSequence/examples/external/kth_smallest.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(LINK)
+
+# kth_smallest_delayed: head-to-head comparison driver (ChunkPartition vs.
+# delayed::lazy_filter vs. in-mem), same examples/external/ location/recipe
+# as its siblings.
+$(BINDIR)/kth_smallest_delayedExample: ChunkSequence/examples/external/kth_smallest_delayed.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 $(BINDIR)/external_samplesortExample: ChunkSequence/examples/external/external_samplesort.cpp $(UTIL_OBJS) | deps/parlaylib-examples

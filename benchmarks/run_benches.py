@@ -251,6 +251,31 @@ EXAMPLES = [
      "xlabel": "input size",
      "title": "kth-smallest: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
      "data_globs": ["kth_in*", "id_*", "flags_*", "next_*"]},
+    # kth_smallest_delayedExample: head-to-head comparison, same precedent as
+    # samplesort_three_way -- ChunkPartition (kth_smallest_fast, writes all 32
+    # buckets every level) vs. delayed::lazy_filter (kth_smallest_delayed,
+    # writes only the ONE surviving bucket, or nothing at all once it already
+    # fits the DRAM budget) vs. in-mem parlaylib, all on the same keys.  This
+    # is the positive counterpart to convex_hull_lazy_filter's quickhull
+    # rewrite: quickhull's 2-way split keeps both branches (lazy_filter adds a
+    # pass with no offsetting savings there), while kth-smallest's 32-way
+    # split discards 31 of 32 branches every level, so skipping their writes
+    # is a real saving. eager_write_bytes/delayed_write_bytes (raw byte
+    # counts, not a rate) quantify that saving directly; each contestant
+    # builds and times its own input, same fairness discipline as
+    # samplesort_three_way (bench_drives.h settle/clear between them).
+    {"name": "kth_smallest_delayed", "target": "bin/kth_smallest_delayedExample",
+     "cols": ["n", "k", "fast_build_s", "fast_select_s", "delayed_build_s",
+              "delayed_select_s", "inmem_select_s", "result",
+              "eager_write_bytes", "delayed_write_bytes", "throughput_gb_s"],
+     "time_col": "delayed_select_s", "inmem_col": "inmem_select_s",
+     "series_labels": ("in-mem parlaylib kth_smallest (DRAM)",
+                       "delayed::lazy_filter (kth_smallest_delayed)"),
+     "extra_series": [("fast_select_s", "ChunkPartition (kth_smallest_fast)", "^-")],
+     "elem_bytes": 8, "input_seqs": 1,
+     "xlabel": "input size",
+     "title": "kth-smallest: ChunkPartition vs delayed lazy_filter vs in-mem parlaylib",
+     "data_globs": ["kthd_fast_in*", "kth_next_*", "kthd_delayed_in*", "kdl_next_*"]},
     # external_samplesortExample sweeps n; the plotted time is the sort pass only
     # (input build excluded).  Its recursion leaves ss_id_/ss_bucket_/ss_base_/
     # ss_deg_ intermediates plus the per-bucket base sorter's qs_base_ output
