@@ -395,6 +395,27 @@ EXAMPLES = [
      "data_globs": ["as_in*", "ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*",
                     "ss_deg_*", "qs_base_*"]},
 
+    # samplesort_vs_samplesort_randomExample: ChunkSequenceOps::sample_sort
+    # (pivot sampling via the shared sample<T> helper, ExternalPrimitives/
+    # chunk_sample.h) vs sample_sort_random (the pre-refactor sibling kept in
+    # external_samplesort.h for comparison -- same count_sort/apply<Sort>/
+    # flatten pipeline, only the pivot-sampling bookkeeping differs). Both
+    # always run (neither has a DRAM-budget CHECK like apply<Sort>'s), so no
+    # column ever goes blank except inmem_sort_s past the RAM cliff.
+    {"name": "samplesort_vs_samplesort_random",
+     "target": "bin/samplesort_vs_samplesort_randomExample",
+     "cols": ["n", "sample_sort_s", "sample_sort_random_s", "inmem_sort_s",
+              "sample_sort_build_s", "sample_sort_random_build_s",
+              "sample_sort_gb_s", "sample_sort_random_gb_s"],
+     "time_col": "sample_sort_s", "inmem_col": "inmem_sort_s",
+     "extra_series": [("sample_sort_random_s",
+                       "sample_sort_random (pre-refactor pair sampling)", "^-")],
+     "elem_bytes": 8, "input_seqs": 1,
+     "xlabel": "input size",
+     "title": "sample_sort: shared sample<T> helper vs pre-refactor pair sampling",
+     "data_globs": ["sspv_in*", "ssrd_in*", "ss_bucket_*", "ss_base_*",
+                    "ss_deg_*", "qs_base_*"]},
+
     # external_random_shuffleExample sweeps n and times THREE shuffles of the same
     # keys: random_shuffle_method (the bucketing shuffle on the high-level
     # abstractions), ChunkSequenceOps::Permutation (the same algorithm on the

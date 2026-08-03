@@ -64,6 +64,7 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/direct_samplesort_vs_peterExample \
                     $(BINDIR)/samplesort_three_wayExample \
                     $(BINDIR)/apply_sort_vs_samplesortExample \
+                    $(BINDIR)/samplesort_vs_samplesort_randomExample \
                     $(BINDIR)/external_random_shuffleExample \
                     $(BINDIR)/random_shuffle_three_wayExample \
                     $(BINDIR)/convex_hullExample \
@@ -422,6 +423,14 @@ $(BINDIR)/samplesort_three_wayExample: ChunkSequence/examples/external/samplesor
 # Both are ours, no Peter contestant, so no peter_shim needed -- plain recipe
 # like external_samplesortExample.
 $(BINDIR)/apply_sort_vs_samplesortExample: ChunkSequence/examples/external/apply_sort_vs_samplesort.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(LINK)
+
+# samplesort_vs_samplesort_random: ChunkSequenceOps::sample_sort (pivot sampling
+# via the shared sample<T> helper, chunk_sample.h) vs sample_sort_random (the
+# pre-refactor inline index+value pair sampling kept in external_samplesort.h
+# for comparison). Both are ours, no Peter contestant, so no peter_shim needed
+# -- plain recipe like apply_sort_vs_samplesortExample.
+$(BINDIR)/samplesort_vs_samplesort_randomExample: ChunkSequence/examples/external/samplesort_vs_samplesort_random.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # suffix_array: out-of-core prefix-doubling suffix array (built on the direct-I/O
