@@ -88,6 +88,10 @@ LINK = $(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) -Wl,--start-group $(AB
 
 .PHONY: all clean distclean deps test examples bench bench-full bench-examples bench-examples-full trace format format-check
 
+all:
+	$(MAKE) deps
+	$(MAKE) $(TEST_BINARIES)
+
 # ── formatting ──────────────────────────────────────────────────────────────────
 # Google style via .clang-format at the repo root.  Formats this repo's own
 # sources only — deps/ (fetched upstream) and results/ (generated) are excluded.
@@ -106,10 +110,6 @@ format:
 format-check:
 	@test -n "$(CLANG_FORMAT)" || { echo "clang-format not found (enter nix-shell, or install clang-tools)"; exit 1; }
 	$(CLANG_FORMAT) --dry-run -Werror --style=file $(FORMAT_FILES)
-
-all:
-	$(MAKE) deps
-	$(MAKE) $(TEST_BINARIES)
 
 # ── tests ──────────────────────────────────────────────────────────────────────
 
