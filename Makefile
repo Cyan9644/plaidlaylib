@@ -49,7 +49,9 @@ TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/directSamplesortStripedTest \
                  $(BINDIR)/externalRmatTest \
                  $(BINDIR)/chunkOperationTest \
-                 $(BINDIR)/directRandomShuffleTest
+                 $(BINDIR)/directRandomShuffleTest \
+                 $(BINDIR)/nestedTest \
+                 $(BINDIR)/nestedBfsTest
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
@@ -72,6 +74,7 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/fft_transposeExample \
                     $(BINDIR)/bellman_fordExample \
                     $(BINDIR)/bfsExample \
+                    $(BINDIR)/nested_bfsExample \
                     $(BINDIR)/even_squaresExample \
 
 # Peter's external sample sort (the second contestant in the
@@ -210,6 +213,12 @@ $(BINDIR)/mapTest: ChunkSequence/tests/map_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
 $(BINDIR)/reduceTest: ChunkSequence/tests/reduce_test.cpp $(UTIL_OBJS)
+	$(LINK)
+
+$(BINDIR)/nestedTest: ChunkSequence/tests/nested_test.cpp $(UTIL_OBJS)
+	$(LINK)
+
+$(BINDIR)/nestedBfsTest: ChunkSequence/tests/nested_bfs_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
 $(BINDIR)/filterTest: ChunkSequence/tests/filter_test.cpp $(UTIL_OBJS)
@@ -457,6 +466,16 @@ $(BINDIR)/filterCompare: benchmarks/filter_compare.cpp $(UTIL_OBJS)
 	$(LINK)
 
 $(BINDIR)/zipDepthCompare: benchmarks/zip_depth_compare.cpp $(UTIL_OBJS)
+	$(LINK)
+
+# nested_map_reduce_compare: fused NestedMapReduce vs the materialize-the-
+# intermediate spelling (NestedMap + NestedReduce), timed head-to-head.
+$(BINDIR)/nestedMapReduceCompare: benchmarks/nested_map_reduce_compare.cpp $(UTIL_OBJS)
+	$(LINK)
+
+# nested_bfs_compare: push BFS with a materialized nested intermediate
+# (NestedBFSPush) vs the fused variant (NestedBFSPushFused), timed head-to-head.
+$(BINDIR)/nestedBfsCompare: benchmarks/nested_bfs_compare.cpp $(UTIL_OBJS)
 	$(LINK)
 
 # work_exponent_compare: dialable per-element/per-round synthetic "busy work"

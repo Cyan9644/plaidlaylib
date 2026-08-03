@@ -611,6 +611,23 @@ EXAMPLES = [
     # per-vertex reader-setup cost is documented as dramatically slower than
     # the in-memory baseline even at small n, so it doesn't belong in the
     # default dev-box sweep.
+    # nested_bfsExample: the FUSED direction-optimizing BFS on the nested_seq
+    # substrate (NestedBFSDirOpt(..., fused=true)) vs the in-memory parlaylib
+    # BFS.  Single case (undirected random graph, avg_degree=8 via extra_argv).
+    # elem_bytes = avg_degree * sizeof(uint64_t) = bytes/vertex, so the swept
+    # input size ~= the on-disk edge bytes (m*8).  DRAM-bounded construction, so
+    # it stops at the RAM cliff like the other in-mem-baselined examples.
+    {"name": "nested_bfs", "target": "bin/nested_bfsExample",
+     "cols": ["n", "m", "build_s", "bfs_s", "inmem_bfs_s", "reached",
+              "throughput_gb_s"],
+     "time_col": "bfs_s", "inmem_col": "inmem_bfs_s",
+     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core (fused NestedBFSDirOpt)"),
+     "extra_argv": ["8"],
+     "elem_bytes": 8 * 8, "input_seqs": 1,   # avg_degree(8) * sizeof(uint64_t)
+     "xlabel": "input size (edge bytes)",
+     "title": "BFS: out-of-core (fused nested_seq) vs in-mem parlaylib",
+     "data_globs": ["nbfs_ex_g*", "nbfs_do_*"]},
+
     {"name": "bfs_sparse", "target": "bin/bfsExample",
      "cols": ["case", "n", "m", "build_s", "op_s", "inmem_op_s", "levels",
               "reachable", "throughput_gb_s", "fast_op_s", "fast_levels",
