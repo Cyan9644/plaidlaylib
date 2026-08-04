@@ -49,7 +49,8 @@ TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
                  $(BINDIR)/directSamplesortStripedTest \
                  $(BINDIR)/externalRmatTest \
                  $(BINDIR)/chunkOperationTest \
-                 $(BINDIR)/directRandomShuffleTest
+                 $(BINDIR)/directRandomShuffleTest \
+                 $(BINDIR)/wordCountTest
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
@@ -74,6 +75,7 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/bellman_fordExample \
                     $(BINDIR)/bfsExample \
                     $(BINDIR)/even_squaresExample \
+                    $(BINDIR)/word_countExample \
 
 # Peter's external sample sort (the second contestant in the
 # external_samplesort_vs_peter comparison) ships its own configs.h /
@@ -87,6 +89,10 @@ PETER_DIR := ChunkSequence/examples/external/peter_samplesort
 LINK = $(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
 .PHONY: all clean distclean deps test examples bench bench-full bench-examples bench-examples-full trace format format-check
+
+all:
+	$(MAKE) deps
+	$(MAKE) $(TEST_BINARIES)
 
 # ── formatting ──────────────────────────────────────────────────────────────────
 # Google style via .clang-format at the repo root.  Formats this repo's own
@@ -106,10 +112,6 @@ format:
 format-check:
 	@test -n "$(CLANG_FORMAT)" || { echo "clang-format not found (enter nix-shell, or install clang-tools)"; exit 1; }
 	$(CLANG_FORMAT) --dry-run -Werror --style=file $(FORMAT_FILES)
-
-all:
-	$(MAKE) deps
-	$(MAKE) $(TEST_BINARIES)
 
 # ── tests ──────────────────────────────────────────────────────────────────────
 
@@ -313,6 +315,11 @@ $(BINDIR)/externalRmatTest: ChunkSequence/tests/external_rmat_test.cpp $(UTIL_OB
 # multi-wave) DRAM budget.  Header-only, no upstream baseline needed, so no
 # extra deps prerequisite.
 $(BINDIR)/chunkOperationTest: ChunkSequence/tests/chunk_operation_test.cpp $(UTIL_OBJS)
+
+# wordCountTest: out-of-core WordCount (examples/chunk_word_count.h) against a
+# self-contained sequential DRAM reference (no upstream baseline), covering
+# words that straddle chunk boundaries.  Header-only algorithm, no deps prereq.
+$(BINDIR)/wordCountTest: ChunkSequence/tests/word_count_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
 # ── examples ───────────────────────────────────────────────────────────────────

@@ -135,6 +135,17 @@ EXAMPLES = [
      "xlabel": "input size",
      "title": "Prime sieve: out-of-core (ChunkFlatTabulate) vs in-mem parlaylib",
      "data_globs": ["primes[0-9]*"]},
+    # word_countExample sweeps n (char text); the plotted time is the count pass
+    # only (text build excluded).  One streaming read, no sort -- throughput
+    # tracks aggregate read bandwidth.
+    {"name": "word_count", "target": "bin/word_countExample",
+     "cols": ["n", "build_s", "count_s", "inmem_count_s", "distinct_words",
+              "throughput_gb_s"],
+     "time_col": "count_s", "inmem_col": "inmem_count_s",
+     "elem_bytes": 1, "input_seqs": 1,
+     "xlabel": "input size",
+     "title": "Word count: out-of-core (streaming hash-fold) vs in-mem parlaylib",
+     "data_globs": ["wc_text*"]},
     # kmpExample sweeps n with the pattern length m at its constant built-in
     # default; the plotted time is the search pass only (text build excluded).
     {"name": "kmp", "target": "bin/kmpExample",
