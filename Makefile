@@ -21,11 +21,18 @@ endif
 # If liburing.h is not on the default search path, find it in the Nix store.
 ifeq ($(shell echo '\#include <liburing.h>' | $(CXX) -x c++ - -fsyntax-only 2>/dev/null; echo $$?),0)
 else
+  # Headers live in the -dev output, liburing.so in the runtime output.  Glob
+  # for the .so itself rather than a lib/ directory: "*-liburing-[0-9]*/lib"
+  # also matches the -dev output (whose lib/ holds only pkgconfig/), and it
+  # sorts first, so a directory glob silently picks the one without the library.
   LIBURING_INC := $(firstword $(wildcard /nix/store/*-liburing-*-dev/include))
-  LIBURING_LIB := $(firstword $(wildcard /nix/store/*-liburing-[0-9]*/lib))
+  LIBURING_LIB := $(patsubst %/,%,$(dir $(firstword \
+                    $(wildcard /nix/store/*-liburing-*/lib/liburing.so))))
   ifneq ($(LIBURING_INC),)
     INCLUDES += -I$(LIBURING_INC)
-    LDFLAGS  += -L$(LIBURING_LIB)
+  endif
+  ifneq ($(LIBURING_LIB),)
+    LDFLAGS  += -L$(LIBURING_LIB) -Wl,-rpath,$(LIBURING_LIB)
   endif
 endif
 
