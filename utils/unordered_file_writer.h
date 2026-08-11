@@ -96,11 +96,7 @@ class UnorderedFileWriter {
     }
   }
 
-  ~UnorderedFileWriter() {
-    Wait();
-    DLOG(INFO) << "FileWriter worker thread exited. " << num_files
-               << " files created.";
-  }
+  ~UnorderedFileWriter() { Wait(); }
 
   void Push(std::shared_ptr<T> data, size_t size, size_t file_index = -1,
             size_t file_offset = -1) {
