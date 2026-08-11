@@ -9,8 +9,8 @@
 #include <set>
 #include <vector>
 
-#include "ChunkSequence/chunk_flat_tabulate.h"
-#include "ChunkSequence/chunk_seq.h"
+#include "ChunkSequence/Primitives/flat_tabulate.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
 #include "absl/log/check.h"
 #include "parlay/parallel.h"
 #include "parlay/primitives.h"

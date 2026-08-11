@@ -5,8 +5,8 @@
 
 #include <utility>
 
-#include "ChunkSequence/chunk_delayed.h"
-#include "ChunkSequence/chunk_seq.h"
+#include "ChunkSequence/Primitives/delayed.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
 
 namespace ChunkSequenceOps {
 

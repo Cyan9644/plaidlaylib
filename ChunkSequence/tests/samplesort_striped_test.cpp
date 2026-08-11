@@ -34,8 +34,8 @@
 #include <string>
 #include <vector>
 
-#include "ChunkSequence/chunk_seq.h"
-#include "ChunkSequence/examples/external/bench_drives.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
+#include "ChunkSequence/helper/bench_drives.h"
 #include "ChunkSequence/examples/external/external_samplesort.h"
 #include "parlay/primitives.h"
 #include "utils/command_line.h"

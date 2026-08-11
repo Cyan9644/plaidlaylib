@@ -41,9 +41,9 @@
 
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
-#include "ChunkSequence/chunk_seq.h"
-#include "ChunkSequence/examples/external/direct_samplesort.h"
-#include "ChunkSequence/examples/external/bench_drives.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
+#include "ChunkSequence/examples/external_TODO/direct_samplesort.h"
+#include "ChunkSequence/helper/bench_drives.h"
 
 using ChunkSequenceOps::direct_sample_sort;
 

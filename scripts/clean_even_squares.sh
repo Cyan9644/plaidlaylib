@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Remove the files left behind by a cancelled/crashed even_squaresExample run.
 #
-# The benchmark (ChunkSequence/examples/external/even_squares.cpp) cleans up
+# The benchmark (ChunkSequence/examples/external_TODO/even_squares.cpp) cleans up
 # after itself on a normal return: bench_drives::clear_drives() removes the
 # eager method's "even_squares_tmp" ChunkFilter output right after it's timed,
 # and the "es_in" input build is swept at the very end. Ctrl-C or a crash

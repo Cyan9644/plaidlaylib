@@ -9,9 +9,9 @@
 #include <string>
 #include <vector>
 
-#include "ChunkSequence/chunk_flat_map.h"
-#include "ChunkSequence/chunk_seq.h"
-#include "ChunkSequence/dense_pack.h"
+#include "ChunkSequence/Primitives/flat_map.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
+#include "ChunkSequence/Primitives/dense_pack.h"
 #include "absl/log/check.h"
 #include "parlay/primitives.h"
 #include "utils/command_line.h"

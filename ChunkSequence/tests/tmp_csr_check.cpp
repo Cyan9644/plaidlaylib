@@ -1,7 +1,7 @@
 #include <fstream>
 #include <iostream>
 
-#include "ChunkSequence/ExternalGraph/external_compressed_sparse_row.h"
+#include "ChunkSequence/helper/external_compressed_sparse_row.h"
 #include "utils/command_line.h"
 
 int main(int argc, char* argv[]) {

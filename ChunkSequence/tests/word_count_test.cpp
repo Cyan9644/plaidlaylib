@@ -9,8 +9,8 @@
 
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
-#include "ChunkSequence/chunk_seq.h"
-#include "ChunkSequence/examples/chunk_word_count.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
+#include "ChunkSequence/examples/external/chunk_word_count.h"
 
 // One chunk of char text holds CHUNK_SIZE elements.
 static constexpr size_t CHARS_PER_CHUNK = CHUNK_SIZE / sizeof(char);

@@ -2,7 +2,7 @@
 # Remove the files left behind by a cancelled
 # samplesort_vs_samplesort_randomExample run.
 #
-# The benchmark (ChunkSequence/examples/external/samplesort_vs_samplesort_random.cpp)
+# The benchmark (benchmarks/benchmark_files/samplesort_vs_samplesort_random.cpp)
 # cleans up after itself between contestants via bench_drives::clear_drives(),
 # but that only runs if the process exits normally — Ctrl-C mid-sort leaves
 # that contestant's input, intermediates, and output sitting on every drive.

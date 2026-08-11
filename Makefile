@@ -84,7 +84,7 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
 # path.  Its shared utils (file_utils.cpp/logger/...) are byte-identical to the
 # main repo's, so it links against $(UTIL_OBJS) — do NOT also compile Peter's
 # utils/*.cpp (that would duplicate FindFiles/GetFileName/... symbols).
-PETER_DIR := ChunkSequence/examples/external/peter_samplesort
+PETER_DIR := ChunkSequence/examples/external_TODO/peter_samplesort
 
 LINK = $(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
@@ -248,12 +248,12 @@ $(BINDIR)/rabinKarpTest: ChunkSequence/tests/rabin_karp_test.cpp $(UTIL_OBJS)
 $(BINDIR)/scalarTest: ChunkSequence/tests/scalar_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
-# bigintAddTest includes an example header (examples/chunk_bigint_add.h); no
+# bigintAddTest includes an example header (examples/external/chunk_bigint_add.h); no
 # order-only deps/parlaylib-examples prereq is needed (no upstream baseline).
 $(BINDIR)/bigintAddTest: ChunkSequence/tests/bigint_add_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
-# bigintMulTest includes an example header (examples/chunk_bigint_mul.h; own
+# bigintMulTest includes an example header (examples/external_TODO/chunk_bigint_mul.h; own
 # in-memory reference, no upstream baseline).  Built with a small CHUNK_SIZE so
 # modest operands span several chunks and actually recurse through the
 # out-of-core cut/shift/add path, while the schoolbook oracle stays fast.  The
@@ -270,7 +270,7 @@ $(BINDIR)/segmentedReduceTest: ChunkSequence/tests/segmented_reduce_test.cpp $(U
 	$(LINK)
 
 # dc3Test: out-of-core DC3 suffix array vs brute force + a streaming-vs-DRAM
-# differential.  Header-only algorithm (chunk_dc3.h), no upstream baseline.
+# differential.  Header-only algorithm (examples/external_TODO/chunk_dc3.h), no upstream baseline.
 $(BINDIR)/dc3Test: ChunkSequence/tests/dc3_test.cpp $(UTIL_OBJS)
 	$(LINK)
 
@@ -279,7 +279,7 @@ $(BINDIR)/dc3Test: ChunkSequence/tests/dc3_test.cpp $(UTIL_OBJS)
 $(BINDIR)/convexHullTest: ChunkSequence/tests/convex_hull_test.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
-$(BINDIR)/tempMain: ChunkSequence/examples/temp_main.cpp $(UTIL_OBJS)
+$(BINDIR)/tempMain: ChunkSequence/examples/in_memory/temp_main.cpp $(UTIL_OBJS)
 	$(LINK)
 
 # samplesortStripedTest / directSamplesortStripedTest: correctness +
@@ -294,7 +294,7 @@ $(BINDIR)/directSamplesortStripedTest: ChunkSequence/tests/direct_samplesort_str
 	$(LINK)
 
 # directRandomShuffleTest: correctness + drive-placement checks for
-# direct_random_shuffle (examples/external/direct_random_shuffle.h), the
+# direct_random_shuffle (benchmarks/benchmark_files/direct_random_shuffle.h), the
 # shuffle counterpart to directSamplesortStripedTest. Header-only algorithm,
 # no upstream baseline needed, so no extra deps prerequisite.
 $(BINDIR)/directRandomShuffleTest: ChunkSequence/tests/direct_random_shuffle_test.cpp $(UTIL_OBJS)
@@ -308,15 +308,16 @@ $(BINDIR)/externalRmatTest: ChunkSequence/tests/external_rmat_test.cpp $(UTIL_OB
 	$(LINK)
 
 # chunkOperationTest: correctness test for the ChunkOperation dispatch front
-# door (ExternalPrimitives/chunk_operation.h) and the DRAM-budget-checked,
+# door (Primitives/operation.h) and the DRAM-budget-checked,
 # wave-batched process_inplace_budgeted engine it's built on
-# (ExternalPrimitives/small_sequence_ops.h) -- exercises Sort and Shuffle
+# (Primitives/small_sequence_ops.h) -- exercises Sort and Shuffle
 # under both a default (single-wave) and an artificially small (forced
 # multi-wave) DRAM budget.  Header-only, no upstream baseline needed, so no
 # extra deps prerequisite.
 $(BINDIR)/chunkOperationTest: ChunkSequence/tests/chunk_operation_test.cpp $(UTIL_OBJS)
+	$(LINK)
 
-# wordCountTest: out-of-core WordCount (examples/chunk_word_count.h) against a
+# wordCountTest: out-of-core WordCount (examples/external/chunk_word_count.h) against a
 # self-contained sequential DRAM reference (no upstream baseline), covering
 # words that straddle chunk boundaries.  Header-only algorithm, no deps prereq.
 $(BINDIR)/wordCountTest: ChunkSequence/tests/word_count_test.cpp $(UTIL_OBJS)
@@ -324,36 +325,23 @@ $(BINDIR)/wordCountTest: ChunkSequence/tests/word_count_test.cpp $(UTIL_OBJS)
 
 # ── examples ───────────────────────────────────────────────────────────────────
 
-# Build every example.  Each example lives in ChunkSequence/examples/<name>.cpp
+# Build every example.  Each example lives in ChunkSequence/examples/external/<name>.cpp
 # and builds to bin/<name>Example via the generic pattern rule below.
 examples: $(EXAMPLE_BINARIES)
 
 # Order-only prereq: examples include upstream parlaylib example headers
 # ("parlaylib-examples/…") as their in-memory baselines, and run_benches.py
 # builds these targets directly (not via `make all`, which runs `deps` first).
-$(BINDIR)/%Example: ChunkSequence/examples/%.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(LINK)
-
-# kth_smallest, external_samplesort, and external_linefit (the
-# External-primitives examples) live one level deeper, in examples/external/,
-# than the %Example pattern rule reaches, so they need explicit rules.  Same
-# recipe.
-$(BINDIR)/kth_smallestExample: ChunkSequence/examples/external/kth_smallest.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+# Most examples now live in examples/external/ (merged sort/graph/delayed
+# family); anything elsewhere (examples/external_TODO/, benchmarks/benchmark_files/,
+# the peter-shim comparisons) gets an explicit override rule below.
+$(BINDIR)/%Example: ChunkSequence/examples/external/%.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # kth_smallest_delayed: head-to-head comparison driver (ChunkPartition vs.
-# delayed::lazy_filter vs. in-mem), same examples/external/ location/recipe
-# as its siblings.
-$(BINDIR)/kth_smallest_delayedExample: ChunkSequence/examples/external/kth_smallest_delayed.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(LINK)
-
-$(BINDIR)/external_samplesortExample: ChunkSequence/examples/external/external_samplesort.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(LINK)
-
-$(BINDIR)/external_linefitExample: ChunkSequence/examples/external/external_linefit.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(LINK)
-
-$(BINDIR)/external_random_shuffleExample: ChunkSequence/examples/external/external_random_shuffle.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+# delayed::lazy_filter vs. in-mem), now lives with the other "vs" comparison
+# drivers under benchmarks/benchmark_files/.
+$(BINDIR)/kth_smallest_delayedExample: benchmarks/benchmark_files/kth_smallest_delayed.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # random_shuffle_three_way: our primitives-based shuffle (external_random_shuffle.h)
@@ -361,19 +349,29 @@ $(BINDIR)/external_random_shuffleExample: ChunkSequence/examples/external/extern
 # parlay::random_shuffle, all on the same keys in one run -- the shuffle
 # counterpart to samplesort_three_way, minus the vendored-reference leg (no
 # Peter shuffle exists). Both contestants are ours, so no peter_shim needed --
-# plain recipe like external_samplesortExample.
-$(BINDIR)/random_shuffle_three_wayExample: ChunkSequence/examples/external/random_shuffle_three_way.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+# plain recipe like external_samplesortExample.  Lives under
+# benchmarks/benchmark_files/ alongside its sample-sort siblings.
+$(BINDIR)/random_shuffle_three_wayExample: benchmarks/benchmark_files/random_shuffle_three_way.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # fitmem variants: single-level (buckets fit in DRAM) sample sort / kth-smallest,
-# same examples/external/ location and recipe as the fully external siblings.
-$(BINDIR)/fitmem_sortExample: ChunkSequence/examples/external/fitmem_sort.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+# now live under benchmarks/benchmark_files/ with the other comparison drivers.
+$(BINDIR)/fitmem_sortExample: benchmarks/benchmark_files/fitmem_sort.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
-$(BINDIR)/fitmem_kth_smallestExample: ChunkSequence/examples/external/fitmem_kth_smallest.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+$(BINDIR)/fitmem_kth_smallestExample: benchmarks/benchmark_files/fitmem_kth_smallest.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
-$(BINDIR)/chunk_cutExample: ChunkSequence/examples/external/chunk_cut.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+$(BINDIR)/chunk_cutExample: ChunkSequence/examples/external_TODO/chunk_cut.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(LINK)
+
+# bigint_mul / convex_hull_lazy_filter: moved out of examples/external/ into
+# examples/external_TODO/, so they need explicit rules now (previously caught
+# by the generic %Example pattern rule).
+$(BINDIR)/bigint_mulExample: ChunkSequence/examples/external_TODO/bigint_mul.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(LINK)
+
+$(BINDIR)/convex_hull_lazy_filterExample: ChunkSequence/examples/external_TODO/convex_hull_lazy_filter.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # bellman_ford: out-of-core external_bellman_ford vs the in-memory reference
@@ -388,18 +386,18 @@ $(BINDIR)/bellman_fordExample: ChunkSequence/examples/external/bellman_ford.cpp 
 	    $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
 # bfs: out-of-core BFS_simple vs the in-memory reference (examples/in_memory/
-# graph/), same examples/external/ location/recipe as bellman_ford. Doesn't
-# need bellman_ford's extra -Ideps/parlaylib-examples: examples/in_memory/
+# graph/), same recipe as bellman_ford but living in examples/external_TODO/.
+# Doesn't need bellman_ford's extra -Ideps/parlaylib-examples: examples/in_memory/
 # graph/bfs.h's BFS() has no unprefixed helper/*-style include (unlike
 # bellman_ford.h's `#include "helper/ligra_light.h"`), so the plain include
 # path suffices.
-$(BINDIR)/bfsExample: ChunkSequence/examples/external/bfs.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+$(BINDIR)/bfsExample: ChunkSequence/examples/external_TODO/bfs.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # even_squares: the four external_even_squares.h implementations (out-of-core
 # eager/delayed, in-memory parlay eager/delayed) head-to-head on one input,
-# same examples/external/ location/recipe as bfs/chunk_cut.
-$(BINDIR)/even_squaresExample: ChunkSequence/examples/external/even_squares.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+# same examples/external_TODO/ location/recipe as bfs/chunk_cut.
+$(BINDIR)/even_squaresExample: ChunkSequence/examples/external_TODO/even_squares.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # external_samplesort_vs_peter: our sample sort vs Peter's, head-to-head.  The
@@ -409,27 +407,27 @@ $(BINDIR)/even_squaresExample: ChunkSequence/examples/external/even_squares.cpp 
 $(OBJDIR)/peter_shim.o: $(PETER_DIR)/peter_shim.cpp | deps/parlaylib deps/abseil-cpp/install
 	$(CXX) $(CXXFLAGS) -I$(PETER_DIR) $(INCLUDES) -c $< -o $@
 
-$(BINDIR)/external_samplesort_vs_peterExample: ChunkSequence/examples/external/external_samplesort_vs_peter.cpp $(UTIL_OBJS) $(OBJDIR)/peter_shim.o | deps/parlaylib-examples
+$(BINDIR)/external_samplesort_vs_peterExample: ChunkSequence/examples/external_TODO/external_samplesort_vs_peter.cpp $(UTIL_OBJS) $(OBJDIR)/peter_shim.o | deps/parlaylib-examples
 	$(LINK)
 
 # direct_samplesort_vs_peter: same head-to-head, but our contestant is the
 # direct-I/O sort (direct_samplesort.h) rather than the primitives-based one, so
 # the pair of sweeps isolates the substrate from the algorithm.  Same shim.
-$(BINDIR)/direct_samplesort_vs_peterExample: ChunkSequence/examples/external/direct_samplesort_vs_peter.cpp $(UTIL_OBJS) $(OBJDIR)/peter_shim.o | deps/parlaylib-examples
+$(BINDIR)/direct_samplesort_vs_peterExample: ChunkSequence/examples/external_TODO/direct_samplesort_vs_peter.cpp $(UTIL_OBJS) $(OBJDIR)/peter_shim.o | deps/parlaylib-examples
 	$(LINK)
 
 # samplesort_three_way: all three out-of-core sorts (Peter's, our direct-I/O one,
 # our primitives one) in one run on the same keys, with the run order rotated
 # across rounds so no sort is always the one paying for the previous one's
 # deleted files.  Same shim as the pairwise drivers.
-$(BINDIR)/samplesort_three_wayExample: ChunkSequence/examples/external/samplesort_three_way.cpp $(UTIL_OBJS) $(OBJDIR)/peter_shim.o | deps/parlaylib-examples
+$(BINDIR)/samplesort_three_wayExample: benchmarks/benchmark_files/samplesort_three_way.cpp $(UTIL_OBJS) $(OBJDIR)/peter_shim.o | deps/parlaylib-examples
 	$(LINK)
 
 # apply_sort_vs_samplesort: ChunkSequenceOps::apply<ChunkOperation::Sort> (whole-
 # sequence, DRAM-budgeted, no bucketing) vs sample_sort (recursive out-of-core).
 # Both are ours, no Peter contestant, so no peter_shim needed -- plain recipe
 # like external_samplesortExample.
-$(BINDIR)/apply_sort_vs_samplesortExample: ChunkSequence/examples/external/apply_sort_vs_samplesort.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+$(BINDIR)/apply_sort_vs_samplesortExample: benchmarks/benchmark_files/apply_sort_vs_samplesort.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # samplesort_vs_samplesort_random: ChunkSequenceOps::sample_sort (pivot sampling
@@ -437,20 +435,20 @@ $(BINDIR)/apply_sort_vs_samplesortExample: ChunkSequence/examples/external/apply
 # pre-refactor inline index+value pair sampling kept in external_samplesort.h
 # for comparison). Both are ours, no Peter contestant, so no peter_shim needed
 # -- plain recipe like apply_sort_vs_samplesortExample.
-$(BINDIR)/samplesort_vs_samplesort_randomExample: ChunkSequence/examples/external/samplesort_vs_samplesort_random.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+$(BINDIR)/samplesort_vs_samplesort_randomExample: benchmarks/benchmark_files/samplesort_vs_samplesort_random.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # suffix_array: out-of-core prefix-doubling suffix array (built on the direct-I/O
-# sample sort) vs upstream parlaylib suffix_array in DRAM.  Same examples/external/
-# location and plain recipe as the other external siblings; the upstream baseline
-# header resolves via -Ideps (in $(INCLUDES)).
-$(BINDIR)/suffix_arrayExample: ChunkSequence/examples/external/suffix_array.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+# sample sort) vs upstream parlaylib suffix_array in DRAM.  Lives in
+# examples/external_TODO/; the upstream baseline header resolves via -Ideps
+# (in $(INCLUDES)).
+$(BINDIR)/suffix_arrayExample: ChunkSequence/examples/external_TODO/suffix_array.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # dc3: out-of-core DC3 / skew suffix array (streaming Kärkkäinen–Sanders on the
 # direct-I/O sample sort) vs upstream parlaylib suffix_array in DRAM.  Same
-# examples/external/ location and plain recipe as suffix_arrayExample.
-$(BINDIR)/dc3Example: ChunkSequence/examples/external/dc3.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+# examples/external_TODO/ location and plain recipe as suffix_arrayExample.
+$(BINDIR)/dc3Example: ChunkSequence/examples/external_TODO/dc3.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
 # ── benchmarks ─────────────────────────────────────────────────────────────────

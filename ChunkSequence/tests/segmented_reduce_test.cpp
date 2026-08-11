@@ -3,8 +3,8 @@
 #include <iostream>
 #include <vector>
 
-#include "ChunkSequence/chunk_segmented_reduce.h"
-#include "ChunkSequence/chunk_seq.h"
+#include "ChunkSequence/Primitives/segmented_reduce.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"

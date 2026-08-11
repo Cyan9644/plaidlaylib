@@ -10,13 +10,13 @@
 #include <functional>
 #include <random>
 
-#include "ChunkSequence/ExternalPrimitives/materialize.h"
-#include "ChunkSequence/chunk_histogram_by_index.h"
-#include "ChunkSequence/chunk_pack.h"
-#include "ChunkSequence/chunk_partition.h"
+#include "ChunkSequence/Primitives/materialize.h"
+#include "ChunkSequence/Primitives/histogram_by_index.h"
+#include "ChunkSequence/Primitives/pack.h"
+#include "ChunkSequence/Primitives/partition.h"
 // parlay::internal::heap_tree comes in via <parlay/primitives.h> above; its
 // header has no include guard, so do NOT include it a second time here.
-#include "ChunkSequence/ExternalPrimitives/scan_find.h"
+#include "ChunkSequence/Primitives/scan_find.h"
 #include "utils/file_utils.h"
 
 // we are currently assuming that not all elemsents go into 1 bucket, for

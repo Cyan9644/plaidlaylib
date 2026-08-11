@@ -26,9 +26,9 @@
 
 #include "parlay/primitives.h"
 
-#include "ChunkSequence/chunk_seq.h"
-#include "ChunkSequence/examples/external/bench_drives.h"
-#include "ChunkSequence/examples/external/direct_random_shuffle.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
+#include "ChunkSequence/helper/bench_drives.h"
+#include "benchmarks/benchmark_files/direct_random_shuffle.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
 

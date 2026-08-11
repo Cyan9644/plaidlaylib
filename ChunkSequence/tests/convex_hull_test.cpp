@@ -31,9 +31,9 @@
 #include "parlay/primitives.h"
 
 // Upstream in-DRAM baseline (global point/area/quickhull/upper_hull, no guard).
-#include "ChunkSequence/chunk_seq.h"
-#include "ChunkSequence/examples/chunk_convex_hull.h"
-#include "ChunkSequence/examples/chunk_convex_hull_lazy_filter.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
+#include "ChunkSequence/examples/external/chunk_convex_hull.h"
+#include "ChunkSequence/examples/external_TODO/chunk_convex_hull_lazy_filter.h"
 #include "parlaylib-examples/quickhull.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"

@@ -10,8 +10,8 @@
 #include <string>
 #include <vector>
 
-#include "ChunkSequence/chunk_scan.h"
-#include "ChunkSequence/chunk_seq.h"
+#include "ChunkSequence/Primitives/scan.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
 #include "absl/log/check.h"
 #include "parlay/primitives.h"
 #include "utils/command_line.h"

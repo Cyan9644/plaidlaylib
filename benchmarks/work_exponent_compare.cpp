@@ -53,10 +53,10 @@
 #include <sstream>
 #include <string>
 
-#include "ChunkSequence/chunk_map.h"
-#include "ChunkSequence/chunk_reduce.h"
-#include "ChunkSequence/chunk_seq.h"
-#include "ChunkSequence/examples/external/bench_drives.h"
+#include "ChunkSequence/Primitives/map.h"
+#include "ChunkSequence/Primitives/reduce.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
+#include "ChunkSequence/helper/bench_drives.h"
 #include "absl/log/check.h"
 #include "configs.h"
 #include "parlay/primitives.h"

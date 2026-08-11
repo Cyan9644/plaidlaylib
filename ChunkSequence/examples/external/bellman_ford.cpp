@@ -119,8 +119,8 @@
 // #undef, which would otherwise rewrite these headers' `vertex` template
 // parameter (and every use of it) out from under them while they're being
 // preprocessed.
-#include "ChunkSequence/chunk_seq.h"
-#include "ChunkSequence/examples/external/bench_drives.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
+#include "ChunkSequence/helper/bench_drives.h"
 #include "ChunkSequence/examples/in_memory/graph/bellman_ford.h"
 #include "ChunkSequence/examples/in_memory/graph/graph_utils/graph_utils.h"
 #include "utils/command_line.h"
@@ -129,7 +129,7 @@
 // Before external_bellman_ford.h: this pulls in dense_pack/direct_samplesort,
 // which must be parsed before external_compressed_sparse_row.h's bare macros.
 #include "ChunkSequence/examples/external/external_bellman_ford.h"
-#include "ChunkSequence/examples/external/graph_utils/external_rmat.h"
+#include "ChunkSequence/helper/graph_utils/external_rmat.h"
 
 using Clock = std::chrono::steady_clock;
 static double elapsed(Clock::time_point t0) {

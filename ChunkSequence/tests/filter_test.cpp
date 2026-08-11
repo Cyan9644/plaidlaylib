@@ -8,9 +8,9 @@
 #include <set>
 #include <vector>
 
-#include "ChunkSequence/chunk_filter.h"
-#include "ChunkSequence/chunk_reduce.h"
-#include "ChunkSequence/chunk_seq.h"
+#include "ChunkSequence/Primitives/filter.h"
+#include "ChunkSequence/Primitives/reduce.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
 #include "absl/log/check.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"

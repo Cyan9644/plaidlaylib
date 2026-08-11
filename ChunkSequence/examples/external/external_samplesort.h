@@ -17,21 +17,21 @@
 #include <utility>
 #include <vector>
 
-#include "ChunkSequence/ExternalPrimitives/chunk_operation.h"
-#include "ChunkSequence/ExternalPrimitives/count_sort.h"
-#include "ChunkSequence/ExternalPrimitives/flatten.h"
-#include "ChunkSequence/ExternalPrimitives/small_sequence_ops.h"
-#include "ChunkSequence/ExternalPrimitives/materialize.h"
-#include "ChunkSequence/ExternalPrimitives/scan_find.h"
-#include "ChunkSequence/ExternalPrimitives/sort_buckets.h"
-#include "ChunkSequence/chunk_histogram_by_index.h"
-#include "ChunkSequence/chunk_map.h"
-#include "ChunkSequence/chunk_pack.h"
-#include "ChunkSequence/examples/external/primitive_quicksort.h"
+#include "ChunkSequence/Primitives/operation.h"
+#include "ChunkSequence/Primitives/count_sort.h"
+#include "ChunkSequence/Primitives/flatten.h"
+#include "ChunkSequence/Primitives/small_sequence_ops.h"
+#include "ChunkSequence/Primitives/materialize.h"
+#include "ChunkSequence/Primitives/scan_find.h"
+#include "ChunkSequence/Primitives/sort_buckets.h"
+#include "ChunkSequence/Primitives/histogram_by_index.h"
+#include "ChunkSequence/Primitives/map.h"
+#include "ChunkSequence/Primitives/pack.h"
+#include "ChunkSequence/examples/external_TODO/primitive_quicksort.h"
 #include "configs.h"
 #include "utils/file_utils.h"
 
-#include "ChunkSequence/ExternalPrimitives/chunk_sample.h"
+#include "ChunkSequence/Primitives/sample.h"
 
 // CLAUDE'S ssPhaseTimer IS NO LONGER NECESSARY, USE ug PETER'S TIMER
 

@@ -50,9 +50,9 @@
 #include <thread>
 #include <vector>
 
-#include "ChunkSequence/ExternalPrimitives/materialize.h"
-#include "ChunkSequence/ExternalPrimitives/random_shuffle.h"
-#include "ChunkSequence/chunk_seq.h"
+#include "ChunkSequence/Primitives/materialize.h"
+#include "ChunkSequence/Primitives/random_shuffle.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
 #include "absl/log/check.h"
 #include "parlay/primitives.h"
 #include "parlay/random.h"

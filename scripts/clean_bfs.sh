@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Remove the files left behind by a cancelled/crashed bfsExample run.
 #
-# The benchmark (ChunkSequence/examples/external/bfs.cpp) cleans up after
+# The benchmark (ChunkSequence/examples/external_TODO/bfs.cpp) cleans up after
 # itself between cases via cleanup_prefix() (edge files) and
 # bench_drives::clear_drives() (frontier files), but that only runs if
 # run_case() returns normally -- Ctrl-C or a crash mid-run (e.g. the process

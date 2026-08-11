@@ -2,9 +2,9 @@
 #include <iomanip>
 #include <iostream>
 
-#include "ChunkSequence/chunk_histogram_by_index.h"
-#include "ChunkSequence/chunk_map.h"
-#include "ChunkSequence/chunk_seq.h"
+#include "ChunkSequence/Primitives/histogram_by_index.h"
+#include "ChunkSequence/Primitives/map.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"

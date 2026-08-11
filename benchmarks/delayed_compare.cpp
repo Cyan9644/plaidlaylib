@@ -34,10 +34,10 @@
 #include <sstream>
 #include <string>
 
-#include "ChunkSequence/chunk_delayed.h"
-#include "ChunkSequence/chunk_map.h"
-#include "ChunkSequence/chunk_reduce.h"
-#include "ChunkSequence/chunk_seq.h"
+#include "ChunkSequence/Primitives/delayed.h"
+#include "ChunkSequence/Primitives/map.h"
+#include "ChunkSequence/Primitives/reduce.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
 #include "parlay/delayed.h"
 #include "parlay/monoid.h"
 #include "parlay/primitives.h"

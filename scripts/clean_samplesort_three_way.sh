@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Remove the files left behind by a cancelled samplesort_three_wayExample run.
 #
-# The benchmark (ChunkSequence/examples/external/samplesort_three_way.cpp) cleans
+# The benchmark (benchmarks/benchmark_files/samplesort_three_way.cpp) cleans
 # up after itself between sorts via bench_drives::clear_drives(), but that only
 # runs if the process exits normally — Ctrl-C mid-sort leaves that sort's input,
 # intermediates, and output sitting on every drive. This script does the same

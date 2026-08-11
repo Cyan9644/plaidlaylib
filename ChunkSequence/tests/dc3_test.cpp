@@ -28,8 +28,8 @@
 #include <string>
 #include <vector>
 
-#include "ChunkSequence/chunk_seq.h"
-#include "ChunkSequence/examples/external/chunk_dc3.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
+#include "ChunkSequence/examples/external_TODO/chunk_dc3.h"
 #include "absl/log/check.h"
 #include "parlay/primitives.h"
 #include "utils/command_line.h"

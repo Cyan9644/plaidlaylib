@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Remove the files left behind by a cancelled kth_smallest_delayedExample run.
 #
-# The benchmark (ChunkSequence/examples/external/kth_smallest_delayed.cpp)
+# The benchmark (benchmarks/benchmark_files/kth_smallest_delayed.cpp)
 # cleans up after itself between contestants via bench_drives::clear_drives(),
 # but that only runs if the process exits normally — Ctrl-C mid-selection
 # leaves that contestant's input and recursion intermediates sitting on every

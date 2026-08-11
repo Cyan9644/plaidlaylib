@@ -16,8 +16,8 @@
 #include <string>
 #include <vector>
 
-#include "ChunkSequence/chunk_partition.h"
-#include "ChunkSequence/chunk_seq.h"
+#include "ChunkSequence/Primitives/partition.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"

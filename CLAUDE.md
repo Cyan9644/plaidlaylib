@@ -60,54 +60,76 @@ utils/                        vendored shared I/O utilities
   unordered_file_writer.h     UnorderedFileWriter<T> — the standardized writer
   command_line.{h,cpp}        ParseGlobalArguments (used by the tests)
 ChunkSequence/
-  chunk_seq.h                 chunk / chunk_seq structs, tabulate, iota, consolidate
-  chunk_seq_reader.h          ChunkSequenceReader<T> — the standardized async reader
-  external_engine.h           ChunkEmitter + ExternalTransform + RemoveWorker
-  dense_pack.h                shared batch/carry/prefix/scatter packer
-  chunk_map.h                 ChunkMap        (thin body on ExternalTransform)
-  chunk_reduce.h              ChunkReduce     (fold on RemoveWorker)
-  chunk_scan.h                ChunkScan       (pass1 RemoveWorker + pass2 ExternalTransform)
-  chunk_segmented_reduce.h    ChunkSegmentedReduce (RemoveWorker; generalizes ChunkScan's boundary-merge to arbitrary contiguous segment bounds)
-  chunk_filter.h              ChunkFilter     (thin producer on DensePack)
-  chunk_flat_tabulate.h       ChunkFlatTabulate (thin producer on DensePack)
-  chunk_flat_map.h            ChunkFlatMap    (flatten∘map on DensePackStream, optional forward halo)
-  chunk_pack.h                pack / pack_if / pack_value (boolean/predicate gate on DensePack)
-  chunk_histogram_by_index.h  ChunkHistogramByIndex / ChunkHistogramByKey (bucket counts on RemoveWorker)
-  chunk_find_if.h             ChunkFindIf     (fold on RemoveWorker)
-  chunk_partition.h           ChunkPartition  (single-reader/writer k-way split; per-worker scatter)
-  n_reader.h                  NReader / NRemoveWorker (co-indexed lockstep read of N parallel chunk_seqs)
-  helper/heaptree.h           vendored parlay heap_tree rank search (cache-efficient pivot lookup for sampling)
-  chunk_delayed.h             delayed (fused) recursive-node layer: delay/tabulate/map/scan/zip + reduce/force/filter
-  ExternalPrimitives/         out-of-core sort/shuffle substrate (see engine section)
+  Primitives/                 all eager primitives + their I/O substrate, flat
+                              (merges the old top-level chunk_*.h engine files
+                              and ExternalPrimitives/ into one directory)
+    chunk_seq.h                 chunk / chunk_seq structs, tabulate, iota, consolidate
+    chunk_seq_reader.h          ChunkSequenceReader<T> — the standardized async reader
+    external_engine.h           ChunkEmitter + ExternalTransform + RemoveWorker
+    dense_pack.h                shared batch/carry/prefix/scatter packer
+    map.h                       ChunkMap        (thin body on ExternalTransform)
+    reduce.h                    ChunkReduce     (fold on RemoveWorker)
+    scan.h                      ChunkScan       (pass1 RemoveWorker + pass2 ExternalTransform)
+    segmented_reduce.h          ChunkSegmentedReduce (RemoveWorker; generalizes ChunkScan's boundary-merge to arbitrary contiguous segment bounds)
+    filter.h                    ChunkFilter     (thin producer on DensePack)
+    flat_tabulate.h             ChunkFlatTabulate (thin producer on DensePack)
+    flat_map.h                  ChunkFlatMap    (flatten∘map on DensePackStream, optional forward halo)
+    pack.h                      pack / pack_if / pack_value (boolean/predicate gate on DensePack)
+    histogram_by_index.h        ChunkHistogramByIndex / ChunkHistogramByKey (bucket counts on RemoveWorker)
+    partition.h                 ChunkPartition  (single-reader/writer k-way split; per-worker scatter)
+    n_reader.h                  NReader / NRemoveWorker (co-indexed lockstep read of N parallel chunk_seqs)
+    delayed.h                   delayed (fused) recursive-node layer: delay/tabulate/map/scan/zip + reduce/force/filter
     count_sort.h  bucketed_file_writer.h  sort_buckets.h  small_sequence_ops.h
-    chunk_operation.h  chunk_cut.h  flatten.h  materialize.h  random_shuffle.h
-    scan_find.h  LinearFind.h
-  ExternalGraph/
+                              out-of-core sort/shuffle substrate (see engine section)
+    operation.h  cut.h  flatten.h  materialize.h  merge.h  random_shuffle.h
+    reverse.h  sample.h  scan_find.h  linear_find.h  unique.h
+    TODO/                      staged-but-not-yet-wired-in headers
+      chunk_find_if.h            ChunkFindIf     (fold on RemoveWorker; still used by findIfTest)
+      chunk_count_sort_handwritten.h  hand-written count sort, superseded by count_sort.h
+  helper/                      supporting/vendored headers shared across examples & tests
+    heaptree.h                   vendored parlay heap_tree rank search (cache-efficient pivot lookup for sampling)
+    bench_drives.h                shared benchmark-driver drive helpers (clear_drives, …)
+    csr_bfs.h                     CSR-based BFS helper
     external_compressed_sparse_row.h  chunk_csr (degree_scan + edges; get_adjacent / delay_get_adjacent / segmented_reduce_over_edges / from_file)
+    graph_utils/
+      external_graph_utils.h      shared graph-generation helpers
+      external_rmat.h              out-of-core RMAT generator (see below)
   tests/                      correctness tests (iota, map, reduce, filter, scan, combined, delayed,
                               flatTabulate, flatMap, findIf, histogram, kmp, rabinKarp, scalar,
-                              bigintAdd, convexHull, partition, segmentedReduce, dc3, bigintMul)
+                              bigintAdd, convexHull, partition, segmentedReduce, dc3, bigintMul, …)
   examples/                   demonstration programs (→ primesExample …); dual-purpose
-    primes.cpp                out-of-core prime sieve on ChunkFlatTabulate
-    chunk_kmp.h  kmp.cpp      out-of-core KMP search (ChunkKmp, a producer on DensePack)
-    chunk_rabin_karp.h  rabin_karp.cpp  out-of-core Rabin-Karp search (same shape as KMP)
-    chunk_convex_hull.h  convex_hull.cpp  out-of-core upper convex hull (UpperHull, recursive quickhull on ChunkReduce+ChunkPartition)
-    chunk_fft.h  fft.cpp  fft_transpose.cpp  out-of-core 1-D four-step FFT (transpose-free vs on-disk transpose)
-    chunk_bigint_add.h  bigint_add.cpp  bigint_add_eager.cpp  out-of-core big-integer add (delayed-fused; eager variant)
-    chunk_bigint_mul.h  bigint_mul.cpp  out-of-core big-integer Karatsuba multiply
-    external/                 sort/graph/suffix-array family (external_samplesort, direct_samplesort.h,
-                              *_vs_peter + samplesort_three_way comparison drivers, fitmem_sort,
-                              kth_smallest + ExternalKthSmallest.h, external_linefit, external_random_shuffle,
-                              chunk_cut, bellman_ford + external_bellman_ford.h, suffix_array, dc3,
-                              chunk_sa_common.h)
+    external/                 the active example + sort/graph/suffix-array family
+      primes.cpp                out-of-core prime sieve on ChunkFlatTabulate
+      chunk_kmp.h  kmp.cpp      out-of-core KMP search (ChunkKmp, a producer on DensePack)
+      chunk_rabin_karp.h  rabin_karp.cpp  out-of-core Rabin-Karp search (same shape as KMP)
+      chunk_word_count.h  word_count.cpp  out-of-core word count
+      chunk_convex_hull.h  convex_hull.cpp  out-of-core upper convex hull (UpperHull, recursive quickhull on ChunkReduce+ChunkPartition)
+      chunk_fft.h  fft.cpp  fft_transpose.cpp  out-of-core 1-D four-step FFT (transpose-free vs on-disk transpose)
+      chunk_bigint_add.h  bigint_add.cpp  bigint_add_eager.cpp  out-of-core big-integer add (delayed-fused; eager variant)
+      external_samplesort.{h,cpp}  external_linefit.{h,cpp}  external_random_shuffle.cpp
+      ExternalKthSmallest.h  kth_smallest.cpp  bellman_ford.cpp  external_bellman_ford.h
+    external_TODO/            deprioritized/parked comparison drivers & alt implementations
+                              (bfs, bigint_mul, convex_hull_lazy_filter, dc3 + suffix_array +
+                              chunk_sa_common.h, direct_samplesort.h + its vs-peter driver,
+                              even_squares, external_kcore.h, external_page_rank.h,
+                              orig_quicksort.h / orig_samplesort.h, primitive_quicksort.h, …)
       peter_samplesort/       vendored reference out-of-core sample sort (own configs/utils); benchmark competitor
-    in_memory/                DRAM baseline headers (sample_sort, kth_smallest, linefit, karatsuba, graph algs)
+    in_memory/                DRAM baseline headers (sample_sort, kth_smallest, linefit, karatsuba,
+                              dijkstra, temp_main.cpp)
+      graph/                    DRAM graph baselines (bellman_ford, bfs, kcore, graph_utils/graph_utils.h)
 benchmarks/                   perf benchmarks + single-file Python runner/plotter
   delayed_compare.cpp         in-mem delayed vs chunk-eager vs chunk-delayed (sweep n)
   chunk_size_compare.cpp      eager vs delayed across CHUNK_SIZE (-DCHUNK_SIZE_BYTES)
-  filter_compare.cpp  zip_depth_compare.cpp  manual-only micro-benchmarks (not in bench/bench-full)
+  filter_compare.cpp  zip_depth_compare.cpp  work_exponent_compare.cpp  manual-only
+                              micro-benchmarks (not in bench/bench-full)
   run_benches.py              runs the sweeps (incl. examples) + plots to timestamped results/
-figures/                      plot/diagram sources (.py) + generated PNGs (disk layout, IO/compute overlap, …)
+  benchmark_files/            the "vs" comparison drivers (samplesort_three_way,
+                              apply_sort_vs_samplesort, samplesort_vs_samplesort_random,
+                              random_shuffle_three_way, fitmem_sort/kth_smallest,
+                              kth_smallest_delayed, direct_random_shuffle.h, external_quicksort.h)
+benchresults/                 figure sources + historical plot output
+  Existing_Figures/             plot/diagram sources (.py) + generated PNGs (disk layout, IO/compute overlap, …)
+    Old_Figures/                 archived prior benchmark run output (PNG/CSV)
 slide_templates/              presentation snippet(s)
 deps/                         fetched by `make deps` (parlaylib, parlaylib-examples, abseil); gitignored
 results/                      timestamped benchmark output (PNG + CSV); gitignored
@@ -190,7 +212,7 @@ to `warnings.txt` in the results dir, next to the fstrim outcome note).
   `CSV,n,time_s,inmem_time_s,count,throughput_gb_s`.
 - `kmp.cpp` → `bin/kmpExample [n] [m]`: out-of-core KMP string search over an
   n-char synthetic text (pattern = the text's first m chars, m constant across
-  the sweep).  The algorithm itself, `ChunkKmp` (`examples/chunk_kmp.h`, tested
+  the sweep).  The algorithm itself, `ChunkKmp` (`examples/external/chunk_kmp.h`, tested
   by `kmpTest`), is a `DensePack` producer: per-chunk sequential KMP with
   cross-chunk matches caught via batch-local overlap — chunk k+1's head is
   already in DRAM in the same batch; one small sync read per batch seam
@@ -201,7 +223,7 @@ to `warnings.txt` in the results dir, next to the fstrim outcome note).
   plots `search_s` (text build excluded from both series).
 - `rabin_karp.cpp` → `bin/rabin_karpExample [n] [m]`: out-of-core Rabin-Karp
   search, same driver shape and chunk structure as `kmp.cpp` (`ChunkRabinKarp`
-  in `examples/chunk_rabin_karp.h`, tested by `rabinKarpTest`).  Within a chunk
+  in `examples/external/chunk_rabin_karp.h`, tested by `rabinKarpTest`).  Within a chunk
   it uses a rolling polynomial hash mod the Mersenne prime 2^31−1 (Horner
   orientation, so no modular inverse; hash hits are double-checked) rather than
   parlaylib's prefix-hash scans, which out-of-core would write an 8x hash array
@@ -216,11 +238,11 @@ to `warnings.txt` in the results dir, next to the fstrim outcome note).
   `hpoint`s (two coords + original index + pad; 32 divides CHUNK_SIZE, so the
   fat element stays O_DIRECT-aligned — the eager engine is generic in element
   size, only the *delayed* layer caps at 8 B).  `UpperHull`
-  (`examples/chunk_convex_hull.h`, tested by `convexHullTest`) recurses like
+  (`examples/external/chunk_convex_hull.h`, tested by `convexHullTest`) recurses like
   parlaylib's `quickhull.h`, but each level's "farthest point from the dividing
   line" is a `ChunkReduce` (argmax monoid, tie-break by original index to match
   upstream's `maximum<pair>`), so the working set streams off the SSDs.  Each
-  level's split is a **single** `ChunkPartition` pass (`chunk_partition.h`) routing
+  level's split is a **single** `ChunkPartition` pass (`Primitives/partition.h`) routing
   each point to left/right/drop in one read — not two `ChunkFilter`s — and the base
   case's farthest-point pick
   ties by original index, so it is order-independent (works on the partition's
@@ -242,35 +264,54 @@ to `warnings.txt` in the results dir, next to the fstrim outcome note).
   `hull_s`.  Finds the upper hull only; the lower hull is symmetric and a full
   hull is upper ++ lower with shared endpoints dropped.
 - `fft.cpp` / `fft_transpose.cpp` → `bin/fftExample` / `bin/fft_transposeExample`:
-  out-of-core 1-D four-step FFT (`chunk_fft.h`).  `fft` is transpose-free (a
+  out-of-core 1-D four-step FFT (`examples/external/chunk_fft.h`).  `fft` is transpose-free (a
   contiguous length-A streaming pass, then a strided length-B pass with 4 KiB
   gather/scatter columns); `fft_transpose` instead does an explicit on-disk matrix
   transpose between two contiguous passes.  Baseline: the same four-step FFT in
   DRAM.  Emits `CSV,N,build_s,stage1_s,{stage2_s|transpose_s,stage2t_s},total_s,inmem_s,count,gb_s`.
 - `bigint_add.cpp` (+ `bigint_add_eager.cpp`) / `bigint_mul.cpp` →
   `bin/bigint_addExample` / `bin/bigint_add_eagerExample` / `bin/bigint_mulExample`:
-  out-of-core n-limb big-integer add (`chunk_bigint_add.h`) as a fused delayed
+  out-of-core n-limb big-integer add (`examples/external/chunk_bigint_add.h`) as a fused delayed
   chain (zip → classify → carry-scan → add → force; `_eager` also times the
-  materialized-intermediate variant) and Karatsuba multiply (`chunk_bigint_mul.h`)
-  built from chunk-aligned cut/shift (`ExternalPrimitives/chunk_cut.h`) reusing the
+  materialized-intermediate variant) and Karatsuba multiply
+  (`examples/external_TODO/chunk_bigint_mul.h`)
+  built from chunk-aligned cut/shift (`Primitives/cut.h`) reusing the
   add at every level.  Baselines: parlaylib `bigint_reference::add` and a
   verified in-mem Karatsuba.  Emit `CSV,n,build_s,add_s[,eager_add_s],inmem_add_s,result_limbs,gb_s`
   (mul: `mul_s`/`inmem_mul_s`).
-- `examples/external/` — the sort/graph/suffix-array family, all on the
-  `ExternalPrimitives/` substrate and cross-checked against upstream parlaylib in
-  DRAM.  `external_samplesort` (oversample → `heap_tree` pivots → `count_sort` →
-  per-bucket recurse → `flatten`), the `direct_sample_sort` variant (talks to
-  io_uring/O_DIRECT directly), and the `fitmem_sort` / `fitmem_kth_smallest`
-  single-level variants (one bucketing round, then finish in DRAM); the
-  `external_samplesort_vs_peter` / `direct_samplesort_vs_peter` /
-  `samplesort_three_way` **comparison drivers** run our sorts head-to-head against
-  the vendored `peter_samplesort/`.  Also `kth_smallest` (`ExternalKthSmallest.h`),
-  `external_linefit` (fully-delayed least-squares fit), `external_random_shuffle`,
-  `chunk_cut`, `bellman_ford` (`external_bellman_ford.h`, uses the CSR
-  `segmented_reduce_over_edges`), and the two suffix-array builders `suffix_array`
-  (prefix doubling) / `dc3` (Kärkkäinen–Sanders skew) — the latter two build via
-  explicit Makefile rules and are **not** in the `EXAMPLE_BINARIES` registry or the
-  examples sweep.
+- The sort/graph/suffix-array family, all on the `Primitives/` substrate and
+  cross-checked against upstream parlaylib in DRAM, is now split across three
+  locations by how actively maintained each piece is:
+  - `examples/external/` — the currently-maintained pieces: `external_samplesort`
+    (oversample → `heap_tree` pivots → `count_sort` → per-bucket recurse →
+    `flatten`; `.h`/`.cpp`), `kth_smallest` (`ExternalKthSmallest.h`),
+    `external_linefit` (fully-delayed least-squares fit), `external_random_shuffle`,
+    and `bellman_ford` (`external_bellman_ford.h`, uses the CSR
+    `segmented_reduce_over_edges`).
+  - `examples/external_TODO/` — parked/deprioritized alternates and comparison
+    drivers, kept for reference but no longer the primary path: the
+    `direct_sample_sort` variant (talks to io_uring/O_DIRECT directly) and its
+    `direct_samplesort_vs_peter` / `external_samplesort_vs_peter` comparison
+    drivers, `chunk_cut`, `bfs` / `external_bfs.h`, `even_squares` /
+    `external_even_squares.h`, `external_kcore.h`, `external_page_rank.h`,
+    `orig_quicksort.h` / `orig_samplesort.h` / `primitive_quicksort.h`, and the
+    two suffix-array builders `suffix_array` (prefix doubling) / `dc3`
+    (Kärkkäinen–Sanders skew, + `chunk_sa_common.h`) — the latter two build via
+    explicit Makefile rules and are **not** in the `EXAMPLE_BINARIES` registry or
+    the examples sweep.  Also holds the vendored `peter_samplesort/` reference
+    sort itself (own configs/utils; benchmark competitor for the vs-peter
+    drivers, wherever they live).
+  - `benchmarks/benchmark_files/` — the head-to-head "vs" comparison drivers that
+    read more like benchmarks than demos: `samplesort_three_way` (all three
+    out-of-core sorts on one run), `apply_sort_vs_samplesort`,
+    `samplesort_vs_samplesort_random`, `random_shuffle_three_way`, the
+    `fitmem_sort` / `fitmem_kth_smallest` single-level variants (one bucketing
+    round, then finish in DRAM), `kth_smallest_delayed`, plus their supporting
+    headers `direct_random_shuffle.h` and `external_quicksort.h`.
+
+  All three locations still build via `make examples` — the split is
+  organizational, not a build-inclusion signal; see the Makefile's per-binary
+  rules for the current source path of any given `<name>Example`.
 
 Examples are benchmarked by a **separate opt-in sweep**.  The sweep is
 parameterized by **input size in bytes** (not the binary's element count `n`), so
@@ -287,7 +328,8 @@ reads), and `size_to_n()` converts a target size to the binary's argv[1] as
 and the CSV carries an `input_bytes` column) into the same timestamped `results/`
 dir as the other benchmarks; `make bench-examples-mid` goes up to 256 GiB and
 `make bench-examples-full` up to 1 TiB (benchmark-machine sizes).  Add an example
-by dropping a `.cpp` in `examples/` and appending one entry to the `EXAMPLES`
+by dropping a `.cpp` in `examples/external/` (or add an explicit Makefile rule if
+it lives elsewhere) and appending one entry to the `EXAMPLES`
 registry in `run_benches.py` (set its `elem_bytes`/`input_seqs`).  **Name-clash warning**: the upstream parlaylib example
 headers define their symbols at global scope with no include guards (e.g.
 `field` in `rabin_karp.h`, `primes(long)` in `primes.h`), so when a new example
@@ -313,10 +355,10 @@ drives (balls-in-bins) to saturate all drives in parallel.  **Index-ordered
 invariant**: `chunks[i].index == i`; every primitive that returns a `chunk_seq`
 preserves it so callers can index by position.
 
-## The unified engine  (`external_engine.h`)
+## The unified engine  (`Primitives/external_engine.h`)
 
 All eager primitives share the standardized reader (`ChunkSequenceReader<T>`,
-`chunk_seq_reader.h`) and writer (`UnorderedFileWriter<T>`, `utils/`), through
+`Primitives/chunk_seq_reader.h`) and writer (`UnorderedFileWriter<T>`, `utils/`), through
 three building blocks in `namespace ChunkSequenceOps`:
 
 - **`ChunkEmitter<R>`** — `alloc()` a CHUNK_SIZE block; `emit(buf, count, index)`
@@ -342,21 +384,21 @@ Primitive mapping:
 | `ChunkFindIf`       | `RemoveWorker` (per-worker min matching index; `n` if none) |
 | `ChunkFilter`       | `DensePack` (reader source + predicate compaction) |
 | `ChunkFlatTabulate` | `DensePack` (generator source, `f(start,end) -> sequence<R>`) |
-| `ChunkPack` / `pack_if` / `pack_value` | `DensePack` (boolean-array / chunk-parallel-flag / predicate gate; `chunk_pack.h`) |
-| `ChunkFlatMap`      | `DensePackStream` (`flatten∘map`, `f(data,n,start,halo,halo_n)`; optional forward **halo** for boundary-crossing maps; `chunk_flat_map.h`) |
-| `ChunkHistogramByIndex` / `ChunkHistogramByKey` | `RemoveWorker` (per-worker bucket-count fold; `chunk_histogram_by_index.h`) |
-| `ChunkPartition`    | own single-reader + single-writer pass (`chunk_partition.h`); k-way split with a `PARTITION_DROP` sentinel |
-| `NReader` / `NRemoveWorker` | own N-way co-indexed reader (`n_reader.h`); lockstep read of N parallel `chunk_seq`s (e.g. values + bucket-ids for count-sort) |
-| `tabulate` / `iota` | own writer pipeline (`chunk_seq.h`) — no reader stage to unify |
+| `ChunkPack` / `pack_if` / `pack_value` | `DensePack` (boolean-array / chunk-parallel-flag / predicate gate; `Primitives/pack.h`) |
+| `ChunkFlatMap`      | `DensePackStream` (`flatten∘map`, `f(data,n,start,halo,halo_n)`; optional forward **halo** for boundary-crossing maps; `Primitives/flat_map.h`) |
+| `ChunkHistogramByIndex` / `ChunkHistogramByKey` | `RemoveWorker` (per-worker bucket-count fold; `Primitives/histogram_by_index.h`) |
+| `ChunkPartition`    | own single-reader + single-writer pass (`Primitives/partition.h`); k-way split with a `PARTITION_DROP` sentinel |
+| `NReader` / `NRemoveWorker` | own N-way co-indexed reader (`Primitives/n_reader.h`); lockstep read of N parallel `chunk_seq`s (e.g. values + bucket-ids for count-sort) |
+| `tabulate` / `iota` | own writer pipeline (`Primitives/chunk_seq.h`) — no reader stage to unify |
 
 `ChunkSequenceOps::ChunkSegmentedReduce` is also exposed per-vertex on CSR
-graphs (`ChunkSequence/ExternalGraph/external_compressed_sparse_row.h`) as
+graphs (`ChunkSequence/helper/external_compressed_sparse_row.h`) as
 `chunk_csr::segmented_reduce_over_edges<R>(elem_to_val, monoid)`, using
 `degree_scan` as the segment bounds — one streaming pass reducing every
 vertex's in-edge range at once (see `external_bellman_ford_fast` in
 `examples/external/external_bellman_ford.h`).
 
-`ChunkSequence/ExternalPrimitives/` holds the out-of-core sort/shuffle substrate
+`ChunkSequence/Primitives/` holds the out-of-core sort/shuffle substrate
 the `examples/external/` sorts are built on: `count_sort.h` distributes elements
 into per-bucket external sequences through the `BucketWriter` scatter
 (`bucketed_file_writer.h`; per-worker staging → sequential `writev`); a bucket
@@ -369,19 +411,19 @@ each sequence's own chunks, driven by an arbitrary `Processor` lambda) /
 wave-batched — mirrors `sort_buckets.h`'s wave-packing but keeps the in-place,
 original-layout write-back — so the caller doesn't have to pre-size every
 sequence to fit DRAM the way `count_sort`'s bucket count already does for
-`sort_inplace` and `Permutation::Run`).  `chunk_operation.h`'s `ChunkOperation`
+`sort_inplace` and `Permutation::Run`).  `operation.h`'s `ChunkOperation`
 enum (`Sort`/`Shuffle`) + `apply<Op>(seqs, ...)` is the named-operation
 front door on top of `process_inplace_budgeted`, for callers who'd rather
 select a named operation than hand-write a raw `Processor` lambda.  Supporting
-pieces: `chunk_cut.h` (slice / shift / guard-limb cuts, used by bigint),
+pieces: `cut.h` (slice / shift / guard-limb cuts, used by bigint),
 `flatten.h` (concatenate a list of `chunk_seq`s by reindexing), `materialize.h`
 (read a `chunk_seq` — or a delayed source — into a DRAM `parlay::sequence`),
 `random_shuffle.h` (count-sort bucketing + per-bucket shuffle), and the
-single-element probes `scan_find.h` / `LinearFind.h`.  These are exercised by the
-`examples/external/` programs rather than the `tests/` suite (`chunk_operation.h`
+single-element probes `scan_find.h` / `linear_find.h`.  These are exercised by the
+`examples/external/` programs rather than the `tests/` suite (`operation.h`
 is the exception — see `tests/chunk_operation_test.cpp`).
 
-**Out-of-core graph generation** (`examples/external/graph_utils/external_rmat.h`,
+**Out-of-core graph generation** (`helper/graph_utils/external_rmat.h`,
 tested by `externalRmatTest`): an RMAT edge is a pure function of its index
 (`rmat_edges_` draws edge `i` from `gen[i]`; `add_weights` draws `(u,v)`'s weight
 from `gen[min][max]`), so `external_rmat_symmetric_graph` builds a whole
@@ -400,7 +442,7 @@ its `heap_tree` pivots with `std::numeric_limits<T>::max()`, which for a
 program-defined `T` is a value-initialized `T` — the *minimum* — so it silently
 misroutes struct elements.
 
-### Dense packing  (`dense_pack.h`)
+### Dense packing  (`Primitives/dense_pack.h`)
 
 `ChunkFilter` and `ChunkFlatTabulate` need **dense** output (every chunk but the
 last is full), which requires cross-chunk carry state that the one-block-per-input
@@ -427,7 +469,7 @@ sibling) follows the same rule.  If a future `R` does *not* divide `CHUNK_SIZE`,
 correctness is preserved by the per-buffer tail zero, but revisit this before
 relying on it.
 
-### k-way split  (`chunk_partition.h`)
+### k-way split  (`Primitives/partition.h`)
 
 `ChunkPartition` splits one `chunk_seq` into `k` output `chunk_seq`s in a **single
 streaming read pass** (`key_fn(elem) -> bucket` or `PARTITION_DROP`) — the k-way
@@ -443,7 +485,7 @@ dense-except-last.  A *shared*-per-bucket assembly (count_sort style) instead
 serializes on 1–2 bucket locks for a few-bucket split and craters to ~1/10th
 bandwidth (low CPU **and** low disk util together = lock convoy, not an I/O limit).
 
-## Delayed (fused) sequences  (`chunk_delayed.h`)
+## Delayed (fused) sequences  (`Primitives/delayed.h`)
 
 A port of parlaylib's block-iterable-delayed design (namespace
 `ChunkSequenceOps::delayed`) that fuses an operation chain so intermediates never
@@ -531,7 +573,7 @@ offsets + total; pass 2 is a lazy `scan_node`.  `force` writes one file per driv
 - Drive placement is deterministic (`parlay::hash64`) in the engine and random
   (`mt19937_64`) in `tabulate`/`DensePack`; both are balls-in-bins balanced.
 - **TODO (perf): stream the delayed `filter`.**  `delayed::filter`
-  (`chunk_delayed.h`) still uses the whole-window `for_each_window` driver
+  (`Primitives/delayed.h`) still uses the whole-window `for_each_window` driver
   (read-all → compute-all per `FILTER_BATCH_SIZE` window), so it waits for every
   read in a window before any compute — the pre-optimization behavior the eager
   `ChunkFilter` already shed when it moved onto `DensePackStream`.  Its per-chunk

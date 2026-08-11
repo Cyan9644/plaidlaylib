@@ -2,7 +2,7 @@
 # Remove the files left behind by a cancelled random_shuffle_three_wayExample
 # run.
 #
-# The benchmark (ChunkSequence/examples/external/random_shuffle_three_way.cpp)
+# The benchmark (benchmarks/benchmark_files/random_shuffle_three_way.cpp)
 # cleans up after itself between contestants via bench_drives::clear_drives(),
 # but that only runs if the process exits normally — Ctrl-C mid-shuffle leaves
 # that contestant's input, intermediates, and output sitting on every drive.

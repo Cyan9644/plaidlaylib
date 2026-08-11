@@ -179,7 +179,7 @@ EXAMPLES = [
     # convex_hull_lazy_filterExample: a SEPARATE, opt-in benchmark (deliberately
     # NOT in the Makefile's bench-examples rules, same convention as
     # bigint_add_eager) that adds a third line -- the same hull computed with
-    # UpperHullLazyFilter (ChunkSequence/examples/chunk_convex_hull_lazy_filter.h,
+    # UpperHullLazyFilter (ChunkSequence/examples/external_TODO/chunk_convex_hull_lazy_filter.h,
     # every ChunkPartition call replaced by delayed::lazy_filter +
     # materialize_wide) -- alongside the existing ChunkPartition-based hull and
     # the in-mem baseline. Run it explicitly:

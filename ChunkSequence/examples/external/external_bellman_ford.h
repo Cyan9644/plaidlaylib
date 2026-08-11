@@ -5,8 +5,8 @@
 #include <limits>
 #include <optional>
 
-#include "ChunkSequence/ExternalGraph/external_compressed_sparse_row.h"
-#include "ChunkSequence/chunk_delayed.h"
+#include "ChunkSequence/helper/external_compressed_sparse_row.h"
+#include "ChunkSequence/Primitives/delayed.h"
 
 // using weighted_vertices = parlay::sequence<std::pair<vertex,wtype>>;
 // **************************************************************

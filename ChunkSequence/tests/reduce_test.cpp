@@ -3,8 +3,8 @@
 #include <iomanip>
 #include <iostream>
 
-#include "ChunkSequence/chunk_reduce.h"
-#include "ChunkSequence/chunk_seq.h"
+#include "ChunkSequence/Primitives/reduce.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
 #include "absl/log/check.h"
 #include "parlay/primitives.h"
 #include "utils/command_line.h"

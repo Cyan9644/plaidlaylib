@@ -8,8 +8,8 @@
 #include <string>
 #include <vector>
 
-#include "ChunkSequence/chunk_seq.h"
-#include "ChunkSequence/examples/chunk_kmp.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
+#include "ChunkSequence/examples/external/chunk_kmp.h"
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"

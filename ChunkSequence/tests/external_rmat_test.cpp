@@ -27,7 +27,7 @@
 // chunks, so the DensePackStream dedup pass is exercised across chunk seams --
 // the one place a 1-element halo can go wrong.
 
-#include "ChunkSequence/examples/external/graph_utils/external_rmat.h"
+#include "ChunkSequence/helper/graph_utils/external_rmat.h"
 
 #include <unistd.h>
 
@@ -40,8 +40,8 @@
 #include <string>
 #include <vector>
 
-#include "ChunkSequence/ExternalPrimitives/materialize.h"
-#include "ChunkSequence/chunk_seq.h"
+#include "ChunkSequence/Primitives/materialize.h"
+#include "ChunkSequence/Primitives/chunk_seq.h"
 #include "absl/log/check.h"
 #include "parlay/primitives.h"
 #include "utils/command_line.h"

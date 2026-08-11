@@ -24,9 +24,9 @@
 #include <utility>
 #include <vector>
 
-#include "ChunkSequence/chunk_filter.h"  // FILTER_BATCH_SIZE
-#include "ChunkSequence/chunk_seq.h"
-#include "ChunkSequence/chunk_seq_reader.h"
+#include "ChunkSequence/Primitives/filter.h"  // FILTER_BATCH_SIZE
+#include "ChunkSequence/Primitives/chunk_seq.h"
+#include "ChunkSequence/Primitives/chunk_seq_reader.h"
 #include "absl/log/check.h"
 #include "configs.h"
 #include "parlay/primitives.h"
