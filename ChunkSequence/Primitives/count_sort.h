@@ -21,7 +21,7 @@
 #include "utils/file_utils.h"
 #include "utils/unordered_file_writer.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 template <typename T = uint64_t>
 void count_sort(const chunk_seq& seq, const chunk_seq& ids,
@@ -212,7 +212,7 @@ void count_sort_by_key(const chunk_seq& seq, size_t num_buckets,
  * *delayed* (fused) sequence whose elements are std::pair{value, bucket}.  The
  * caller builds it as, e.g.,
  *
- *   namespace d = ChunkSequenceOps::delayed;
+ *   namespace d = plaid::delayed;
  *   auto ids = d::map(d::delay<T>(seq),
  *                     [&](T v){ return std::pair<T, size_t>{v, key(v)}; });
  *   count_sort(ids, num_buckets, out, prefix);
@@ -607,6 +607,6 @@ inline chunk_seq fuse(const std::vector<chunk_seq>& externalSequenceVector) {
   return result;
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // count_sort_H

@@ -10,7 +10,7 @@
 #include "configs.h"
 #include "parlay/primitives.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 // ChunkSegmentedReduce is somewhat hacky in that we would much prefer a more
 // general streaming pass method
@@ -107,6 +107,6 @@ parlay::sequence<R> ChunkSegmentedReduce(const chunk_seq& seq,
   return out;
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_SEGMENTED_REDUCE_H

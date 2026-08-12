@@ -1,5 +1,5 @@
 // Correctness test for the out-of-core upper convex hull
-// (ChunkSequenceOps::UpperHull).
+// (plaid::UpperHull).
 //
 // Each case builds an n-point cloud on the SSDs, runs UpperHull with a *tiny*
 // DRAM budget so the recursion is forced through many out-of-core split levels
@@ -38,8 +38,8 @@
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
 
-using ChunkSequenceOps::area;
-using ChunkSequenceOps::hpoint;
+using plaid::area;
+using plaid::hpoint;
 
 static void cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
@@ -156,16 +156,16 @@ static bool run_case(const std::string& name, size_t n,
   std::cout << "  " << name << "  (n=" << n << ")\n" << std::flush;
 
   const std::string in_prefix = "cht_in";
-  chunk_seq points = ChunkSequenceOps::tabulate<hpoint>(n, in_prefix, gen);
+  chunk_seq points = plaid::tabulate<hpoint>(n, in_prefix, gen);
 
   // Tiny DRAM budget (128 points) so both recursions are forced out-of-core.
   const size_t budget = 128 * sizeof(hpoint);
   std::vector<uint64_t> hull =
-      ChunkSequenceOps::UpperHull(points, budget, "cht_s");
-  const size_t splits = ChunkSequenceOps::last_ext_splits();
+      plaid::UpperHull(points, budget, "cht_s");
+  const size_t splits = plaid::last_ext_splits();
   std::vector<uint64_t> hull_lazy =
-      ChunkSequenceOps::UpperHullLazyFilter(points, budget, "cht_lazy");
-  const size_t splits_lazy = ChunkSequenceOps::last_ext_splits();
+      plaid::UpperHullLazyFilter(points, budget, "cht_lazy");
+  const size_t splits_lazy = plaid::last_ext_splits();
 
   // Independent in-DRAM baseline on the same points.
   std::vector<hpoint> pts(n);

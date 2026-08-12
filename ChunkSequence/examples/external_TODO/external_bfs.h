@@ -25,7 +25,7 @@
 
 //     //the current frontier is just the first vertex
 //     //spinning up a whole tabulate is wasteful here
-//   chunk_seq frontier = ChunkSequenceOps::tabulate<size_t>(1, "bfs_frontier0",
+//   chunk_seq frontier = plaid::tabulate<size_t>(1, "bfs_frontier0",
 //   [&](short i){
 //     return start;
 //   });
@@ -33,16 +33,16 @@
 //   size_t round=0;
 
 // //need to figure out how this works
-//   std::vector<ChunkSequenceOps::delayed::SequentialReadContext> ctxs(
+//   std::vector<plaid::delayed::SequentialReadContext> ctxs(
 //       std::max<size_t>(1, parlay::num_workers()));
 
 //   while (!frontier.chunks.empty()){
 //     //add the current frontier to the frontiers list
 
 //     frontiers.push_back(frontier);
-//     auto out = ChunkSequenceOps::ChunkFlatMap((frontier), [&](vertex u){
+//     auto out = plaid::ChunkFlatMap((frontier), [&](vertex u){
 
-//       return ChunkSequenceOps::delayed::lazy_filter(G.delay_get_adjacent(u),
+//       return plaid::delayed::lazy_filter(G.delay_get_adjacent(u),
 //       [&](weighted_edge e){
 //       // visited[e.connecting_vertex] ? 0 : 1;
 //       bool expected = false;
@@ -51,10 +51,10 @@
 //       true);});
 
 //       });
-//   frontier = ChunkSequenceOps::delayed::force(out, "filter_prefix");
+//   frontier = plaid::delayed::force(out, "filter_prefix");
 //     }
 
-//     // frontier = ChunkSequenceOps::delayed::force(out);
+//     // frontier = plaid::delayed::force(out);
 //     return frontiers;
 // }
 
@@ -74,23 +74,23 @@ auto BFS_simple(V start, const chunk_csr& G) {
 
   // the current frontier is just the first vertex
   // spinning up a whole tabulate is wasteful here
-  chunk_seq frontier = ChunkSequenceOps::tabulate<size_t>(
+  chunk_seq frontier = plaid::tabulate<size_t>(
       1, "bfs_frontier0", [&](short i) { return start; });
   parlay::sequence<chunk_seq> frontiers;
   size_t round = 0;
 
   // need to figure out how this works
-  std::vector<ChunkSequenceOps::delayed::SequentialReadContext> ctxs(
+  std::vector<plaid::delayed::SequentialReadContext> ctxs(
       std::max<size_t>(1, parlay::num_workers()));
 
   while (!frontier.chunks.empty()) {
     // add the current frontier to the frontiers list
     frontiers.push_back(frontier);
-    frontier = ChunkSequenceOps::ChunkFlatMap<size_t, size_t>(
+    frontier = plaid::ChunkFlatMap<size_t, size_t>(
         frontier, "bfs_frontier" + std::to_string(++round), [&](size_t u) {
           auto& ctx = ctxs[parlay::worker_id()];
           parlay::sequence<weighted_edge> adjacent =
-              ChunkSequenceOps::delayed::sequential_materialize(
+              plaid::delayed::sequential_materialize(
                   G.delay_get_adjacent(u), ctx);
           parlay::sequence<size_t> out;
           for (auto&& e : adjacent) {
@@ -149,7 +149,7 @@ auto external_bfs(V start, chunk_csr& G, size_t* rounds_out = nullptr) {
   // still-live frontier chunk_seqs out from under it. Still starts with
   // "bfs_frontier", so the existing "bfs_frontier*" cleanup globs
   // (run_benches.py's data_globs, scripts/clean_bfs.sh) still catch it.
-  chunk_seq frontier = ChunkSequenceOps::tabulate<size_t>(
+  chunk_seq frontier = plaid::tabulate<size_t>(
       1, "bfs_frontier_fast0", [&](short i) { return start; });
   parlay::sequence<chunk_seq> frontiers;
   size_t round = 0;
@@ -164,10 +164,10 @@ auto external_bfs(V start, chunk_csr& G, size_t* rounds_out = nullptr) {
   // through the reference without rebuilding the node (same reasoning as
   // external_bellman_ford_fast's `per_edge` -- see its comment).
   size_t cur_round = 0;
-  auto per_edge = ChunkSequenceOps::delayed::map(
-      ChunkSequenceOps::delayed::delay<weighted_edge>(G.edges),
+  auto per_edge = plaid::delayed::map(
+      plaid::delayed::delay<weighted_edge>(G.edges),
       [&](weighted_edge e) { return dist[e.connecting_vertex] == cur_round; });
-  ChunkSequenceOps::delayed::PersistentReadContext<decltype(per_edge)> ctx(
+  plaid::delayed::PersistentReadContext<decltype(per_edge)> ctx(
       per_edge);
 
   while (!frontier.chunks.empty()) {
@@ -182,7 +182,7 @@ auto external_bfs(V start, chunk_csr& G, size_t* rounds_out = nullptr) {
     // cost again this round.
     cur_round = round;
     parlay::sequence<bool> reached =
-        ChunkSequenceOps::delayed::segmented_reduce(per_edge, G.degree_scan,
+        plaid::delayed::segmented_reduce(per_edge, G.degree_scan,
                                                     OrMonoid{}, ctx);
 
     ++round;
@@ -196,7 +196,7 @@ auto external_bfs(V start, chunk_csr& G, size_t* rounds_out = nullptr) {
     parlay::sequence<size_t> next_ids =
         parlay::pack_index<size_t>(newly_reached);
 
-    frontier = ChunkSequenceOps::tabulate<size_t>(
+    frontier = plaid::tabulate<size_t>(
         next_ids.size(), "bfs_frontier_fast" + std::to_string(round),
         [&](size_t i) { return next_ids[i]; });
   }

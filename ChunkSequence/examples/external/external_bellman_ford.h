@@ -96,7 +96,7 @@ parlay::sequence<weight> external_bellman_ford(chunk_csr& graph, vertex start,
   auto N = graph.degree_scan;
   // you can't materialize the edge list, which is the whole point
   //  parlay::sequence<std::pair<size_t, weight>> F
-  //  =ChunkSequenceOps::materialize<std::pair<size_t, weight>>(graph.edges);
+  //  =plaid::materialize<std::pair<size_t, weight>>(graph.edges);
 
   chunk_seq& F = graph.edges;  // one point of note here is that chunk_sequence
                                // doesn't accept a particular type.
@@ -110,7 +110,7 @@ parlay::sequence<weight> external_bellman_ford(chunk_csr& graph, vertex start,
 
   d[start] = 0;
 
-  std::vector<ChunkSequenceOps::delayed::SequentialReadContext> ctxs(
+  std::vector<plaid::delayed::SequentialReadContext> ctxs(
       std::max<size_t>(1, parlay::num_workers()));
 
   // auto iterate = parlay::iota(n);
@@ -124,7 +124,7 @@ parlay::sequence<weight> external_bellman_ford(chunk_csr& graph, vertex start,
           // yeah this should probably be a pair in the external sequence proper
           // if we need to cut like this
 
-          // ChunkSequenceOps::delayed::materialize should instantiate the
+          // plaid::delayed::materialize should instantiate the
           // delayed sequence one key point is that we need to have a sequential
           // materialize here since we're already calling it in tabulate it
           // might also help to use sequential versions of the other methods
@@ -133,8 +133,8 @@ parlay::sequence<weight> external_bellman_ford(chunk_csr& graph, vertex start,
           // this is not actually a complete delay operation, it just prevents
           // the cut from writing back intermediates
           auto& ctx = ctxs[parlay::worker_id()];
-          auto adjacent = ChunkSequenceOps::delayed::sequential_materialize(
-              ChunkSequenceOps::delayed::cut<weighted_edge>(F, N[v], N[v + 1]),
+          auto adjacent = plaid::delayed::sequential_materialize(
+              plaid::delayed::cut<weighted_edge>(F, N[v], N[v + 1]),
               ctx);  // get the adjacency list for this vertex
           // auto corresponding_edge_weights = parlay::cut(k, N[v], N[v+1]);
           return parlay::reduce(parlay::delayed_tabulate(
@@ -222,15 +222,15 @@ parlay::sequence<weight> external_bellman_ford_fast(
   // node.  (Building a fresh per_edge each round would also give it a distinct
   // closure type from round to round's -- lambda types are unique per
   // lexical lambda-expression -- which would defeat reusing one `ctx`.)
-  auto per_edge = ChunkSequenceOps::delayed::map(
-      ChunkSequenceOps::delayed::delay<weighted_edge>(graph.edges),
+  auto per_edge = plaid::delayed::map(
+      plaid::delayed::delay<weighted_edge>(graph.edges),
       [&](weighted_edge e) { return d[e.connecting_vertex] + e.edge_weight; });
-  ChunkSequenceOps::delayed::PersistentReadContext<decltype(per_edge)> ctx(
+  plaid::delayed::PersistentReadContext<decltype(per_edge)> ctx(
       per_edge);
 
   size_t i = 0;
   for (; i < n; i++) {
-    auto pass = ChunkSequenceOps::delayed::segmented_reduce(
+    auto pass = plaid::delayed::segmented_reduce(
         per_edge, graph.degree_scan, MinDistMonoid{}, ctx);
 
     pass[start] = 0;
@@ -392,12 +392,12 @@ parlay::sequence<weight> external_bellman_ford_fast(
 // parlay::sequence<weighted_vertices<wtype>>;
 // //using weighted_vertices = parlay::sequence<std::pair<vertex,wtype>>;
 // auto bellman_ford(size_t start_ID, const weighted_chunk_csr csr) {
-//   long n = ChunkSequenceOps::size(csr); //total number of edges in the graph
+//   long n = plaid::size(csr); //total number of edges in the graph
 //   parlay::sequence<long double> d(n, std::numeric_limits<long
 //   double>::max()); d[start] = 0.0;
 
 //   for (int i=0; i < n; i++) {
-//     auto dn = ChunkSequenceOps::map(csr.edge_weights, [&] (auto& ngh) {
+//     auto dn = plaid::map(csr.edge_weights, [&] (auto& ngh) {
 //       return parlay::reduce(parlay::delayed_map(ngh, [&] (auto e) {
 //         return d[e.first] + e.second;}), parlay::minimum<long double>());});
 //     dn[start] = 0.0;

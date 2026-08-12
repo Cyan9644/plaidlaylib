@@ -21,7 +21,7 @@
 
 // we are currently assuming that not all elemsents go into 1 bucket, for
 // obvious reasons.
-namespace ChunkSequenceOps {
+namespace plaid {
 
 // randomized ~O(n) algorithm
 template <typename T, typename Less = std::less<>>
@@ -38,7 +38,7 @@ T kth_smallest(chunk_seq& seq, long k, Less less1 = {}) {
   if (n < 1536) {  // 1536 elements is the point at which we say we can
                    // materialize and sort directly
 
-    auto i = ChunkSequenceOps::materialize<T>(
+    auto i = plaid::materialize<T>(
         seq);  // materialize external sequence to parlay sequence (not yet
                // cleanly implemented)
     // no reason to sort over select
@@ -102,7 +102,7 @@ T kth_smallest(chunk_seq& seq, long k, Less less1 = {}) {
   auto key_fn = [&](T e) { return (size_t)ss.rank(e, less1); };
 
   auto sums =
-      ChunkSequenceOps::ChunkHistogramByKey<T>(seq, sample_size + 1, key_fn);
+      plaid::ChunkHistogramByKey<T>(seq, sample_size + 1, key_fn);
 
   // find which bucket k belongs in, and pack the keys in that bucket into next
   auto [offsets, total] = parlay::scan(sums);
@@ -110,7 +110,7 @@ T kth_smallest(chunk_seq& seq, long k, Less less1 = {}) {
       std::upper_bound(offsets.begin(), offsets.end(), k) - offsets.begin() - 1;
 
   // Pack survivors straight off seq's values (single read pass, no selector).
-  auto next = ChunkSequenceOps::pack_value<T>(
+  auto next = plaid::pack_value<T>(
       seq, "next_" + std::to_string(n),
       [&, id](T e) { return key_fn(e) == (size_t)id; });
   // recur on much smaller set, adjusting k as needed
@@ -160,7 +160,7 @@ T kth_smallest_fast(chunk_seq& seq, long k, Less less1 = {}) {
   if (n <= dram_budget_bytes) {  // the whole residual (in bytes) fits DRAM --
                                  // finish here
 
-    auto i = ChunkSequenceOps::materialize<T>(
+    auto i = plaid::materialize<T>(
         seq);  // materialize external sequence to parlay sequence (not yet
                // cleanly implemented)
     // no reason to sort over select
@@ -237,12 +237,12 @@ T kth_smallest_fast(chunk_seq& seq, long k, Less less1 = {}) {
   // bucket's own chunk count (size<T>), no extra I/O.
   const std::string part_prefix =
       "kth_next_" + std::to_string(kth_smallest_prefix_counter().fetch_add(1));
-  std::vector<chunk_seq> buckets = ChunkSequenceOps::ChunkPartition<T>(
+  std::vector<chunk_seq> buckets = plaid::ChunkPartition<T>(
       seq, sample_size + 1, part_prefix, key_fn);
  
   parlay::sequence<size_t> sums(sample_size + 1);
   for (size_t b = 0; b < (size_t)sample_size + 1; b++)
-    sums[b] = ChunkSequenceOps::size<T>(buckets[b]);
+    sums[b] = plaid::size<T>(buckets[b]);
 
   // find which bucket k belongs in
   auto [offsets, total] = parlay::scan(sums);
@@ -257,7 +257,7 @@ T kth_smallest_fast(chunk_seq& seq, long k, Less less1 = {}) {
   return result;
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 
 
@@ -290,7 +290,7 @@ T kth_smallest_fast(chunk_seq& seq, long k, Less less1 = {}) {
 //   if (n <= dram_budget_bytes) {  // the whole residual (in bytes) fits DRAM --
 //                                  // finish here
 
-//     auto i = ChunkSequenceOps::materialize<T>(
+//     auto i = plaid::materialize<T>(
 //         seq);  // materialize external sequence to parlay sequence (not yet
 //                // cleanly implemented)
 //     // no reason to sort over select
@@ -322,8 +322,8 @@ T kth_smallest_fast(chunk_seq& seq, long k, Less less1 = {}) {
 
 //   pivots = parlay::sort(pivots, less2);
 //   pivots =parlay::tabulate(sample_size, [&](long i) { return pivots[i * over]; });
-//   auto sums =ChunkSequenceOps::ChunkHistogramByKey<T>(seq, sample_size + 1, key_fn);
-//   auto list = ChunkSequenceOps::delayed::lazy_filter(ChunkSequenceOps::delayed_map(ChunkSequenceOps::delayed::delay<T>(seq), [&](T e)){
+//   auto sums =plaid::ChunkHistogramByKey<T>(seq, sample_size + 1, key_fn);
+//   auto list = plaid::delayed::lazy_filter(plaid::delayed_map(plaid::delayed::delay<T>(seq), [&](T e)){
 
 //     return ss.find()
 
@@ -331,7 +331,7 @@ T kth_smallest_fast(chunk_seq& seq, long k, Less less1 = {}) {
 
 //   parlay::sequence<size_t> sums(sample_size + 1);
 //   for (size_t b = 0; b < (size_t)sample_size + 1; b++)
-//     sums[b] = ChunkSequenceOps::size<T>(buckets[b]);
+//     sums[b] = plaid::size<T>(buckets[b]);
 
 //   // find which bucket k belongs in
 //   auto [offsets, total] = parlay::scan(sums);

@@ -105,24 +105,24 @@ int main(int argc, char* argv[]) {
     std::cout << "uint64_t elements, n=" << n
               << " (ELEMS_PER_CHUNK=" << ELEMS_PER_CHUNK << ")\n"
               << std::flush;
-    const chunk_seq input = ChunkSequenceOps::iota(n);
+    const chunk_seq input = plaid::iota(n);
     const auto bounds_v = make_bounds(n, ELEMS_PER_CHUNK);
     const parlay::sequence<size_t> bounds(bounds_v.begin(), bounds_v.end());
     auto id = [](uint64_t x) { return x; };
 
     all_pass &= verify<uint64_t>(
         "sum",
-        ChunkSequenceOps::ChunkSegmentedReduce<uint64_t, uint64_t>(
+        plaid::ChunkSegmentedReduce<uint64_t, uint64_t>(
             input, bounds, id, SumMonoid{}),
         bounds_v, expected_sum);
     all_pass &= verify<uint64_t>(
         "min",
-        ChunkSequenceOps::ChunkSegmentedReduce<uint64_t, uint64_t>(
+        plaid::ChunkSegmentedReduce<uint64_t, uint64_t>(
             input, bounds, id, MinMonoid{}),
         bounds_v, expected_min);
     all_pass &= verify<uint64_t>(
         "max",
-        ChunkSequenceOps::ChunkSegmentedReduce<uint64_t, uint64_t>(
+        plaid::ChunkSegmentedReduce<uint64_t, uint64_t>(
             input, bounds, id, MaxMonoid{}),
         bounds_v, expected_max);
   }
@@ -134,7 +134,7 @@ int main(int argc, char* argv[]) {
               << ", != ELEMS_PER_CHUNK=" << ELEMS_PER_CHUNK << ")\n"
               << std::flush;
     const chunk_seq input =
-        ChunkSequenceOps::tabulate<rec32>(n2, "segreduce_rec32", [](size_t i) {
+        plaid::tabulate<rec32>(n2, "segreduce_rec32", [](size_t i) {
           rec32 r;
           r.v = i;
           return r;
@@ -145,17 +145,17 @@ int main(int argc, char* argv[]) {
 
     all_pass &= verify<uint64_t>(
         "sum (32B elems)",
-        ChunkSequenceOps::ChunkSegmentedReduce<rec32, uint64_t>(
+        plaid::ChunkSegmentedReduce<rec32, uint64_t>(
             input, bounds, id, SumMonoid{}),
         bounds_v, expected_sum);
     all_pass &= verify<uint64_t>(
         "min (32B elems)",
-        ChunkSequenceOps::ChunkSegmentedReduce<rec32, uint64_t>(
+        plaid::ChunkSegmentedReduce<rec32, uint64_t>(
             input, bounds, id, MinMonoid{}),
         bounds_v, expected_min);
     all_pass &= verify<uint64_t>(
         "max (32B elems)",
-        ChunkSequenceOps::ChunkSegmentedReduce<rec32, uint64_t>(
+        plaid::ChunkSegmentedReduce<rec32, uint64_t>(
             input, bounds, id, MaxMonoid{}),
         bounds_v, expected_max);
 

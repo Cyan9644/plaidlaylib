@@ -124,7 +124,7 @@ int main(int argc, char* argv[]) {
   trace_mark("build_start");
   auto t0 = Clock::now();
   chunk_seq input =
-      ChunkSequenceOps::tabulate<cd>(N, in_prefix, [A, B](size_t p) {
+      plaid::tabulate<cd>(N, in_prefix, [A, B](size_t p) {
         const size_t a = p % A;
         const size_t b = p / A;
         return input_val(a * B + b);

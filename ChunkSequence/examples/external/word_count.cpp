@@ -5,7 +5,7 @@
 // (no sort of the token stream, no intermediate writes): each parlay worker folds
 // the words it sees into a local hash map keyed by a 64-bit word hash, and the
 // caller merges the maps and stitches the few words that straddle a chunk
-// boundary (ChunkSequenceOps::WordCount, examples/chunk_word_count.h).  This is
+// boundary (plaid::WordCount, examples/chunk_word_count.h).  This is
 // the out-of-core analogue of parlaylib's `word_counts`, which likewise groups by
 // hashing (histogram_by_key) and only sorts the small distinct-pairs list.
 //
@@ -45,7 +45,7 @@
 // Upstream parlaylib example (fetched by `make deps`), used only as the in-memory
 // comparison baseline.  Defines global word_counts(sequence<char>) and pulls in
 // parlay::tokens / histogram_by_key; the out-of-core algorithm below stays
-// self-contained in ChunkSequenceOps.  Only one upstream header is included here.
+// self-contained in plaid.  Only one upstream header is included here.
 #include "parlaylib-examples/word_counts.h"
 
 #include "utils/command_line.h"
@@ -105,7 +105,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Building text of " << n << " chars..." << std::flush;
     const std::string prefix = "wc_text";
     auto tb = Clock::now();
-    chunk_seq text = ChunkSequenceOps::tabulate<char>(n, prefix, wc_gen);
+    chunk_seq text = plaid::tabulate<char>(n, prefix, wc_gen);
     const double build_s = elapsed(tb);
     std::cout << " done (" << text.chunks.size() << " chunks across "
               << GetSSDList().size() << " drives)\n";
@@ -113,7 +113,7 @@ int main(int argc, char* argv[]) {
     // ── Count ───────────────────────────────────────────────────────────────────
     trace_mark("op_start");
     auto t0 = Clock::now();
-    ChunkSequenceOps::WordCounts counts = ChunkSequenceOps::WordCount(text);
+    plaid::WordCounts counts = plaid::WordCount(text);
     const double count_s = elapsed(t0);
     trace_mark("op_end");
 
@@ -129,7 +129,7 @@ int main(int argc, char* argv[]) {
               << " GB/s (text read)\n";
 
     // Top few words by frequency (upstream's final sorted output).
-    auto sorted = ChunkSequenceOps::SortedByCount(counts);
+    auto sorted = plaid::SortedByCount(counts);
     const size_t show = std::min<size_t>(sorted.size(), 10);
     std::cout << "top " << show << " word(s):";
     for (size_t i = 0; i < show; i++)
@@ -148,7 +148,7 @@ int main(int argc, char* argv[]) {
         // Expected distinct (hash -> count), hashed identically to the fold.
         std::unordered_map<uint64_t, uint64_t> expected;
         for (const auto& pr : pairs)
-            expected[ChunkSequenceOps::HashWord(pr.first.data(), pr.first.size())] +=
+            expected[plaid::HashWord(pr.first.data(), pr.first.size())] +=
                 (uint64_t)pr.second;
 
         std::cout << "in-mem parlaylib word_counts: distinct = " << expected.size()

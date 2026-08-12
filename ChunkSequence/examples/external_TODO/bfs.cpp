@@ -367,7 +367,7 @@ static bool run_case(const std::string& label, size_t n_req,
     }
     for (size_t lvl = 0; lvl < levels; lvl++) {
       parlay::sequence<size_t> ext_level =
-          ChunkSequenceOps::materialize<size_t>(frontiers[lvl]);
+          plaid::materialize<size_t>(frontiers[lvl]);
       parlay::sequence<size_t> mem_level = mem_frontiers[lvl];
       if (ext_level.size() != mem_level.size()) {
         std::cout << "*** MISMATCH (" << name << ") at level " << lvl

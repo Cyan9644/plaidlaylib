@@ -31,7 +31,7 @@ int main(int argc, char* argv[]) {
 
   // ── write ────────────────────────────────────────────────────────────────
   std::cout << "iota(" << n << ") writing...\n" << std::flush;
-  const chunk_seq seq = ChunkSequenceOps::iota(n);
+  const chunk_seq seq = plaid::iota(n);
   std::cout << "wrote " << seq.chunks.size() << " chunks across "
             << GetSSDList().size() << " drives\n"
             << std::flush;

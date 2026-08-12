@@ -31,7 +31,7 @@
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
 
-namespace cd = ChunkSequenceOps::delayed;
+namespace cd = plaid::delayed;
 
 // ── monoids ──────────────────────────────────────────────────────────────────
 struct SumMonoid {
@@ -175,7 +175,7 @@ static void run_size(size_t n) {
 
   // map -> force  (x -> 3x+1)
   {
-    chunk_seq seq = ChunkSequenceOps::iota(n);
+    chunk_seq seq = plaid::iota(n);
     auto d = cd::map(cd::delay(seq), [](uint64_t x) { return 3 * x + 1; });
     chunk_seq out = cd::force(d, "dl_map");
     expect_eq_vec<uint64_t>(
@@ -187,7 +187,7 @@ static void run_size(size_t n) {
 
   // type-changing map u64 -> u32, then force
   {
-    chunk_seq seq = ChunkSequenceOps::iota(n);
+    chunk_seq seq = plaid::iota(n);
     auto d = cd::map(cd::delay(seq),
                      [](uint64_t x) { return (uint32_t)(x & 0xFFFFFFFFu); });
     chunk_seq out = cd::force(d, "dl_map32");
@@ -201,7 +201,7 @@ static void run_size(size_t n) {
 
   // chained map | map | reduce  ((x+1) then *2, summed)
   {
-    chunk_seq seq = ChunkSequenceOps::iota(n);
+    chunk_seq seq = plaid::iota(n);
     auto d = cd::map(cd::map(cd::delay(seq), [](uint64_t x) { return x + 1; }),
                      [](uint64_t x) { return 2 * x; });
     uint64_t got = cd::reduce(d, SumMonoid{});
@@ -213,7 +213,7 @@ static void run_size(size_t n) {
 
   // reduce variants directly over delay(iota)
   {
-    chunk_seq seq = ChunkSequenceOps::iota(n);
+    chunk_seq seq = plaid::iota(n);
     expect_scalar("reduce sum", cd::reduce(cd::delay(seq), SumMonoid{}),
                   ref_reduce(base, SumMonoid{}));
     expect_scalar("reduce xor", cd::reduce(cd::delay(seq), XorMonoid{}),
@@ -223,7 +223,7 @@ static void run_size(size_t n) {
 
   // scan(map) -> force; output + total
   {
-    chunk_seq seq = ChunkSequenceOps::iota(n);
+    chunk_seq seq = plaid::iota(n);
     auto d = cd::map(cd::delay(seq), [](uint64_t x) { return x + 1; });
     auto [sd, total] = cd::scan(d, SumMonoid{});
     chunk_seq out = cd::force(sd, "dl_scan");
@@ -238,7 +238,7 @@ static void run_size(size_t n) {
 
   // map after scan, then reduce(max of exclusive prefixes)
   {
-    chunk_seq seq = ChunkSequenceOps::iota(n);
+    chunk_seq seq = plaid::iota(n);
     auto [sd, total] = cd::scan(cd::delay(seq), SumMonoid{});
     auto md = cd::map(sd, [](uint64_t x) { return x; });
     uint64_t got = cd::reduce(md, MaxMonoid{});
@@ -252,7 +252,7 @@ static void run_size(size_t n) {
 
   // filter(map) -> packed chunk_seq  (keep evens of x+1)
   {
-    chunk_seq seq = ChunkSequenceOps::iota(n);
+    chunk_seq seq = plaid::iota(n);
     auto d = cd::map(cd::delay(seq), [](uint64_t x) { return x + 1; });
     chunk_seq out =
         cd::filter(d, "dl_flt", [](uint64_t x) { return x % 2 == 0; });
@@ -266,7 +266,7 @@ static void run_size(size_t n) {
   // lazy_filter(map)  (keep evens of x+1) -- never writes to disk itself;
   // only the cd::force call below does, purely to check the result.
   {
-    chunk_seq seq = ChunkSequenceOps::iota(n);
+    chunk_seq seq = plaid::iota(n);
     auto d = cd::map(cd::delay(seq), [](uint64_t x) { return x + 1; });
     auto fd = cd::lazy_filter(d, [](uint64_t x) { return x % 2 == 0; });
     auto rv = ref_filter(ref_map(base, [](uint64_t x) { return x + 1; }),
@@ -294,7 +294,7 @@ static void run_size(size_t n) {
 
   // zip file × index (equal length)  -> (i) + (10i) = 11i
   {
-    chunk_seq seq = ChunkSequenceOps::iota(n);
+    chunk_seq seq = plaid::iota(n);
     auto z = cd::map(
         cd::zip(cd::delay(seq),
                 cd::tabulate(n, [](size_t i) { return (uint64_t)10 * i; })),
@@ -309,8 +309,8 @@ static void run_size(size_t n) {
 
   // zip file × file (equal length)  -> (i) + (2i) = 3i, via force and reduce
   {
-    chunk_seq A = ChunkSequenceOps::iota(n);
-    chunk_seq B = ChunkSequenceOps::tabulate<uint64_t>(
+    chunk_seq A = plaid::iota(n);
+    chunk_seq B = plaid::tabulate<uint64_t>(
         n, "iotaB", [](size_t i) { return (uint64_t)2 * i; });
     chunk_seq out = cd::force(
         cd::map(cd::zip(cd::delay(A), cd::delay(B)), add_pair), "dl_zff");
@@ -329,8 +329,8 @@ static void run_size(size_t n) {
 
   // composition: zip(map(delay(A), x+1), delay(B))  -> (i+1) + (i) = 2i+1
   {
-    chunk_seq A = ChunkSequenceOps::iota(n);
-    chunk_seq B = ChunkSequenceOps::tabulate<uint64_t>(
+    chunk_seq A = plaid::iota(n);
+    chunk_seq B = plaid::tabulate<uint64_t>(
         n, "iotaB", [](size_t i) { return (uint64_t)i; });
     auto z =
         cd::map(cd::zip(cd::map(cd::delay(A), [](uint64_t x) { return x + 1; }),
@@ -375,7 +375,7 @@ static void run_zip_pad() {
 
   // file (A, shorter) × index — tail output chunks have no A buffer
   {
-    chunk_seq A = ChunkSequenceOps::tabulate<uint64_t>(
+    chunk_seq A = plaid::tabulate<uint64_t>(
         nA, "iotaA", [](size_t i) { return (uint64_t)i; });
     auto z = cd::map(
         cd::zip(cd::delay(A),
@@ -390,9 +390,9 @@ static void run_zip_pad() {
 
   // file × file, A shorter
   {
-    chunk_seq A = ChunkSequenceOps::tabulate<uint64_t>(
+    chunk_seq A = plaid::tabulate<uint64_t>(
         nA, "iotaA", [](size_t i) { return (uint64_t)i; });
-    chunk_seq B = ChunkSequenceOps::tabulate<uint64_t>(
+    chunk_seq B = plaid::tabulate<uint64_t>(
         nB, "iotaB", [](size_t i) { return (uint64_t)100 + i; });
     auto z = cd::map(cd::zip(cd::delay(A), cd::delay(B), pad), add_pair);
     chunk_seq out = cd::force(z, "dl_zp_ff");
@@ -404,9 +404,9 @@ static void run_zip_pad() {
 
   // file × file, B shorter (the padded side is the second operand)
   {
-    chunk_seq A = ChunkSequenceOps::tabulate<uint64_t>(
+    chunk_seq A = plaid::tabulate<uint64_t>(
         nB, "iotaA", [](size_t i) { return (uint64_t)100 + i; });
-    chunk_seq B = ChunkSequenceOps::tabulate<uint64_t>(
+    chunk_seq B = plaid::tabulate<uint64_t>(
         nA, "iotaB", [](size_t i) { return (uint64_t)i; });
     auto z = cd::map(cd::zip(cd::delay(A), cd::delay(B), pad), add_pair);
     chunk_seq out = cd::force(z, "dl_zp_ff2");
@@ -427,8 +427,8 @@ static void run_zip_multibatch() {
   const size_t n = chunks * ELEMS_PER_CHUNK;
   std::cout << "  zip multi-batch  n=" << n << "  (" << chunks << " chunks)\n";
 
-  chunk_seq A = ChunkSequenceOps::iota(n);  // i
-  chunk_seq B = ChunkSequenceOps::tabulate<uint64_t>(
+  chunk_seq A = plaid::iota(n);  // i
+  chunk_seq B = plaid::tabulate<uint64_t>(
       n, "iotaB", [](size_t i) { return (uint64_t)i; });  // i
 
   // sum_i (i + i) = n(n-1)
@@ -447,10 +447,10 @@ static void run_zip_multibatch() {
 static void run_zip_compose() {
   const size_t n = 2 * ELEMS_PER_CHUNK + 37;
   std::cout << "  zip composition  n=" << n << "\n";
-  chunk_seq A = ChunkSequenceOps::iota(n);  // i
-  chunk_seq B = ChunkSequenceOps::tabulate<uint64_t>(
+  chunk_seq A = plaid::iota(n);  // i
+  chunk_seq B = plaid::tabulate<uint64_t>(
       n, "cmpB", [](size_t i) { return (uint64_t)10 * i; });
-  chunk_seq C = ChunkSequenceOps::tabulate<uint64_t>(
+  chunk_seq C = plaid::tabulate<uint64_t>(
       n, "cmpC", [](size_t i) { return (uint64_t)100 * i; });
 
   // zip of a zip (3-way via nesting): ((a,b),c) -> a+b+c = 111 i
@@ -561,9 +561,9 @@ static void run_bigint_add() {
   }
   const uint8_t ref_cout = (uint8_t)carry;
 
-  chunk_seq A = ChunkSequenceOps::tabulate<uint64_t>(
+  chunk_seq A = plaid::tabulate<uint64_t>(
       na, "biA", [](size_t i) { return bi_a(i); });
-  chunk_seq B = ChunkSequenceOps::tabulate<uint64_t>(
+  chunk_seq B = plaid::tabulate<uint64_t>(
       nb, "biB", [](size_t i) { return bi_b(i); });
   auto [C, cout] = cd::scan(
       cd::map(cd::zip(cd::delay(A), cd::delay(B), (uint64_t)0), carry_status),
@@ -580,9 +580,9 @@ static void run_bigint_add() {
   // full carry chain across chunks: all-ones + 1 -> all-zero digits, carry-out
   // 1
   const size_t m = ELEMS_PER_CHUNK + 3;
-  chunk_seq A2 = ChunkSequenceOps::tabulate<uint64_t>(
+  chunk_seq A2 = plaid::tabulate<uint64_t>(
       m, "biA", [](size_t) { return ~(uint64_t)0; });
-  chunk_seq B2 = ChunkSequenceOps::tabulate<uint64_t>(
+  chunk_seq B2 = plaid::tabulate<uint64_t>(
       1, "biB", [](size_t) { return (uint64_t)1; });
   auto [C2, cout2] = cd::scan(
       cd::map(cd::zip(cd::delay(A2), cd::delay(B2), (uint64_t)0), carry_status),
@@ -633,7 +633,7 @@ static void run_multibatch() {
   const size_t n = chunks * ELEMS_PER_CHUNK;
   std::cout << "  multi-batch  n=" << n << "  (" << chunks << " chunks)\n";
 
-  chunk_seq seq = ChunkSequenceOps::iota(n);
+  chunk_seq seq = plaid::iota(n);
   // Fuse an identity map into the filter to exercise the delayed read path.
   auto d = cd::map(cd::delay(seq), [](uint64_t x) { return x; });
   chunk_seq filt =
@@ -665,7 +665,7 @@ static void run_lazy_filter_multibatch() {
   std::cout << "  lazy_filter multi-batch  n=" << n << "  (" << chunks
             << " chunks)\n";
 
-  chunk_seq seq = ChunkSequenceOps::iota(n);
+  chunk_seq seq = plaid::iota(n);
   auto d = cd::map(cd::delay(seq), [](uint64_t x) { return x; });
   auto fd = cd::lazy_filter(d, [](uint64_t x) { return x % 2 == 0; });
 
@@ -697,7 +697,7 @@ static void run_lazy_filter_sparse() {
   std::cout << "  lazy_filter sparse  n=" << n << "  (" << chunks
             << " chunks)\n";
 
-  chunk_seq seq = ChunkSequenceOps::iota(n);
+  chunk_seq seq = plaid::iota(n);
   const uint64_t stride =
       ELEMS_PER_CHUNK + ELEMS_PER_CHUNK / 2;  // ~1 survivor / 1.5 chunks
   auto pred = [stride](uint64_t x) { return x % stride == 0; };
@@ -722,7 +722,7 @@ static void run_lazy_filter_random_access() {
   const size_t n = chunks * ELEMS_PER_CHUNK;
   std::cout << "  lazy_filter random access  n=" << n << "\n";
 
-  chunk_seq seq = ChunkSequenceOps::iota(n);
+  chunk_seq seq = plaid::iota(n);
   auto pred = [](uint64_t x) { return x % 2 == 0; };
   auto fd = cd::lazy_filter(cd::delay(seq), pred);
   auto ref = ref_filter(ref_iota(n), pred);
@@ -753,8 +753,8 @@ static void run_sequential_context() {
   const size_t n = 2 * ELEMS_PER_CHUNK + 3;
   std::cout << "  sequential context  n=" << n << "\n";
 
-  chunk_seq A = ChunkSequenceOps::iota(n);
-  chunk_seq B = ChunkSequenceOps::tabulate<uint64_t>(
+  chunk_seq A = plaid::iota(n);
+  chunk_seq B = plaid::tabulate<uint64_t>(
       n, "seqctxB", [](size_t i) { return (uint64_t)1000 + i; });
 
   // Straddles the boundary between physical chunk 0 and chunk 1.
@@ -820,7 +820,7 @@ static void run_persistent_context() {
   const size_t n = 2 * ELEMS_PER_CHUNK + 3;
   std::cout << "  persistent context  n=" << n << "\n";
 
-  chunk_seq A = ChunkSequenceOps::iota(n);
+  chunk_seq A = plaid::iota(n);
 
   // `offset` is captured by reference, exactly like Bellman-Ford's `d`:
   // the map node is built once and reused; only offset's VALUE changes

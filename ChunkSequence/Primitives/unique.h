@@ -23,7 +23,7 @@
 //the basic logic we want is to break into blocks
 //specifically using a hash function, so that identical elements will go to the same block.
 //from there, we just run deduplication in parallel on each block.
-namespace ChunkSequenceOps{
+namespace plaid{
 
 template <typename T = uint64_t, typename Hash = std::hash<T>,
          typename Less = std::less<>>
@@ -37,26 +37,26 @@ chunk_seq unique(const chunk_seq& seq, const std::string& result_prefix,size_t n
         1UL, std::min(file_size / sizeof(T), file_size / O_DIRECT_MULTIPLE));
     num_buckets = std::max(std::min(file_size / (1UL << 27), max_sample_size),
                            min_sample_size) +1;}
-  namespace d = ChunkSequenceOps::delayed;
+  namespace d = plaid::delayed;
   auto ids = d::map(d::delay<T>(seq), [hash, num_buckets](T v){
     return std::pair<T, size_t>{v, (size_t)(hash(v) % num_buckets)};
   });
 
   std::vector<chunk_seq> buckets(num_buckets);
-  ChunkSequenceOps::count_sort(ids, num_buckets, buckets, result_prefix);
+  plaid::count_sort(ids, num_buckets, buckets, result_prefix);
 
   parlay::parallel_for(0, num_buckets, [&](size_t b){
     if (buckets[b].chunks.empty()) return;
-    auto vals = ChunkSequenceOps::sequential_materialize<T>(buckets[b]);
+    auto vals = plaid::sequential_materialize<T>(buckets[b]);
     parlay::sort_inplace(vals, less);
     vals.resize(std::unique(vals.begin(), vals.end()) - vals.begin());
-    buckets[b] = ChunkSequenceOps::sequential_to_chunk_seq(
+    buckets[b] = plaid::sequential_to_chunk_seq(
         vals, result_prefix + "_u" + std::to_string(b));
   });
 
-  return ChunkSequenceOps::flatten(buckets);}
+  return plaid::flatten(buckets);}
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 
 

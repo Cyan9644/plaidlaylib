@@ -74,7 +74,7 @@
 #include "parlay/primitives.h"
 #include "utils/file_utils.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 namespace dc3_detail {
 
 using sa_detail::elem_prefix;
@@ -758,6 +758,6 @@ inline chunk_seq ChunkDC3(const chunk_seq& text,
   return sa;
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_DC3_H

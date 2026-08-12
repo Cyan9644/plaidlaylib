@@ -1,13 +1,13 @@
 // Benchmark: the two out-of-core random shuffles head-to-head on one key set,
 // against in-memory parlay::random_shuffle as the yardstick.
 //
-//   1. our primitives  external_random_shuffle.h (ChunkSequenceOps::random_shuffle):
+//   1. our primitives  external_random_shuffle.h (plaid::random_shuffle):
 //                      random per-index bucket assignment via a delayed map,
 //                      count_sort routes the elements into per-bucket
 //                      external sequences, each bucket is shuffled in place
 //                      via apply<ChunkOperation::Shuffle> (process_inplace),
 //                      flatten concatenates the buckets.
-//   2. our direct      direct_random_shuffle.h (ChunkSequenceOps::direct_random_shuffle):
+//   2. our direct      direct_random_shuffle.h (plaid::direct_random_shuffle):
 //                      the same algorithm, written straight against
 //                      io_uring/O_DIRECT -- direct_sample_sort's scatter/
 //                      gather shape with the pivot phase dropped (see that
@@ -102,7 +102,7 @@ static double to_gb(size_t bytes) {
 // its output (both of ours hand back a chunk_seq whose files *are* the
 // shuffled result, so those must be swept too or the whole output leaks
 // every sweep point).
-//   primitives:  rs3_in + ChunkSequenceOps::random_shuffle's internal bucket
+//   primitives:  rs3_in + plaid::random_shuffle's internal bucket
 //                files, which are unconditionally named "ss_bucket_"+tag --
 //                that function takes no result-prefix argument, so this is
 //                the only prefix that can be swept for it (a quirk of
@@ -173,16 +173,16 @@ int main(int argc, char* argv[]) {
   shufflers[0].prefixes = kPrimPrefixes;
   shufflers[0].build = [&] {
     auto t0 = Clock::now();
-    prim_in = ChunkSequenceOps::tabulate<uint64_t>(n, "rs3_in", key_at);
+    prim_in = plaid::tabulate<uint64_t>(n, "rs3_in", key_at);
     return elapsed(t0);
   };
   shufflers[0].shuffle = [&] {
     auto t0 = Clock::now();
-    prim_out = ChunkSequenceOps::random_shuffle<uint64_t>(prim_in);
+    prim_out = plaid::random_shuffle<uint64_t>(prim_in);
     return elapsed(t0);
   };
   shufflers[0].read_back = [&] {
-    auto s = ChunkSequenceOps::materialize<uint64_t>(prim_out);
+    auto s = plaid::materialize<uint64_t>(prim_out);
     return std::vector<uint64_t>(s.begin(), s.end());
   };
 
@@ -191,17 +191,17 @@ int main(int argc, char* argv[]) {
   shufflers[1].prefixes = kDirectPrefixes;
   shufflers[1].build = [&] {
     auto t0 = Clock::now();
-    direct_in = ChunkSequenceOps::tabulate<uint64_t>(n, "drs3_in", key_at);
+    direct_in = plaid::tabulate<uint64_t>(n, "drs3_in", key_at);
     return elapsed(t0);
   };
   shufflers[1].shuffle = [&] {
     auto t0 = Clock::now();
-    direct_out = ChunkSequenceOps::direct_random_shuffle<uint64_t>(
+    direct_out = plaid::direct_random_shuffle<uint64_t>(
         direct_in, /*seed=*/0, "drs3");
     return elapsed(t0);
   };
   shufflers[1].read_back = [&] {
-    auto s = ChunkSequenceOps::materialize<uint64_t>(direct_out);
+    auto s = plaid::materialize<uint64_t>(direct_out);
     return std::vector<uint64_t>(s.begin(), s.end());
   };
 

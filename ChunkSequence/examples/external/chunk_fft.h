@@ -261,10 +261,10 @@ inline chunk_seq stage1_rows(const chunk_seq& input, const Dims& d,
   const size_t A = d.A;
   FFTPlan planA;
   planA.init(A);  // shared read-only across workers
-  return ChunkSequenceOps::ExternalTransform<cd, cd>(
+  return plaid::ExternalTransform<cd, cd>(
       input, prefix,
       [A, &planA](const cd* in, size_t n, size_t index,
-                  const ChunkSequenceOps::ChunkEmitter<cd>& emit) {
+                  const plaid::ChunkEmitter<cd>& emit) {
         cd* out = emit.alloc();
         const size_t nblocks = n / A;  // n is a multiple of A
         for (size_t blk = 0; blk < nblocks; blk++) {
@@ -748,10 +748,10 @@ inline chunk_seq stage2t_cols(const chunk_seq& sT, const Dims& d,
   const double pi = kPi();
   FFTPlan planB;
   planB.init(B);
-  return ChunkSequenceOps::ExternalTransform<cd, cd>(
+  return plaid::ExternalTransform<cd, cd>(
       sT, prefix,
       [N, B, pi, &planB](const cd* in, size_t n, size_t index,
-                         const ChunkSequenceOps::ChunkEmitter<cd>& emit) {
+                         const plaid::ChunkEmitter<cd>& emit) {
         cd* out = emit.alloc();
         const size_t nrows = n / B;                  // n is a multiple of B
         const size_t first_row = index * (EPC / B);  // global k1 of row 0

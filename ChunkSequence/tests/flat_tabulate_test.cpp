@@ -133,7 +133,7 @@ static bool test_identity() {
       3 * ELEMS_PER_CHUNK + 7;  // spans multiple chunks, non-aligned
   const std::string prefix = "ft_identity";
 
-  chunk_seq result = ChunkSequenceOps::ChunkFlatTabulate<uint64_t>(
+  chunk_seq result = plaid::ChunkFlatTabulate<uint64_t>(
       n, prefix, [](size_t start, size_t end) {
         parlay::sequence<uint64_t> out(end - start);
         for (size_t i = 0; i < end - start; i++) out[i] = (uint64_t)(start + i);
@@ -184,7 +184,7 @@ static bool test_odds() {
   const size_t n = 2 * ELEMS_PER_CHUNK + 5;
   const std::string prefix = "ft_odds";
 
-  chunk_seq result = ChunkSequenceOps::ChunkFlatTabulate<uint64_t>(
+  chunk_seq result = plaid::ChunkFlatTabulate<uint64_t>(
       n, prefix, [](size_t start, size_t end) {
         parlay::sequence<uint64_t> out;
         size_t s = (start % 2 == 0) ? start + 1 : start;
@@ -232,7 +232,7 @@ static bool test_empty_output() {
   std::cout << "test_empty_output\n" << std::flush;
   const std::string prefix = "ft_empty";
 
-  chunk_seq result = ChunkSequenceOps::ChunkFlatTabulate<uint64_t>(
+  chunk_seq result = plaid::ChunkFlatTabulate<uint64_t>(
       ELEMS_PER_CHUNK, prefix,
       [](size_t, size_t) { return parlay::sequence<uint64_t>{}; });
 
@@ -260,7 +260,7 @@ static bool test_primes_count(size_t n) {
   while ((long long)(sqrt_n + 1) * (sqrt_n + 1) <= (long long)n) sqrt_n++;
   parlay::sequence<long> small = in_mem_primes(sqrt_n);
 
-  chunk_seq result = ChunkSequenceOps::ChunkFlatTabulate<uint64_t>(
+  chunk_seq result = plaid::ChunkFlatTabulate<uint64_t>(
       n + 1, prefix, [&](size_t start, size_t end) {
         std::vector<bool> flags(end - start, true);
         for (long p : small) {
@@ -328,7 +328,7 @@ static bool test_chunk_boundary() {
   while ((long long)(sqrt_n + 1) * (sqrt_n + 1) <= (long long)n) sqrt_n++;
   parlay::sequence<long> small = in_mem_primes(sqrt_n);
 
-  chunk_seq result = ChunkSequenceOps::ChunkFlatTabulate<uint64_t>(
+  chunk_seq result = plaid::ChunkFlatTabulate<uint64_t>(
       n + 1, prefix, [&](size_t start, size_t end) {
         std::vector<bool> flags(end - start, true);
         for (long p : small) {
@@ -399,7 +399,7 @@ static bool test_consolidate_output() {
   while ((long long)(sqrt_n + 1) * (sqrt_n + 1) <= (long long)n) sqrt_n++;
   parlay::sequence<long> small = in_mem_primes(sqrt_n);
 
-  chunk_seq result = ChunkSequenceOps::ChunkFlatTabulate<uint64_t>(
+  chunk_seq result = plaid::ChunkFlatTabulate<uint64_t>(
       n + 1, prefix, [&](size_t start, size_t end) {
         std::vector<bool> flags(end - start, true);
         for (long p : small) {

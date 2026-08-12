@@ -9,7 +9,7 @@
 #include "configs.h"
 #include "parlay/sequence.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 /**
  * Out-of-core analogue of parlay::flatten(parlay::map(seq, f)) with an optional
@@ -87,6 +87,6 @@ chunk_seq ChunkFlatMap(const chunk_seq& seq, const std::string& result_prefix,
                                });
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_FLAT_MAP_H

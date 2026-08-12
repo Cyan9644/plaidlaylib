@@ -23,7 +23,7 @@
 #include "ChunkSequence/Primitives/materialize.h"
 #include "ChunkSequence/Primitives/chunk_seq.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 template <typename T = uint64_t, typename Less = std::less<>>
 chunk_seq primitive_quicksort(chunk_seq& seq, Less less = {}) {
@@ -33,11 +33,11 @@ chunk_seq primitive_quicksort(chunk_seq& seq, Less less = {}) {
   // Single sorting pass: the bucket fits in memory (guaranteed by the sample
   // count chosen in external_samplesort), so pull it into DRAM, sort it, and
   // write it back out as a chunk_seq.
-  auto v = ChunkSequenceOps::materialize<T>(seq);
+  auto v = plaid::materialize<T>(seq);
   parlay::sort_inplace(v, less);
-  return ChunkSequenceOps::to_chunk_seq(v, "qs_base_" + tag);
+  return plaid::to_chunk_seq(v, "qs_base_" + tag);
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // PRIMITIVE_QUICK_SORT_H

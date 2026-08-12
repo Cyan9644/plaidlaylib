@@ -1,5 +1,5 @@
 // Benchmark: our out-of-core sample sort (external_samplesort.h,
-// ChunkSequenceOps::sample_sort on the chunk_seq model) vs Peter's out-of-core
+// plaid::sample_sort on the chunk_seq model) vs Peter's out-of-core
 // sample sort (peter_samplesort/peter_samplesort.h, SampleSort<T> on his
 // FileInfo / scatter-gather model), head-to-head on the identical key multiset.
 //
@@ -8,7 +8,7 @@
 // in-DRAM sort we time a *second out-of-core* sort so the two external designs
 // can be compared directly.  Both sort keys key_at(i)=parlay::hash64(i) for
 // i in [0,n): our side builds them as a chunk_seq via
-// ChunkSequenceOps::tabulate and Peter's side builds them as raw per-drive
+// plaid::tabulate and Peter's side builds them as raw per-drive
 // files (peter_shim::BuildInput) in the layout his FindFiles expects.  Because
 // the keys are distinct the sorted order is unique, so the two outputs must
 // agree exactly (element-wise cross-check when the inputs fit the RAM budget,
@@ -190,16 +190,16 @@ int main(int argc, char* argv[]) {
   sorters[1].prefixes = kOurPrefixes;
   sorters[1].build = [&] {
     auto t0 = Clock::now();
-    ext_in_seq = ChunkSequenceOps::tabulate<uint64_t>(n, ext_in, key_at);
+    ext_in_seq = plaid::tabulate<uint64_t>(n, ext_in, key_at);
     return elapsed(t0);
   };
   sorters[1].sort = [&] {
     auto t0 = Clock::now();
-    ext_out_seq = ChunkSequenceOps::sample_sort<uint64_t>(ext_in_seq);
+    ext_out_seq = plaid::sample_sort<uint64_t>(ext_in_seq);
     return elapsed(t0);
   };
   sorters[1].read_back = [&] {
-    auto s = ChunkSequenceOps::materialize<uint64_t>(ext_out_seq);
+    auto s = plaid::materialize<uint64_t>(ext_out_seq);
     return std::vector<uint64_t>(s.begin(), s.end());
   };
 

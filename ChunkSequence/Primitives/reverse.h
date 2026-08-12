@@ -19,7 +19,7 @@
 #include "configs.h"
 
 
-namespace small_sequence_ops{
+namespace plaid_small{
 
 template<typename T>
 chunk reverse(chunk& p){
@@ -58,7 +58,7 @@ return p;
 }
 
 
-namespace ChunkSequenceOps{
+namespace plaid{
 
 
 //the good news is that this becomes extremely simple with the chunk_seq.
@@ -69,7 +69,7 @@ chunk_seq reverse(chunk_seq& seq){
 
 parlay::parallel_for(0, seq.chunks.size(), [&](size_t i){
 
-seq.chunks[i] = ::small_sequence_ops::reverse<T>(seq.chunks[i]);
+seq.chunks[i] = ::plaid_small::reverse<T>(seq.chunks[i]);
 
 });
 
@@ -79,7 +79,7 @@ return seq;
 
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 
 

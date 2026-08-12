@@ -37,7 +37,7 @@
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
 
-namespace cd = ChunkSequenceOps::delayed;
+namespace cd = plaid::delayed;
 
 struct SumMonoid {
   uint64_t identity = 0;
@@ -82,7 +82,7 @@ int main(int argc, char* argv[]) {
             << "  n=" << n << "\n";
 
   std::cout << "Generating chunk_seq iota(" << n << ")..." << std::flush;
-  const chunk_seq cseq = ChunkSequenceOps::iota(n);
+  const chunk_seq cseq = plaid::iota(n);
   const size_t in_bytes = chunk_seq_bytes(cseq);
   std::cout << " " << cseq.chunks.size() << " chunks, " << std::fixed
             << std::setprecision(3) << to_gb(in_bytes) << " GB\n\n";
@@ -101,7 +101,7 @@ int main(int argc, char* argv[]) {
   {
     auto t0 = Clock::now();
     volatile uint64_t r =
-        ChunkSequenceOps::ChunkReduce<uint64_t>(cseq, SumMonoid{});
+        plaid::ChunkReduce<uint64_t>(cseq, SumMonoid{});
     raw_s = elapsed(t0);
     (void)r;
     print_row("raw read", in_bytes, raw_s);
@@ -111,8 +111,8 @@ int main(int argc, char* argv[]) {
   std::cout << "\n--- map(x+1) | reduce(sum) ---\n";
   {
     auto t0 = Clock::now();
-    uint64_t mr_e = ChunkSequenceOps::ChunkReduce<uint64_t>(
-        ChunkSequenceOps::ChunkMap<uint64_t>(cseq, "bw_cs_m", add1),
+    uint64_t mr_e = plaid::ChunkReduce<uint64_t>(
+        plaid::ChunkMap<uint64_t>(cseq, "bw_cs_m", add1),
         SumMonoid{});
     e_mr = elapsed(t0);
     cleanup_prefix("bw_cs_m");
@@ -130,9 +130,9 @@ int main(int argc, char* argv[]) {
   std::cout << "\n--- map(x+1) | map(2x) | reduce(sum) ---\n";
   {
     auto t0 = Clock::now();
-    uint64_t mmr_e = ChunkSequenceOps::ChunkReduce<uint64_t>(
-        ChunkSequenceOps::ChunkMap<uint64_t>(
-            ChunkSequenceOps::ChunkMap<uint64_t>(cseq, "bw_cs_m1", add1),
+    uint64_t mmr_e = plaid::ChunkReduce<uint64_t>(
+        plaid::ChunkMap<uint64_t>(
+            plaid::ChunkMap<uint64_t>(cseq, "bw_cs_m1", add1),
             "bw_cs_m2", mul2),
         SumMonoid{});
     e_mmr = elapsed(t0);
@@ -153,10 +153,10 @@ int main(int argc, char* argv[]) {
   std::cout << "\n--- force(map(x+1) | map(2x)) ---\n";
   {
     auto t0 = Clock::now();
-    chunk_seq g1 = ChunkSequenceOps::ChunkMap<uint64_t>(cseq, "bw_cs_g1", add1);
-    chunk_seq g2 = ChunkSequenceOps::ChunkMap<uint64_t>(g1, "bw_cs_g2", mul2);
+    chunk_seq g1 = plaid::ChunkMap<uint64_t>(cseq, "bw_cs_g1", add1);
+    chunk_seq g2 = plaid::ChunkMap<uint64_t>(g1, "bw_cs_g2", mul2);
     e_f = elapsed(t0);
-    uint64_t f_e = ChunkSequenceOps::ChunkReduce<uint64_t>(g2, SumMonoid{});
+    uint64_t f_e = plaid::ChunkReduce<uint64_t>(g2, SumMonoid{});
     cleanup_prefix("bw_cs_g1");
     cleanup_prefix("bw_cs_g2");
     print_row("chunk-eager", in_bytes, e_f);
@@ -166,7 +166,7 @@ int main(int argc, char* argv[]) {
     chunk_seq out =
         cd::force(cd::map(cd::map(cd::delay(cseq), add1), mul2), "bw_cs_gf");
     d_f = elapsed(t1);
-    uint64_t f_d = ChunkSequenceOps::ChunkReduce<uint64_t>(out, SumMonoid{});
+    uint64_t f_d = plaid::ChunkReduce<uint64_t>(out, SumMonoid{});
     cleanup_prefix("bw_cs_gf");
     print_row("chunk-delayed", in_bytes, d_f);
     check("force  eager == delayed", f_e == f_d);

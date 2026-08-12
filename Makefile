@@ -430,14 +430,14 @@ $(BINDIR)/direct_samplesort_vs_peterExample: ChunkSequence/examples/external_TOD
 $(BINDIR)/samplesort_three_wayExample: benchmarks/benchmark_files/samplesort_three_way.cpp $(UTIL_OBJS) $(OBJDIR)/peter_shim.o | deps/parlaylib-examples
 	$(LINK)
 
-# apply_sort_vs_samplesort: ChunkSequenceOps::apply<ChunkOperation::Sort> (whole-
+# apply_sort_vs_samplesort: plaid::apply<ChunkOperation::Sort> (whole-
 # sequence, DRAM-budgeted, no bucketing) vs sample_sort (recursive out-of-core).
 # Both are ours, no Peter contestant, so no peter_shim needed -- plain recipe
 # like external_samplesortExample.
 $(BINDIR)/apply_sort_vs_samplesortExample: benchmarks/benchmark_files/apply_sort_vs_samplesort.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINK)
 
-# samplesort_vs_samplesort_random: ChunkSequenceOps::sample_sort (pivot sampling
+# samplesort_vs_samplesort_random: plaid::sample_sort (pivot sampling
 # via the shared sample<T> helper, chunk_sample.h) vs sample_sort_random (the
 # pre-refactor inline index+value pair sampling kept in external_samplesort.h
 # for comparison). Both are ours, no Peter contestant, so no peter_shim needed

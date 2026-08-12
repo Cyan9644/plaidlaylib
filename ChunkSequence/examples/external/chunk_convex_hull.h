@@ -50,7 +50,7 @@
 // hull is symmetric (negate y, or run the same recursion below the min--max
 // line) and a full hull is upper ++ lower with the shared endpoints dropped.
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 struct hpoint {
   double x;
@@ -211,7 +211,7 @@ struct MinMaxMonoid {
 inline std::vector<uint64_t> quickhull_ext(const chunk_seq& pts, hpoint l,
                                            hpoint r, size_t budget_elems,
                                            const std::string& scratch) {
-  const size_t n = ChunkSequenceOps::size<hpoint>(pts);
+  const size_t n = plaid::size<hpoint>(pts);
   if (n == 0) return {};
 
   // Base case: the sub-region fits DRAM -> materialize and finish in memory.
@@ -278,7 +278,7 @@ inline std::vector<uint64_t> UpperHull(
     const chunk_seq& points, size_t dram_budget_bytes,
     const std::string& scratch_prefix = "ch_scratch") {
   detail::ext_split_counter().store(0, std::memory_order_relaxed);
-  if (ChunkSequenceOps::size<hpoint>(points) == 0) return {};
+  if (plaid::size<hpoint>(points) == 0) return {};
 
   const size_t budget_elems =
       std::max<size_t>(1, dram_budget_bytes / sizeof(hpoint));
@@ -318,6 +318,6 @@ inline size_t last_ext_splits() {
   return detail::ext_split_counter().load(std::memory_order_relaxed);
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_CONVEX_HULL_H

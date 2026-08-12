@@ -32,7 +32,7 @@ static void cleanup_prefix(const std::string& prefix) {
 
 // bucket for value v: drop multiples of 13, else v % k.
 static size_t key_of(uint64_t v, size_t k) {
-  if (v % 13 == 0) return ChunkSequenceOps::PARTITION_DROP;
+  if (v % 13 == 0) return plaid::PARTITION_DROP;
   return (size_t)(v % k);
 }
 
@@ -44,10 +44,10 @@ int main(int argc, char* argv[]) {
   const std::string in_prefix = "pt_in";
   const std::string out_prefix = "pt_out";
 
-  chunk_seq seq = ChunkSequenceOps::tabulate<uint64_t>(
+  chunk_seq seq = plaid::tabulate<uint64_t>(
       n, in_prefix, [](size_t i) { return (uint64_t)i; });
 
-  std::vector<chunk_seq> parts = ChunkSequenceOps::ChunkPartition<uint64_t>(
+  std::vector<chunk_seq> parts = plaid::ChunkPartition<uint64_t>(
       seq, k, out_prefix, [k](uint64_t v) { return key_of(v, k); });
 
   bool pass = true;

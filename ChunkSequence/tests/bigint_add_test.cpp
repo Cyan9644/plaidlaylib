@@ -35,7 +35,7 @@
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
 
-using digit = ChunkSequenceOps::bigint_detail::digit;
+using digit = plaid::bigint_detail::digit;
 static constexpr digit MAX = ~(digit)0;
 
 // ── pass/fail bookkeeping
@@ -81,7 +81,7 @@ static std::vector<digit> materialize(const chunk_seq& seq) {
 static chunk_seq make_seq(const std::vector<digit>& v,
                           const std::string& prefix) {
   if (v.empty()) return {};
-  return ChunkSequenceOps::tabulate<digit>(v.size(), prefix,
+  return plaid::tabulate<digit>(v.size(), prefix,
                                            [&v](size_t i) { return v[i]; });
 }
 
@@ -122,7 +122,7 @@ static void check(const std::string& name, const std::vector<digit>& a,
   // out-of-core
   chunk_seq A = make_seq(a, "bta_a");
   chunk_seq B = make_seq(b, "bta_b");
-  chunk_seq S = ChunkSequenceOps::ChunkBigIntAdd(A, B, "bta_out", extra_one);
+  chunk_seq S = plaid::ChunkBigIntAdd(A, B, "bta_out", extra_one);
   const std::vector<digit> got = materialize(S);
   report(name + " [out-of-core]", got == expected,
          "got " + vec_head(got) + " want " + vec_head(expected));
@@ -130,7 +130,7 @@ static void check(const std::string& name, const std::vector<digit>& a,
 
   // out-of-core, un-fused (eager) — same result, materialized intermediates.
   chunk_seq SE =
-      ChunkSequenceOps::ChunkBigIntAddEager(A, B, "bta_eager", extra_one);
+      plaid::ChunkBigIntAddEager(A, B, "bta_eager", extra_one);
   const std::vector<digit> gote = materialize(SE);
   report(name + " [out-of-core eager]", gote == expected,
          "got " + vec_head(gote) + " want " + vec_head(expected));
@@ -141,7 +141,7 @@ static void check(const std::string& name, const std::vector<digit>& a,
   // in-memory reference
   parlay::sequence<digit> am(a.begin(), a.end());
   parlay::sequence<digit> bm(b.begin(), b.end());
-  auto rm = ChunkSequenceOps::bigint_reference::add(am, bm, extra_one);
+  auto rm = plaid::bigint_reference::add(am, bm, extra_one);
   const std::vector<digit> gotref(rm.begin(), rm.end());
   report(name + " [reference]", gotref == expected,
          "got " + vec_head(gotref) + " want " + vec_head(expected));

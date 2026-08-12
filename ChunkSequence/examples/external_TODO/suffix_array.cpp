@@ -122,13 +122,13 @@ int main(int argc, char* argv[]) {
   std::cout << std::fixed;
   std::cout << "Building " << n << "-char text..." << std::flush;
   auto t0 = Clock::now();
-  chunk_seq text = ChunkSequenceOps::tabulate<char>(n, text_prefix, text_at);
+  chunk_seq text = plaid::tabulate<char>(n, text_prefix, text_at);
   const double build_s = elapsed(t0);
   std::cout << " done (" << std::setprecision(4) << build_s << "s)\n";
 
   std::cout << "Building suffix array..." << std::flush;
   t0 = Clock::now();
-  chunk_seq sa = ChunkSequenceOps::ChunkSuffixArray(text, out_prefix);
+  chunk_seq sa = plaid::ChunkSuffixArray(text, out_prefix);
   const double sa_s = elapsed(t0);
   std::cout << " done\n";
 

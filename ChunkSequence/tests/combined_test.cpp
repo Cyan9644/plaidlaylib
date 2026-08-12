@@ -174,8 +174,8 @@ static void run_size(size_t n) {
 
   // ── ChunkMap: x -> x+1 (in-place, T==R) ──────────────────────────────────
   {
-    chunk_seq seq = ChunkSequenceOps::iota(n);
-    chunk_seq out = ChunkSequenceOps::ChunkMap<uint64_t>(
+    chunk_seq seq = plaid::iota(n);
+    chunk_seq out = plaid::ChunkMap<uint64_t>(
         seq, "comb_map",
         std::function<uint64_t(uint64_t)>([](uint64_t x) { return x + 1; }));
     expect_eq_vec<uint64_t>("map  x->x+1", out,
@@ -186,8 +186,8 @@ static void run_size(size_t n) {
 
   // ── ChunkMap: type-changing u64 -> u32 (non-in-place path) ───────────────
   {
-    chunk_seq seq = ChunkSequenceOps::iota(n);
-    chunk_seq out = ChunkSequenceOps::ChunkMap<uint64_t, uint32_t>(
+    chunk_seq seq = plaid::iota(n);
+    chunk_seq out = plaid::ChunkMap<uint64_t, uint32_t>(
         seq, "comb_map32", std::function<uint32_t(uint64_t)>([](uint64_t x) {
           return (uint32_t)(x & 0xFFFFFFFFu);
         }));
@@ -201,9 +201,9 @@ static void run_size(size_t n) {
 
   // ── ChunkScan: exclusive sum, with returned total ────────────────────────
   {
-    chunk_seq seq = ChunkSequenceOps::iota(n);
+    chunk_seq seq = plaid::iota(n);
     auto [out, total] =
-        ChunkSequenceOps::ChunkScan<uint64_t>(seq, "comb_scan", SumMonoid{});
+        plaid::ChunkScan<uint64_t>(seq, "comb_scan", SumMonoid{});
     uint64_t ref_total = 0;
     auto ref = ref_scan_excl(base, SumMonoid{}, &ref_total);
     expect_eq_vec<uint64_t>("scan sum (exclusive)", out, ref);
@@ -214,8 +214,8 @@ static void run_size(size_t n) {
 
   // ── ChunkFilter: keep evens, order-preserving ────────────────────────────
   {
-    chunk_seq seq = ChunkSequenceOps::iota(n);
-    chunk_seq out = ChunkSequenceOps::ChunkFilter<uint64_t>(
+    chunk_seq seq = plaid::iota(n);
+    chunk_seq out = plaid::ChunkFilter<uint64_t>(
         seq, "comb_flt",
         std::function<bool(uint64_t)>([](uint64_t x) { return x % 2 == 0; }));
     expect_eq_vec<uint64_t>(
@@ -228,18 +228,18 @@ static void run_size(size_t n) {
   // ── ChunkReduce: sum / max / min / xor (scalars, identity-correct on empty)
   // ─
   {
-    chunk_seq seq = ChunkSequenceOps::iota(n);
+    chunk_seq seq = plaid::iota(n);
     expect_scalar("reduce sum",
-                  ChunkSequenceOps::ChunkReduce<uint64_t>(seq, SumMonoid{}),
+                  plaid::ChunkReduce<uint64_t>(seq, SumMonoid{}),
                   ref_reduce(base, SumMonoid{}));
     expect_scalar("reduce max",
-                  ChunkSequenceOps::ChunkReduce<uint64_t>(seq, MaxMonoid{}),
+                  plaid::ChunkReduce<uint64_t>(seq, MaxMonoid{}),
                   ref_reduce(base, MaxMonoid{}));
     expect_scalar("reduce min",
-                  ChunkSequenceOps::ChunkReduce<uint64_t>(seq, MinMonoid{}),
+                  plaid::ChunkReduce<uint64_t>(seq, MinMonoid{}),
                   ref_reduce(base, MinMonoid{}));
     expect_scalar("reduce xor",
-                  ChunkSequenceOps::ChunkReduce<uint64_t>(seq, XorMonoid{}),
+                  plaid::ChunkReduce<uint64_t>(seq, XorMonoid{}),
                   ref_reduce(base, XorMonoid{}));
     cleanup_prefix("iota");
   }
@@ -247,17 +247,17 @@ static void run_size(size_t n) {
   // ── Flagship: map -> filter -> scan -> reduce, all chained ────────────────
   // iota(n) -> (3x+1) -> keep even -> exclusive-sum scan -> max reduce.
   {
-    chunk_seq seq = ChunkSequenceOps::iota(n);
-    chunk_seq mapped = ChunkSequenceOps::ChunkMap<uint64_t>(
+    chunk_seq seq = plaid::iota(n);
+    chunk_seq mapped = plaid::ChunkMap<uint64_t>(
         seq, "comb_p_map", std::function<uint64_t(uint64_t)>([](uint64_t x) {
           return 3 * x + 1;
         }));
-    chunk_seq filt = ChunkSequenceOps::ChunkFilter<uint64_t>(
+    chunk_seq filt = plaid::ChunkFilter<uint64_t>(
         mapped, "comb_p_flt",
         std::function<bool(uint64_t)>([](uint64_t x) { return x % 2 == 0; }));
     auto [scanned, total] =
-        ChunkSequenceOps::ChunkScan<uint64_t>(filt, "comb_p_scan", SumMonoid{});
-    uint64_t mx = ChunkSequenceOps::ChunkReduce<uint64_t>(scanned, MaxMonoid{});
+        plaid::ChunkScan<uint64_t>(filt, "comb_p_scan", SumMonoid{});
+    uint64_t mx = plaid::ChunkReduce<uint64_t>(scanned, MaxMonoid{});
 
     // Serial reference of the same chain.
     auto rv = ref_map(base, [](uint64_t x) { return 3 * x + 1; });
@@ -287,8 +287,8 @@ static void run_edge_cases() {
 
   // filter that keeps everything → identity-shaped, order preserved.
   {
-    chunk_seq seq = ChunkSequenceOps::iota(n);
-    chunk_seq out = ChunkSequenceOps::ChunkFilter<uint64_t>(
+    chunk_seq seq = plaid::iota(n);
+    chunk_seq out = plaid::ChunkFilter<uint64_t>(
         seq, "edge_flt_all",
         std::function<bool(uint64_t)>([](uint64_t) { return true; }));
     expect_eq_vec<uint64_t>("filter keep-all == input", out, base);
@@ -299,18 +299,18 @@ static void run_edge_cases() {
   // filter that drops everything → empty; chaining scan/reduce on the empty
   // seq.
   {
-    chunk_seq seq = ChunkSequenceOps::iota(n);
-    chunk_seq empty = ChunkSequenceOps::ChunkFilter<uint64_t>(
+    chunk_seq seq = plaid::iota(n);
+    chunk_seq empty = plaid::ChunkFilter<uint64_t>(
         seq, "edge_flt_none",
         std::function<bool(uint64_t)>([](uint64_t) { return false; }));
     expect_scalar("filter drop-all -> 0 chunks", empty.chunks.size(), 0);
 
-    auto [sc, total] = ChunkSequenceOps::ChunkScan<uint64_t>(
+    auto [sc, total] = plaid::ChunkScan<uint64_t>(
         empty, "edge_scan_empty", SumMonoid{});
     expect_scalar("scan(empty) -> 0 chunks", sc.chunks.size(), 0);
     expect_scalar("scan(empty) total == identity", total, 0);
     expect_scalar("reduce(empty) == identity",
-                  ChunkSequenceOps::ChunkReduce<uint64_t>(empty, SumMonoid{}),
+                  plaid::ChunkReduce<uint64_t>(empty, SumMonoid{}),
                   0);
     cleanup_prefix("iota");
     cleanup_prefix("edge_flt_none");
@@ -319,7 +319,7 @@ static void run_edge_cases() {
 
   // tabulate with a non-iota function: f(i) = i*i (mod 2^64).
   {
-    chunk_seq seq = ChunkSequenceOps::tabulate<uint64_t>(
+    chunk_seq seq = plaid::tabulate<uint64_t>(
         n, "edge_tab", std::function<uint64_t(size_t)>([](size_t i) {
           return (uint64_t)i * i;
         }));
@@ -338,8 +338,8 @@ static void run_multibatch() {
   const size_t n = chunks * ELEMS_PER_CHUNK;
   std::cout << "  multi-batch  n=" << n << "  (" << chunks << " chunks)\n";
 
-  chunk_seq seq = ChunkSequenceOps::iota(n);
-  chunk_seq filt = ChunkSequenceOps::ChunkFilter<uint64_t>(
+  chunk_seq seq = plaid::iota(n);
+  chunk_seq filt = plaid::ChunkFilter<uint64_t>(
       seq, "mb_flt",
       std::function<bool(uint64_t)>([](uint64_t x) { return x % 2 == 0; }));
 
@@ -347,8 +347,8 @@ static void run_multibatch() {
   const uint64_t cnt = n / 2;
   expect_scalar(
       "filter count == n/2",
-      ChunkSequenceOps::ChunkReduce<uint64_t, uint64_t>(
-          ChunkSequenceOps::ChunkMap<uint64_t>(
+      plaid::ChunkReduce<uint64_t, uint64_t>(
+          plaid::ChunkMap<uint64_t>(
               filt, "mb_ones",
               std::function<uint64_t(uint64_t)>([](uint64_t) { return 1; })),
           SumMonoid{}),
@@ -357,16 +357,16 @@ static void run_multibatch() {
 
   // sum of survivors = 0+2+…+2(cnt-1) = cnt*(cnt-1).
   expect_scalar("filter survivor sum",
-                ChunkSequenceOps::ChunkReduce<uint64_t>(filt, SumMonoid{}),
+                plaid::ChunkReduce<uint64_t>(filt, SumMonoid{}),
                 cnt * (cnt - 1));
 
   // Exclusive scan total over the survivors == survivor sum.
   auto [sc, total] =
-      ChunkSequenceOps::ChunkScan<uint64_t>(filt, "mb_scan", SumMonoid{});
+      plaid::ChunkScan<uint64_t>(filt, "mb_scan", SumMonoid{});
   expect_scalar("scan total == survivor sum", total, cnt * (cnt - 1));
   // Largest exclusive prefix is the sum of all but the last survivor.
   expect_scalar("scan max prefix",
-                ChunkSequenceOps::ChunkReduce<uint64_t>(sc, MaxMonoid{}),
+                plaid::ChunkReduce<uint64_t>(sc, MaxMonoid{}),
                 cnt * (cnt - 1) - 2 * (cnt - 1));
 
   cleanup_prefix("iota");

@@ -109,9 +109,9 @@ static bool test_halo0(size_t n, const std::function<uint64_t(size_t)>& gen) {
   const std::string in_prefix = "flatmap_in";
   const std::string out_prefix = "flatmap_out";
 
-  chunk_seq input = ChunkSequenceOps::tabulate<uint64_t>(n, in_prefix, gen);
+  chunk_seq input = plaid::tabulate<uint64_t>(n, in_prefix, gen);
   std::atomic<bool> saw_bad_halo{false};
-  chunk_seq matches = ChunkSequenceOps::ChunkFlatMap<uint64_t, uint64_t>(
+  chunk_seq matches = plaid::ChunkFlatMap<uint64_t, uint64_t>(
       input, out_prefix, /*halo=*/0,
       [&](const uint64_t* data, size_t cnt, uint64_t /*gpos*/,
           const uint64_t* halo, size_t halo_n) {
@@ -153,9 +153,9 @@ static bool test_halo1(const std::string& name, size_t n,
   const std::string in_prefix = "flatmap_in";
   const std::string out_prefix = "flatmap_out";
 
-  chunk_seq input = ChunkSequenceOps::tabulate<uint64_t>(n, in_prefix, gen);
+  chunk_seq input = plaid::tabulate<uint64_t>(n, in_prefix, gen);
   std::atomic<bool> bad_final{false};
-  chunk_seq matches = ChunkSequenceOps::ChunkFlatMap<uint64_t, uint64_t>(
+  chunk_seq matches = plaid::ChunkFlatMap<uint64_t, uint64_t>(
       input, out_prefix, /*halo=*/1,
       [&](const uint64_t* data, size_t cnt, uint64_t gpos, const uint64_t* halo,
           size_t halo_n) {
@@ -196,8 +196,8 @@ static bool test_elementwise(size_t n,
   const std::string in_prefix = "flatmap_in";
   const std::string out_prefix = "flatmap_out";
 
-  chunk_seq input = ChunkSequenceOps::tabulate<uint64_t>(n, in_prefix, gen);
-  chunk_seq matches = ChunkSequenceOps::ChunkFlatMap<uint64_t, uint64_t>(
+  chunk_seq input = plaid::tabulate<uint64_t>(n, in_prefix, gen);
+  chunk_seq matches = plaid::ChunkFlatMap<uint64_t, uint64_t>(
       input, out_prefix, [](uint64_t v) {
         parlay::sequence<uint64_t> out;
         for (uint64_t k = 0; k < v % 3; k++) out.push_back(v);
@@ -247,7 +247,7 @@ int main(int argc, char* argv[]) {
   //    planted across the chunk-127/128 boundary, exercising the O_DIRECT
   //    seam read.  argv[1] overrides n (min 2 chunks).
   {
-    const size_t seam = ChunkSequenceOps::DENSE_PACK_BATCH_SIZE;  // 128
+    const size_t seam = plaid::DENSE_PACK_BATCH_SIZE;  // 128
     size_t n = (argc > 1) ? std::stoull(argv[1]) : (seam + 1) * EPCT + 9;
     n = std::max(n, 2 * EPCT);
     const size_t last_of_batch = std::min<size_t>(seam, n / EPCT) - 1;

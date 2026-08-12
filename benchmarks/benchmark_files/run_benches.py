@@ -54,7 +54,7 @@ EXAMPLES = [
               "throughput_gb_s"],
      "time_col": "select_s", "inmem_col": "inmem_select_s",
      "xlabel": "n (number of keys)",
-     "title": "kth-smallest: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
+     "title": "kth-smallest: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["kth_in*", "id_*", "flags_*", "next_*"]},
 ]
 

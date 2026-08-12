@@ -1,5 +1,5 @@
 // Example: out-of-core fit-in-memory sample sort via
-// ChunkSequenceOps::fitmem_sort.
+// plaid::fitmem_sort.
 //
 // Identical driver to external_samplesort.cpp, but exercises the single-level
 // "fitmem" variant (Examples/external/fitmem_sort.h): one round of oversampled-
@@ -55,7 +55,7 @@
 // Out-of-core algorithm under test and the in-memory parlaylib baseline it is
 // modelled on.  Both are pulled in here so the driver can time them
 // head-to-head on identical keys.  The external sort lives in namespace
-// ChunkSequenceOps; the in-memory baseline defines a global sample_sort, so the
+// plaid; the in-memory baseline defines a global sample_sort, so the
 // two names coexist.
 #include "benchmarks/benchmark_files/fitmem_sort.h"
 #include "ChunkSequence/examples/in_memory/sample_sort.h"
@@ -115,7 +115,7 @@ int main(int argc, char* argv[]) {
 
   std::cout << "Building " << n << "-key input..." << std::flush;
   auto t0 = Clock::now();
-  chunk_seq seq = ChunkSequenceOps::tabulate<uint64_t>(n, in_prefix, key_at);
+  chunk_seq seq = plaid::tabulate<uint64_t>(n, in_prefix, key_at);
   const double build_s = elapsed(t0);
   std::cout << " done (" << std::fixed << std::setprecision(4) << build_s
             << "s)\n";
@@ -123,7 +123,7 @@ int main(int argc, char* argv[]) {
 
   std::cout << "Sorting " << n << " keys (fitmem)..." << std::flush;
   t0 = Clock::now();
-  chunk_seq sorted = ChunkSequenceOps::fitmem_sort<uint64_t>(seq);
+  chunk_seq sorted = plaid::fitmem_sort<uint64_t>(seq);
   const double sort_s = elapsed(t0);
   std::cout << " done\n";
 
@@ -145,7 +145,7 @@ int main(int argc, char* argv[]) {
     std::cout << "in-mem parlaylib sample_sort   " << std::setprecision(4)
               << inmem_sort_s << "s\n";
 
-    auto out_mem = ChunkSequenceOps::materialize<uint64_t>(sorted);
+    auto out_mem = plaid::materialize<uint64_t>(sorted);
     if (out_mem.size() != keys_mem.size()) {
       std::cout << "*** MISMATCH: out-of-core produced " << out_mem.size()
                 << " keys, expected " << keys_mem.size() << " ***\n";

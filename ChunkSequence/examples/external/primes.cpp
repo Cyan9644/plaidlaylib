@@ -139,7 +139,7 @@ chunk_seq chunk_primes(size_t n, const std::string& result_prefix) {
 
   parlay::sequence<long> small = in_mem_primes(sqrt_n);
 
-  return ChunkSequenceOps::ChunkFlatTabulate<uint64_t>(
+  return plaid::ChunkFlatTabulate<uint64_t>(
       n + 1, result_prefix, [&](size_t start, size_t end) {
         // Byte flags, not std::vector<bool>: the bit-packed form pays a
         // mask/shift on every strided mark and every survivor read, which

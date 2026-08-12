@@ -48,8 +48,8 @@ auto vector_multiply(matrix const& graph, vector const& vec) {
       graph,
       [&](auto const& r) {  // we want to map over each "vertex," which is
                             // actually a row in the matrix representation
-        auto per_edge = ChunkSequenceOps::delayed::map(
-            ChunkSequenceOps::delayed::delay<weighted_edge>(graph.edges),
+        auto per_edge = plaid::delayed::map(
+            plaid::delayed::delay<weighted_edge>(graph.edges),
             [&](weighted_edge e) {
               return e.edge_weight;
             });  // gives us a map to the value of each of the actual elements
@@ -59,7 +59,7 @@ auto vector_multiply(matrix const& graph, vector const& vec) {
         // i.e. those "edges" corresponding to graph.edges[graph.degree_scan[i]
         // to graph.degree_scan[i+1]]
 
-        auto pass = ChunkSequenceOps::delayed::segmented_reduce(
+        auto pass = plaid::delayed::segmented_reduce(
             per_edge, graph.degree_scan,
             [&](weighted_edge i, vector& vec,
                 size_t degree) {  // degree here is the position of the element
@@ -85,13 +85,13 @@ auto vector_multiply(matrix const& graph, vector const& vec) {
 
   //   return parlay::map(mat, [&] (auto const& r){
   //     if (r.size() < 100) {//
-  //         parlay::sequence seq = ChunkSequenceOps::materialize(r);
+  //         parlay::sequence seq = plaid::materialize(r);
   //       double result = 0.0;
   //       for(auto e : seq) result += vec[e.first] * e.second;
   //       return result;
   //     }
   //     return
-  //     parlay::reduce(parlay::delayed::map(ChunkSequenceOps::materialize(r),
+  //     parlay::reduce(parlay::delayed::map(plaid::materialize(r),
   //     [&] (auto e) {
   //       return vec[e.first] * e.second;}));},100);
 }

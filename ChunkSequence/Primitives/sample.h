@@ -30,7 +30,7 @@
 
 
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 template <typename T>
 parlay::sequence<T> sample(const chunk_seq& seq, size_t number_elements){

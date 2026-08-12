@@ -76,7 +76,7 @@
 // nothing nested to flatten.
 // ─────────────────────────────────────────────────────────────────────────────
 
-namespace ChunkSequenceOps {
+namespace plaid {
 namespace old_delayed {
 
 // ── lazy forward iterators (sequential within a chunk) ───────────────────────
@@ -873,6 +873,6 @@ chunk_seq filter(const D& d, const std::string& result_prefix, Pred pred) {
 }
 
 }  // namespace old_delayed
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // OLD_CHUNK_DELAYED_H

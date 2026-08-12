@@ -11,7 +11,7 @@
 #include "parlay/primitives.h"
 #include "parlay/sequence.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 namespace detail {
 
 /**
@@ -71,6 +71,6 @@ chunk_seq ChunkFlatTabulate(size_t n, const std::string& result_prefix, F f) {
                       });
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_FLAT_TABULATE_H

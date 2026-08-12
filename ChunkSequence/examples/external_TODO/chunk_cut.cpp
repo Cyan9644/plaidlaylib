@@ -1,5 +1,5 @@
 // Example: out-of-core slice/cut via
-// ChunkSequenceOps::sequential_cut_no_compression.
+// plaid::sequential_cut_no_compression.
 //
 // Builds an n-element sequence of pseudo-random uint64 keys across the SSDs
 // (deterministic from parlay::hash64, so it is reproducible and
@@ -166,7 +166,7 @@ int main(int argc, char* argv[]) {
 
   std::cout << "Building " << n << "-key input..." << std::flush;
   auto t0 = Clock::now();
-  chunk_seq seq = ChunkSequenceOps::tabulate<uint64_t>(n, in_prefix, key_at);
+  chunk_seq seq = plaid::tabulate<uint64_t>(n, in_prefix, key_at);
   const double build_s = elapsed(t0);
   std::cout << " done (" << std::fixed << std::setprecision(4) << build_s
             << "s)\n";
@@ -175,12 +175,12 @@ int main(int argc, char* argv[]) {
   std::cout << "Cutting [" << start << ", " << end << ") (" << k
             << " elems) of " << n << "..." << std::flush;
   t0 = Clock::now();
-  chunk_seq cut = ChunkSequenceOps::sequential_cut_no_compression<uint64_t>(
+  chunk_seq cut = plaid::sequential_cut_no_compression<uint64_t>(
       seq, start, end);
   const double cut_s = elapsed(t0);
   std::cout << " done\n";
 
-  // True logical length: sum each chunk's used bytes.  (ChunkSequenceOps::size
+  // True logical length: sum each chunk's used bytes.  (plaid::size
   // can't be used -- it assumes every chunk but the last is full, but the cut's
   // rewritten head chunk is partial.)
   size_t out_elems = 0;

@@ -63,8 +63,8 @@ static bool run_kmp_test(const std::string& name, size_t n,
   const std::string out_prefix = "kmp_out";
   const std::string consolidated = "kmp_test_consolidated";
 
-  chunk_seq text = ChunkSequenceOps::tabulate<char>(n, text_prefix, f);
-  chunk_seq matches = ChunkSequenceOps::ChunkKmp<char>(text, out_prefix, pat);
+  chunk_seq text = plaid::tabulate<char>(n, text_prefix, f);
+  chunk_seq matches = plaid::ChunkKmp<char>(text, out_prefix, pat);
 
   const std::vector<uint64_t> expected = reference_kmp(n, f, pat);
   bool pass = true;
@@ -209,7 +209,7 @@ int main(int argc, char* argv[]) {
     n = std::max(n, 2 * CHARS_PER_CHUNK);
     const std::string pat = "seamseam";
     const size_t seam_chunk =
-        std::min<size_t>(ChunkSequenceOps::DENSE_PACK_BATCH_SIZE,
+        std::min<size_t>(plaid::DENSE_PACK_BATCH_SIZE,
                          n / CHARS_PER_CHUNK) -
         1;
     const size_t plant = (seam_chunk + 1) * CHARS_PER_CHUNK - pat.size() / 2;

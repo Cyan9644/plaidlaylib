@@ -40,9 +40,9 @@
 // fits the DRAM budget -- a disk round trip kth_smallest_fast cannot skip,
 // since its base-case check only runs *after* ChunkPartition has already
 // written the bucket.
-namespace ChunkSequenceOps {
+namespace plaid {
 
-namespace cd = ChunkSequenceOps::delayed;
+namespace cd = plaid::delayed;
 
 // Monotonic id source for this variant's `force` scratch prefixes -- same
 // shape as kth_smallest_prefix_counter (ExternalKthSmallest.h), kept
@@ -80,7 +80,7 @@ T kth_smallest_delayed(chunk_seq& seq, long k, size_t& bytes_written,
   }();
 
   if (n * sizeof(T) <= dram_budget_bytes) {
-    auto i = ChunkSequenceOps::materialize<T>(seq);
+    auto i = plaid::materialize<T>(seq);
     std::nth_element(i.begin(), i.begin() + k, i.end(), less1);
     return i[k];
   }
@@ -113,7 +113,7 @@ T kth_smallest_delayed(chunk_seq& seq, long k, size_t& bytes_written,
 
   // Read-only, one pass, no writes -- same call kth_smallest ("slow") makes.
   auto sums =
-      ChunkSequenceOps::ChunkHistogramByKey<T>(seq, sample_size + 1, key_fn);
+      plaid::ChunkHistogramByKey<T>(seq, sample_size + 1, key_fn);
   auto [offsets, total] = parlay::scan(sums);
   auto id =
       std::upper_bound(offsets.begin(), offsets.end(), k) - offsets.begin() - 1;
@@ -149,6 +149,6 @@ T kth_smallest_delayed(chunk_seq& seq, long k, size_t& bytes_written,
   return result;
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // EXTERNAL_KTH_SMALLEST_DELAYED_H

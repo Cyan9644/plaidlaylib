@@ -47,8 +47,8 @@ static bool run_case(const std::string& name, size_t n,
               << " chunks)\n" << std::flush;
 
     const std::string prefix = "wc_test_text";
-    chunk_seq text = ChunkSequenceOps::tabulate<char>(n, prefix, f);
-    ChunkSequenceOps::WordCounts counts = ChunkSequenceOps::WordCount(text);
+    chunk_seq text = plaid::tabulate<char>(n, prefix, f);
+    plaid::WordCounts counts = plaid::WordCount(text);
 
     const auto expected = reference_wc(n, f);
     bool pass = true;

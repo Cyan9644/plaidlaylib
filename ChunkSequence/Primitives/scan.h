@@ -12,7 +12,7 @@
 #include "configs.h"
 #include "parlay/primitives.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 /**
  * Exclusive prefix scan of seq under a parlay-compatible monoid
@@ -100,6 +100,6 @@ std::pair<chunk_seq, R> ChunkScan(const chunk_seq& seq,
   return {std::move(result), total};
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_SCAN_H

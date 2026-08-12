@@ -6,7 +6,7 @@
 
 
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 
 //NOT currently functional
@@ -25,10 +25,10 @@ auto median_chunk_seq2 = seq2.chunks[std::floor(seq2.chunks.size()/2)];
 
 //now find the median elements
 
-auto med1 = ChunkSequenceOps::single_chunk_ops::find(median_chunk_seq1, median_chunk_seq1.used/sizeof(T));
+auto med1 = plaid::single_chunk_ops::find(median_chunk_seq1, median_chunk_seq1.used/sizeof(T));
 auto index_of_med1 = median_chunk_seq1.index * CHUNKSIZE + median_chunk_seq1.used();
 
-auto med2= ChunkSequenceOps::single_chunk_ops::find(median_chunk_seq1, median_chunk_seq2.used/sizeof(T));
+auto med2= plaid::single_chunk_ops::find(median_chunk_seq1, median_chunk_seq2.used/sizeof(T));
 auto index_of_med2 = median_chunk_seq2.index * CHUNKSIZE + median_chunk_seq2.used();
 
 if(med1 < med2){
@@ -45,8 +45,8 @@ size_t index_max_containing = chunk_binary_search(med1)
 
 parlay::par_do{
     //maybe make these cuts delayed at some point
-ChunkSequenceOps::seq_merge(seq1.cut(0, index_of_med1), seq2.cut(0, index_max_containing));
-ChunkSequenceOps::seq_merge(seq1.cut(index_of_med1, size1.size()), seq2.cut(index_max_containing, seq2.size()));
+plaid::seq_merge(seq1.cut(0, index_of_med1), seq2.cut(0, index_max_containing));
+plaid::seq_merge(seq1.cut(index_of_med1, size1.size()), seq2.cut(index_max_containing, seq2.size()));
 
 }
 
@@ -66,7 +66,7 @@ return std::pair<cut1, cut2>;
 
 
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 
 

@@ -6,7 +6,7 @@
 //      delayed map draws each element's bucket, count_sort routes the elements
 //      into per-bucket external sequences, each bucket is read back / shuffled
 //      in DRAM / written out as *fresh* files, flatten concatenates them.
-//   2. ChunkSequenceOps::Permutation::Permute -- the same algorithm on the
+//   2. plaid::Permutation::Permute -- the same algorithm on the
 //      low-level reader/writer paradigm (ported from Peter's scatter-gather):
 //      identical bucketing, but each bucket is rewritten **in place** over the
 //      count-sort's own chunks (process_inplace), so it moves one fewer
@@ -184,7 +184,7 @@ int main(int argc, char* argv[]) {
   // ── the shared input ────────────────────────────────────────────────────
   std::cout << "Building " << n << "-key chunk_seq input..." << std::flush;
   auto t0 = Clock::now();
-  chunk_seq seq = ChunkSequenceOps::tabulate<uint64_t>(n, kInPrefix, key_at);
+  chunk_seq seq = plaid::tabulate<uint64_t>(n, kInPrefix, key_at);
   const double build_s = elapsed(t0);
   std::cout << " done (" << std::setprecision(4) << build_s << "s)\n";
   quiesce_drives();  // isolate the op timers from the build's writeback
@@ -202,16 +202,16 @@ int main(int argc, char* argv[]) {
   // Snapshot its output (under budget), then clear every file it left so the
   // next method is timed on drives holding only the shared input.
   parlay::sequence<uint64_t> ours;
-  if (check_ok) ours = ChunkSequenceOps::materialize<uint64_t>(shuffled);
+  if (check_ok) ours = plaid::materialize<uint64_t>(shuffled);
   remove_prefixes(kMethodPrefixes);
   std::cout
       << "random_shuffle_method's files cleared before the next method runs\n";
   quiesce_drives();
 
   // ── 2. Permutation::Permute (low-level reader/writer, in-place buckets) ──
-  std::cout << "Permuting " << n << " keys (ChunkSequenceOps::Permutation)..."
+  std::cout << "Permuting " << n << " keys (plaid::Permutation)..."
             << std::flush;
-  ChunkSequenceOps::Permutation<uint64_t> permuter;
+  plaid::Permutation<uint64_t> permuter;
   t0 = Clock::now();
   chunk_seq permuted = permuter.Permute(seq, "perm");
   const double perm_s = elapsed(t0);
@@ -220,7 +220,7 @@ int main(int argc, char* argv[]) {
             << std::setprecision(2) << perm_gb_s << " GB/s (input read)\n";
 
   parlay::sequence<uint64_t> theirs;
-  if (check_ok) theirs = ChunkSequenceOps::materialize<uint64_t>(permuted);
+  if (check_ok) theirs = plaid::materialize<uint64_t>(permuted);
   remove_prefixes(kPermPrefixes);
   quiesce_drives();
 

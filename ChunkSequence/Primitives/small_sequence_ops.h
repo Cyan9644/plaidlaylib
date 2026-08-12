@@ -19,7 +19,7 @@
 #include "configs.h"
 #include "utils/file_utils.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 namespace detail {
 // Stagger workers' first read so they don't all hit the drives on the same
@@ -397,6 +397,6 @@ void sort_inplace(std::vector<chunk_seq>& seqs, Less less = {}) {
   });
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // SMALL_SEQUENCE_OPS_H

@@ -14,7 +14,7 @@
 #include "ChunkSequence/Primitives/chunk_seq.h"
 #include "ChunkSequence/Primitives/external_engine.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 // Read an entire out-of-core chunk_seq into a single in-DRAM parlay::sequence,
 // preserving logical (index) order.  The caller is responsible for ensuring the
@@ -198,27 +198,27 @@ namespace delayed {
 template <typename T>
 parlay::sequence<T> materialize(const chunk_seq& seq,
                                 size_t reader_threads = 10) {
-  return ChunkSequenceOps::materialize<T>(seq, reader_threads);
+  return plaid::materialize<T>(seq, reader_threads);
 }
 
 template <class D, class = typename D::value_type>
 parlay::sequence<typename D::value_type> materialize(const D& d) {
-  return ChunkSequenceOps::materialize(d);
+  return plaid::materialize(d);
 }
 
 template <class D, class = typename D::value_type>
 parlay::sequence<typename D::value_type> sequential_materialize(const D& d) {
-  return ChunkSequenceOps::sequential_materialize(d);
+  return plaid::sequential_materialize(d);
 }
 
 template <class D, class = typename D::value_type>
 parlay::sequence<typename D::value_type> sequential_materialize(
     const D& d, SequentialReadContext& ctx) {
-  return ChunkSequenceOps::sequential_materialize(d, ctx);
+  return plaid::sequential_materialize(d, ctx);
 }
 
 }  // namespace delayed
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // EXTERNAL_MATERIALIZE_H

@@ -334,7 +334,7 @@ registry in `run_benches.py` (set its `elem_bytes`/`input_seqs`).  **Name-clash 
 headers define their symbols at global scope with no include guards (e.g.
 `field` in `rabin_karp.h`, `primes(long)` in `primes.h`), so when a new example
 pulls one in, check carefully for clashes against the chunk-side code (our
-ports live in `ChunkSequenceOps::detail` for exactly this reason) and don't
+ports live in `plaid::detail` for exactly this reason) and don't
 include more than one upstream header per translation unit without verifying
 they coexist.  The examples sweep is **not** part of `make bench` / `--all`.
 
@@ -359,7 +359,7 @@ preserves it so callers can index by position.
 
 All eager primitives share the standardized reader (`ChunkSequenceReader<T>`,
 `Primitives/chunk_seq_reader.h`) and writer (`UnorderedFileWriter<T>`, `utils/`), through
-three building blocks in `namespace ChunkSequenceOps`:
+three building blocks in `namespace plaid`:
 
 - **`ChunkEmitter<R>`** — `alloc()` a CHUNK_SIZE block; `emit(buf, count, index)`
   assigns a drive via `parlay::hash64(slot) % num_drives`, bumps a per-drive
@@ -391,7 +391,7 @@ Primitive mapping:
 | `NReader` / `NRemoveWorker` | own N-way co-indexed reader (`Primitives/n_reader.h`); lockstep read of N parallel `chunk_seq`s (e.g. values + bucket-ids for count-sort) |
 | `tabulate` / `iota` | own writer pipeline (`Primitives/chunk_seq.h`) — no reader stage to unify |
 
-`ChunkSequenceOps::ChunkSegmentedReduce` is also exposed per-vertex on CSR
+`plaid::ChunkSegmentedReduce` is also exposed per-vertex on CSR
 graphs (`ChunkSequence/helper/external_compressed_sparse_row.h`) as
 `chunk_csr::segmented_reduce_over_edges<R>(elem_to_val, monoid)`, using
 `degree_scan` as the segment bounds — one streaming pass reducing every
@@ -488,12 +488,12 @@ bandwidth (low CPU **and** low disk util together = lock convoy, not an I/O limi
 ## Delayed (fused) sequences  (`Primitives/delayed.h`)
 
 A port of parlaylib's block-iterable-delayed design (namespace
-`ChunkSequenceOps::delayed`) that fuses an operation chain so intermediates never
+`plaid::delayed`) that fuses an operation chain so intermediates never
 touch disk.  For `reduce(map(map(delay(seq),f),g),m)` the eager path moves
 3n reads + 2n writes; the delayed path moves 1n reads and 0 writes.
 
 ```cpp
-namespace d = ChunkSequenceOps::delayed;
+namespace d = plaid::delayed;
 auto  m       = d::map(d::delay(seq), f);          // lazy; composes with no I/O
 uint64_t r    = d::reduce(m, monoid);              // one read pass, zero writes
 auto [s, tot] = d::scan(m, monoid);                // partially delayed; {seq, total}

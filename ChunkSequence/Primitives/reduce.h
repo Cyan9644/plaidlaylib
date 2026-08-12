@@ -5,7 +5,7 @@
 #include "ChunkSequence/Primitives/external_engine.h"
 #include "parlay/primitives.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 /**
  * Reduce all elements across every chunk in seq using a parlay-compatible
@@ -35,6 +35,6 @@ R ChunkReduce(const chunk_seq& seq, Monoid monoid) {
   return parlay::reduce(locals, monoid);
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_REDUCE_H

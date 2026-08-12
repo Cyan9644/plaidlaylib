@@ -1,5 +1,5 @@
-// Benchmark: ChunkSequenceOps::apply<ChunkOperation::Sort> (whole-sequence,
-// DRAM-budgeted, no bucketing) vs ChunkSequenceOps::sample_sort
+// Benchmark: plaid::apply<ChunkOperation::Sort> (whole-sequence,
+// DRAM-budgeted, no bucketing) vs plaid::sample_sort
 // (external_samplesort.h, recursive out-of-core sample sort), head-to-head on
 // the identical key multiset.
 //
@@ -138,7 +138,7 @@ int main(int argc, char* argv[]) {
   // bucketing -- process_inplace_budgeted CHECK-fails past its own budget, so
   // this driver must never call it on an input larger than that.  Compute the
   // same budget the library enforces and gate on it up front.
-  const size_t apply_budget = ChunkSequenceOps::GetProcessInplaceBudgetBytes();
+  const size_t apply_budget = plaid::GetProcessInplaceBudgetBytes();
   const bool apply_ok = (n * sizeof(uint64_t)) <= apply_budget;
 
   // The in-memory baseline doubles as the cross-check reference: DRAM key
@@ -168,17 +168,17 @@ int main(int argc, char* argv[]) {
   apply_sorter.prefixes = kApplyPrefixes;
   apply_sorter.build = [&] {
     auto t0 = Clock::now();
-    apply_seq = ChunkSequenceOps::tabulate<uint64_t>(n, "as_in", key_at);
+    apply_seq = plaid::tabulate<uint64_t>(n, "as_in", key_at);
     return elapsed(t0);
   };
   apply_sorter.sort = [&] {
     auto t0 = Clock::now();
-    ChunkSequenceOps::apply<ChunkSequenceOps::ChunkOperation::Sort, uint64_t>(
+    plaid::apply<plaid::ChunkOperation::Sort, uint64_t>(
         apply_seq);
     return elapsed(t0);
   };
   apply_sorter.read_back = [&] {
-    auto s = ChunkSequenceOps::materialize<uint64_t>(apply_seq);
+    auto s = plaid::materialize<uint64_t>(apply_seq);
     return std::vector<uint64_t>(s.begin(), s.end());
   };
 
@@ -187,16 +187,16 @@ int main(int argc, char* argv[]) {
   samplesort_sorter.prefixes = kSampleSortPrefixes;
   samplesort_sorter.build = [&] {
     auto t0 = Clock::now();
-    samplesort_in = ChunkSequenceOps::tabulate<uint64_t>(n, "ss_in", key_at);
+    samplesort_in = plaid::tabulate<uint64_t>(n, "ss_in", key_at);
     return elapsed(t0);
   };
   samplesort_sorter.sort = [&] {
     auto t0 = Clock::now();
-    samplesort_out = ChunkSequenceOps::sample_sort<uint64_t>(samplesort_in);
+    samplesort_out = plaid::sample_sort<uint64_t>(samplesort_in);
     return elapsed(t0);
   };
   samplesort_sorter.read_back = [&] {
-    auto s = ChunkSequenceOps::materialize<uint64_t>(samplesort_out);
+    auto s = plaid::materialize<uint64_t>(samplesort_out);
     return std::vector<uint64_t>(s.begin(), s.end());
   };
 

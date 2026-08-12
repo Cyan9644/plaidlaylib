@@ -12,7 +12,7 @@
 #include "ChunkSequence/Primitives/small_sequence_ops.h"
 #include "ChunkSequence/Primitives/chunk_seq.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 // Named in-place operations `apply` can dispatch to. Extend by adding
 // an enumerator here and a matching `if constexpr` arm in both `apply`
@@ -64,6 +64,6 @@ void apply(chunk_seq& seq, Less less = {}, size_t seed = 0) {
   seq = std::move(tmp[0]);
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_OPERATION_H

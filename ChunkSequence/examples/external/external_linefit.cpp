@@ -1,4 +1,4 @@
-// Example: out-of-core least-squares line fit via ChunkSequenceOps::linefit.
+// Example: out-of-core least-squares line fit via plaid::linefit.
 //
 // Builds an n-point input as two separate on-SSD sequences of doubles (x_i in
 // examples/external/external_linefit.h, y_i in a second chunk_seq), points
@@ -61,7 +61,7 @@
 // Out-of-core algorithm under test and the in-memory parlaylib baseline it is
 // modelled on.  Both are pulled in here so the driver can time them
 // head-to-head on identical points.  The external fit lives in namespace
-// ChunkSequenceOps; the in-memory baseline defines a global point/linefit, so
+// plaid; the in-memory baseline defines a global point/linefit, so
 // the two coexist.
 #include "ChunkSequence/examples/external/external_linefit.h"
 #include "ChunkSequence/examples/in_memory/linefit.h"
@@ -137,8 +137,8 @@ int main(int argc, char* argv[]) {
 
   std::cout << "Building " << n << "-point input..." << std::flush;
   auto t0 = Clock::now();
-  chunk_seq x = ChunkSequenceOps::tabulate<double>(n, x_prefix, x_at);
-  chunk_seq y = ChunkSequenceOps::tabulate<double>(n, y_prefix, y_at);
+  chunk_seq x = plaid::tabulate<double>(n, x_prefix, x_at);
+  chunk_seq y = plaid::tabulate<double>(n, y_prefix, y_at);
   const double build_s = elapsed(t0);
   std::cout << " done (" << std::fixed << std::setprecision(4) << build_s
             << "s)\n";
@@ -146,7 +146,7 @@ int main(int argc, char* argv[]) {
 
   std::cout << "Fitting a line to " << n << " points..." << std::flush;
   t0 = Clock::now();
-  auto [offset, slope] = ChunkSequenceOps::linefit(x, y);
+  auto [offset, slope] = plaid::linefit(x, y);
   const double fit_s = elapsed(t0);
   std::cout << " done\n";
 
@@ -162,7 +162,7 @@ int main(int argc, char* argv[]) {
   double inmem_fit_s = 0;
   if (inmem_ok) {
     auto points_mem = parlay::tabulate(
-        n, [](size_t i) { return ChunkSequenceOps::point(x_at(i), y_at(i)); });
+        n, [](size_t i) { return plaid::point(x_at(i), y_at(i)); });
     t0 = Clock::now();
     auto [offset_mem, slope_mem] =
         linefit(points_mem);  // in-mem, global baseline

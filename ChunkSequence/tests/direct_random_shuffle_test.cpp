@@ -32,7 +32,7 @@
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
 
-using ChunkSequenceOps::direct_random_shuffle;
+using plaid::direct_random_shuffle;
 
 // Which drive a chunk's file lives on, by matching its GetFileName-derived
 // path prefix against GetSSDList(); -1 if no drive matches (shouldn't happen).
@@ -101,7 +101,7 @@ int main(int argc, char* argv[]) {
 
     for (size_t ci = 0; ci < cases.size(); ci++) {
         const Case& c = cases[ci];
-        chunk_seq in = ChunkSequenceOps::tabulate<uint64_t>(n, c.prefix + "_in", key_at);
+        chunk_seq in = plaid::tabulate<uint64_t>(n, c.prefix + "_in", key_at);
         chunk_seq out = direct_random_shuffle<uint64_t>(in, c.seed, c.prefix, c.disk_span);
 
         if (!check_permutation(c.name, out, ref)) pass = false;

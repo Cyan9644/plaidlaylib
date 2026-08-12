@@ -30,7 +30,7 @@
 #include "utils/file_utils.h"
 
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 //this is an implemented random shuffle that uses basically the same idea as samplesort
 //the difference is that our delayed map is computed with a function that returns a random pivot value
@@ -59,7 +59,7 @@ chunk_seq random_shuffle(chunk_seq& seq, Less less1 = {}, size_t disk_span = 1) 
   unsigned int sample_size = std::max<size_t>(1, num_samples);
   auto num_buckets = sample_size + 1;
   parlay::random_generator gen;
-  namespace d = ChunkSequenceOps::delayed;
+  namespace d = plaid::delayed;
   auto src = d::delay<T>(seq);
     //the mapping should return a random bucket index
   auto ids = d::map(
@@ -72,12 +72,12 @@ chunk_seq random_shuffle(chunk_seq& seq, Less less1 = {}, size_t disk_span = 1) 
 
   std::vector<chunk_seq> externalSequenceVector(num_buckets);
   //bucket randomly
-  ChunkSequenceOps::count_sort(ids, num_buckets, externalSequenceVector,
+  plaid::count_sort(ids, num_buckets, externalSequenceVector,
                                "ss_bucket_" + tag, disk_span);
     //sort each bucket, which is assumed to be able to fit in DRAM. In theory this might not be the case,
     //since the bucket IDs are random, but this is true within reason.
-  ChunkSequenceOps::apply<ChunkOperation::Shuffle, T>(externalSequenceVector, less1);
-  auto result = ChunkSequenceOps::flatten(externalSequenceVector);
+  plaid::apply<ChunkOperation::Shuffle, T>(externalSequenceVector, less1);
+  auto result = plaid::flatten(externalSequenceVector);
 
   return result;
 

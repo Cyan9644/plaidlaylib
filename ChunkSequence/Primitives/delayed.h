@@ -90,7 +90,7 @@
 // before force.
 // ─────────────────────────────────────────────────────────────────────────────
 
-namespace ChunkSequenceOps {
+namespace plaid {
 namespace delayed {
 
 // ── lazy forward iterators (sequential within a chunk) ───────────────────────
@@ -1541,6 +1541,6 @@ chunk_seq filter(const D& d, const std::string& result_prefix, Pred pred) {
 }
 
 }  // namespace delayed
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_DELAYED_H

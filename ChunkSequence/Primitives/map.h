@@ -9,7 +9,7 @@
 #include "ChunkSequence/Primitives/external_engine.h"
 #include "configs.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 /**
  * Apply f to every element across all chunks in seq, writing the results back
@@ -54,6 +54,6 @@ chunk_seq ChunkMap(const chunk_seq& seq, const std::string& result_prefix,
       /*max_out_per_input=*/FANOUT);
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_MAP_H

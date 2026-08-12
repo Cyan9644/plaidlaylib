@@ -45,7 +45,7 @@
 #include "ChunkSequence/examples/external_TODO/direct_samplesort.h"
 #include "ChunkSequence/helper/bench_drives.h"
 
-using ChunkSequenceOps::direct_sample_sort;
+using plaid::direct_sample_sort;
 
 // Which drive a chunk's file lives on, by matching its GetFileName-derived
 // path prefix against GetSSDList(); -1 if no drive matches (shouldn't happen).
@@ -109,7 +109,7 @@ int main(int argc, char* argv[]) {
 
     for (size_t ci = 0; ci < cases.size(); ci++) {
         const Case& c = cases[ci];
-        chunk_seq in = ChunkSequenceOps::tabulate<uint64_t>(n, c.prefix + "_in", key_at);
+        chunk_seq in = plaid::tabulate<uint64_t>(n, c.prefix + "_in", key_at);
         chunk_seq out = direct_sample_sort<uint64_t>(in, std::less<>{}, c.prefix, c.disk_span);
 
         if (!check_sorted(c.name, out, ref)) pass = false;

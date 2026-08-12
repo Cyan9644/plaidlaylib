@@ -19,7 +19,7 @@
 #include "ChunkSequence/Primitives/pack.h"
 #include "ChunkSequence/examples/external_TODO/primitive_quicksort.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 template <typename T, typename Less = std::less<>>
 chunk_seq sample_sort(chunk_seq& seq, Less less1 = {}) {
   static std::atomic<size_t> ss_counter{0};
@@ -37,7 +37,7 @@ chunk_seq sample_sort(chunk_seq& seq, Less less1 = {}) {
     // we'll go with it for now, also any external quicksort would need to
     // materialize everything anyway but could overlap the I/O with computation.
 
-    auto i = ChunkSequenceOps::materialize<T>(
+    auto i = plaid::materialize<T>(
         seq);  // it would be good to make this materialize into a parlay
                // sequence (now done)
 
@@ -49,7 +49,7 @@ chunk_seq sample_sort(chunk_seq& seq, Less less1 = {}) {
     // recurring call based on the size, but this is kind of messy the easiest
     // way to fix the problem is to just make materialize faster by
     // parallelizing it
-    return ChunkSequenceOps::to_chunk_seq(i, "ss_base_" + tag);
+    return plaid::to_chunk_seq(i, "ss_base_" + tag);
   }
 
   int sample_size = 31;
@@ -90,7 +90,7 @@ chunk_seq sample_sort(chunk_seq& seq, Less less1 = {}) {
       });
 
   std::vector<chunk_seq> externalSequenceVector(num_buckets);
-  ChunkSequenceOps::count_sort2<T>(seq, ids, externalSequenceVector,
+  plaid::count_sort2<T>(seq, ids, externalSequenceVector,
                                    "ss_bucket_" + tag);
 
   // it should now be the case that externalSequenceVector is a full vector of
@@ -106,9 +106,9 @@ chunk_seq sample_sort(chunk_seq& seq, Less less1 = {}) {
     if (z == n) {
       // if we're not going to get anything from the partition, i.e. we have an
       // empty partition
-      auto v = ChunkSequenceOps::materialize<T>(externalSequenceVector[i]);
+      auto v = plaid::materialize<T>(externalSequenceVector[i]);
       std::sort(v.begin(), v.end(), less1);
-      externalSequenceVector[i] = ChunkSequenceOps::to_chunk_seq(
+      externalSequenceVector[i] = plaid::to_chunk_seq(
           v, "ss_deg_" + tag + "_" + std::to_string(i));
       return;
     }
@@ -127,15 +127,15 @@ chunk_seq sample_sort(chunk_seq& seq, Less less1 = {}) {
         primitive_quicksort<T>(externalSequenceVector[i], less1);
   });
 
-  return ChunkSequenceOps::flatten(externalSequenceVector);
-  // auto sums = ChunkSequenceOps::ChunkHistogramByIndex<unsigned char>(ids,
+  return plaid::flatten(externalSequenceVector);
+  // auto sums = plaid::ChunkHistogramByIndex<unsigned char>(ids,
   // sample_size+1);
 
   //   auto [offsets, total] = parlay::scan(sums);
   //   auto id = std::upper_bound(offsets.begin(), offsets.end(), k) -
   //   offsets.begin() - 1;
 
-  // auto next = ChunkSequenceOps::pack_if<T, unsigned char>(
+  // auto next = plaid::pack_if<T, unsigned char>(
   //     seq, "next_" + std::to_string(n), ids,
   //     [id](unsigned char b){ return b == id; });
 
@@ -160,6 +160,6 @@ chunk_seq sample_sort(chunk_seq& seq, Less less1 = {}) {
   //  return sample_sort<T>(next, k - offsets[id], less1, original_size);
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif

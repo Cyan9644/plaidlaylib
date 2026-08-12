@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Per-phase benchmark for ChunkSequenceOps::sample_sort (external_samplesort.h).
+"""Per-phase benchmark for plaid::sample_sort (external_samplesort.h).
 
 Runs the head-to-head driver (bin/external_samplesort_vs_peterExample) across a
 sweep of input sizes with SS_PHASE_TIMING enabled, so each run prints both:

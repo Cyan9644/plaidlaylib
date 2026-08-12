@@ -5,10 +5,10 @@
 //                     reached through peter_shim) — the reference
 //                     implementation.
 //   2. our direct     direct_samplesort.h
-//   (ChunkSequenceOps::direct_sample_sort):
+//   (plaid::direct_sample_sort):
 //                     Peter's algorithm, ported line for line onto chunk_seq
 //                     and written straight against io_uring/O_DIRECT.
-//   3. our primitives external_samplesort.h (ChunkSequenceOps::sample_sort):
+//   3. our primitives external_samplesort.h (plaid::sample_sort):
 //   the
 //                     same algorithm again, but built out of the library's
 //                     primitives (delayed map -> count_sort ->
@@ -234,16 +234,16 @@ int main(int argc, char* argv[]) {
   sorters[1].prefixes = kDirectPrefixes;
   sorters[1].build = [&] {
     auto t0 = Clock::now();
-    direct_in = ChunkSequenceOps::tabulate<uint64_t>(n, "dss_in", key_at);
+    direct_in = plaid::tabulate<uint64_t>(n, "dss_in", key_at);
     return elapsed(t0);
   };
   sorters[1].sort = [&] {
     auto t0 = Clock::now();
-    direct_out = ChunkSequenceOps::direct_sample_sort<uint64_t>(direct_in);
+    direct_out = plaid::direct_sample_sort<uint64_t>(direct_in);
     return elapsed(t0);
   };
   sorters[1].read_back = [&] {
-    auto s = ChunkSequenceOps::materialize<uint64_t>(direct_out);
+    auto s = plaid::materialize<uint64_t>(direct_out);
     return std::vector<uint64_t>(s.begin(), s.end());
   };
 
@@ -252,16 +252,16 @@ int main(int argc, char* argv[]) {
   sorters[2].prefixes = kPrimPrefixes;
   sorters[2].build = [&] {
     auto t0 = Clock::now();
-    prim_in = ChunkSequenceOps::tabulate<uint64_t>(n, "ss_in", key_at);
+    prim_in = plaid::tabulate<uint64_t>(n, "ss_in", key_at);
     return elapsed(t0);
   };
   sorters[2].sort = [&] {
     auto t0 = Clock::now();
-    prim_out = ChunkSequenceOps::sample_sort<uint64_t>(prim_in);
+    prim_out = plaid::sample_sort<uint64_t>(prim_in);
     return elapsed(t0);
   };
   sorters[2].read_back = [&] {
-    auto s = ChunkSequenceOps::materialize<uint64_t>(prim_out);
+    auto s = plaid::materialize<uint64_t>(prim_out);
     return std::vector<uint64_t>(s.begin(), s.end());
   };
 

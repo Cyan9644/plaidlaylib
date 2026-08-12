@@ -73,7 +73,7 @@
 #include "parlay/primitives.h"
 #include "utils/file_utils.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 namespace sa_detail {
 // elem_prefix, sweep, PR, RankResult, and the generic assign_ranks live in
 // chunk_sa_common.h (shared with chunk_dc3.h).
@@ -326,6 +326,6 @@ inline chunk_seq ChunkSuffixArray(const chunk_seq& text,
   return sa;
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_SUFFIX_ARRAY_H

@@ -31,7 +31,7 @@
 #include "utils/file_utils.h"
 #include "utils/simple_queue.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 constexpr size_t kFlushThresholdBytes = 1UL
                                         << 20;  // Initialize("spfx_", n, 1<<20)
@@ -321,6 +321,6 @@ class BucketWriter {
   SimpleQueue<Request*> pending_;
 };
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // BUCKETED_FILE_WRITER_H

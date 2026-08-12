@@ -54,7 +54,7 @@
 #include "utils/file_utils.h"
 #include "utils/trace_marker.h"
 
-using ChunkSequenceOps::hpoint;
+using plaid::hpoint;
 using Clock = std::chrono::steady_clock;
 
 static double elapsed(Clock::time_point t0) {
@@ -117,7 +117,7 @@ int main(int argc, char* argv[]) {
   std::cout << "Building " << n << "-point cloud..." << std::flush;
   trace_mark("build_start");
   auto t0 = Clock::now();
-  chunk_seq points = ChunkSequenceOps::tabulate<hpoint>(n, in_prefix, point_at);
+  chunk_seq points = plaid::tabulate<hpoint>(n, in_prefix, point_at);
   const double build_s = elapsed(t0);
   trace_mark("build_end");
   std::cout << " done (" << std::fixed << std::setprecision(4) << build_s
@@ -126,7 +126,7 @@ int main(int argc, char* argv[]) {
   std::cout << "Computing upper hull..." << std::flush;
   trace_mark("op_start");
   t0 = Clock::now();
-  std::vector<uint64_t> hull = ChunkSequenceOps::UpperHull(points, dram_budget);
+  std::vector<uint64_t> hull = plaid::UpperHull(points, dram_budget);
   const double hull_s = elapsed(t0);
   trace_mark("op_end");
   std::cout << " done\n";
@@ -137,7 +137,7 @@ int main(int argc, char* argv[]) {
             << "s   " << std::setprecision(2) << gb_s
             << " GB/s (points read)   "
             << "out-of-core split levels: "
-            << ChunkSequenceOps::last_ext_splits() << "\n";
+            << plaid::last_ext_splits() << "\n";
 
   // In-memory baseline: parlaylib's upper_hull on the same points,
   // cross-checked for an identical hull (same indices, same order).

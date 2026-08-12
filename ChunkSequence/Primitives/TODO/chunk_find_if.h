@@ -7,7 +7,7 @@
 #include "ChunkSequence/Primitives/external_engine.h"
 #include "configs.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 /**
  * Return the logical index of the first element (smallest position) across all
@@ -59,6 +59,6 @@ size_t ChunkFindIf(const chunk_seq& seq, F pred) {
   return result;
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_FIND_IF_H

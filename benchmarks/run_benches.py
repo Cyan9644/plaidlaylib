@@ -260,7 +260,7 @@ EXAMPLES = [
      "time_col": "select_s", "inmem_col": "inmem_select_s",
      "elem_bytes": 8, "input_seqs": 1,
      "xlabel": "input size",
-     "title": "kth-smallest: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
+     "title": "kth-smallest: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["kth_in*", "id_*", "flags_*", "next_*"]},
     # kth_smallest_delayedExample: head-to-head comparison, same precedent as
     # samplesort_three_way -- ChunkPartition (kth_smallest_fast, writes all 32
@@ -297,12 +297,12 @@ EXAMPLES = [
      "time_col": "sort_s", "inmem_col": "inmem_sort_s",
      "elem_bytes": 8, "input_seqs": 1,
      "xlabel": "input size",
-     "title": "sample sort: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
+     "title": "sample sort: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*",
                     "qs_base_*"]},
 
     # external_samplesort_vs_peterExample sweeps n and times BOTH out-of-core
-    # sorts on the identical key multiset: ours (ChunkSequenceOps::sample_sort)
+    # sorts on the identical key multiset: ours (plaid::sample_sort)
     # and Peter's (peter_samplesort/, via peter_shim).  Unlike the other
     # examples the "baseline" series is not in-memory — both series are disk
     # sorts and plot across the whole sweep (no RAM cliff).  Intermediates: our
@@ -317,12 +317,12 @@ EXAMPLES = [
      "no_ram_cliff": True,
      "elem_bytes": 8, "input_seqs": 1,
      "xlabel": "input size",
-     "title": "sample sort: ours (ChunkSequenceOps) vs Peter's — both out-of-core",
+     "title": "sample sort: ours (plaid) vs Peter's — both out-of-core",
      "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*",
                     "qs_base_*", "pss_in*", "pss_out*", "spfx_*"]},
 
     # direct_samplesort_vs_peterExample: the same head-to-head as above, but our
-    # contestant is direct_samplesort.h (ChunkSequenceOps::direct_sample_sort —
+    # contestant is direct_samplesort.h (plaid::direct_sample_sort —
     # the same algorithm written straight against io_uring/O_DIRECT, in Peter's
     # scatter-gather shape, chunk_seq in/out) rather than the sort built on the
     # primitives.  Run both sweeps to separate the algorithm from the substrate:
@@ -384,7 +384,7 @@ EXAMPLES = [
                     "ss_base_*", "ss_deg_*", "qs_base_*",
                     "pss_in*", "pss_out*", "spfx_*"]},
 
-    # apply_sort_vs_samplesortExample: ChunkSequenceOps::apply<ChunkOperation::Sort>
+    # apply_sort_vs_samplesortExample: plaid::apply<ChunkOperation::Sort>
     # (whole-sequence, DRAM-budgeted, no bucketing -- process_inplace_budgeted's
     # own CHECK caps how large an input it can take) vs sample_sort (recursive
     # out-of-core, external_samplesort.h), which itself uses apply<Sort> as its
@@ -406,7 +406,7 @@ EXAMPLES = [
      "data_globs": ["as_in*", "ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*",
                     "ss_deg_*", "qs_base_*"]},
 
-    # samplesort_vs_samplesort_randomExample: ChunkSequenceOps::sample_sort
+    # samplesort_vs_samplesort_randomExample: plaid::sample_sort
     # (pivot sampling via the shared sample<T> helper, ExternalPrimitives/
     # chunk_sample.h) vs sample_sort_random (the pre-refactor sibling kept in
     # external_samplesort.h for comparison -- same count_sort/apply<Sort>/
@@ -429,7 +429,7 @@ EXAMPLES = [
 
     # external_random_shuffleExample sweeps n and times THREE shuffles of the same
     # keys: random_shuffle_method (the bucketing shuffle on the high-level
-    # abstractions), ChunkSequenceOps::Permutation (the same algorithm on the
+    # abstractions), plaid::Permutation (the same algorithm on the
     # low-level reader/writer, rewriting each bucket in place), and the in-mem
     # parlay::random_shuffle baseline (stops at the RAM cliff).  The plotted times
     # are the shuffle passes only (the shared input build is excluded).  Each
@@ -478,7 +478,7 @@ EXAMPLES = [
      "time_col": "select_s", "inmem_col": "inmem_select_s",
      "elem_bytes": 8, "input_seqs": 1,
      "xlabel": "input size",
-     "title": "fitmem kth-smallest: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
+     "title": "fitmem kth-smallest: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["fk_in*", "fk_id_*", "fk_next_*"]},
 
     # fitmem_sortExample: same driver shape as external_samplesort, but the
@@ -490,7 +490,7 @@ EXAMPLES = [
      "time_col": "sort_s", "inmem_col": "inmem_sort_s",
      "elem_bytes": 8, "input_seqs": 1,
      "xlabel": "input size",
-     "title": "fitmem sample sort: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
+     "title": "fitmem sample sort: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["fs_in*", "fs_id_*", "fs_bucket_*", "fs_base_*", "fs_sorted_*"]},
 
     # external_linefitExample sweeps n; the plotted time is the fit itself
@@ -502,7 +502,7 @@ EXAMPLES = [
      "time_col": "fit_s", "inmem_col": "inmem_fit_s",
      "elem_bytes": 8, "input_seqs": 2,
      "xlabel": "input size",
-     "title": "line fit: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
+     "title": "line fit: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["lf_x*", "lf_y*"]},
 
     # bigint_addExample sweeps n (limb count); the plotted time is the add pass
@@ -513,7 +513,7 @@ EXAMPLES = [
      "time_col": "add_s", "inmem_col": "inmem_add_s",
      "elem_bytes": 8, "input_seqs": 2,
      "xlabel": "input size",
-     "title": "big-integer add: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
+     "title": "big-integer add: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["bi_a*", "bi_b*", "bi_sum*"]},
 
     # bigint_mulExample sweeps n (limb count); the plotted time is the multiply
@@ -526,7 +526,7 @@ EXAMPLES = [
      "time_col": "mul_s", "inmem_col": "inmem_mul_s",
      "elem_bytes": 8, "input_seqs": 2,
      "xlabel": "input size",
-     "title": "big-integer mul: out-of-core Karatsuba (ChunkSequenceOps) vs in-mem",
+     "title": "big-integer mul: out-of-core Karatsuba (plaid) vs in-mem",
      "data_globs": ["bm_a*", "bm_b*", "bm_prod*", "bimul_zero*"]},
 
     # bigint_add_eagerExample: a SEPARATE, opt-in benchmark (deliberately NOT in
@@ -562,7 +562,7 @@ EXAMPLES = [
      "time_col": "cut_s", "inmem_col": "inmem_cut_s",
      "elem_bytes": 8, "input_seqs": 1,
      "xlabel": "input size",
-     "title": "cut / slice: out-of-core (ChunkSequenceOps) vs in-mem parlaylib",
+     "title": "cut / slice: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["cut_in*", "cut_out*"]},
 
     # bellman_fordExample: three registry entries, one per RMAT graph-density

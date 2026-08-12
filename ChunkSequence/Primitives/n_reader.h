@@ -15,7 +15,7 @@
 #include "parlay/primitives.h"
 #include "utils/simple_queue.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 /**
  * NReader<T> — read N chunk sequences in lockstep and hand a worker the N
@@ -207,6 +207,6 @@ auto NRemoveWorker(const std::vector<const chunk_seq*>& seqs,
       /*granularity=*/1);
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // N_READER_H

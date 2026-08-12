@@ -53,7 +53,7 @@ struct chunk_csr {
     std::vector<chunk_seq> vec(2);
     vec[0] = this->edges;
     vec[1] = other_chunk_csr.edges;
-    this->edges = ChunkSequenceOps::flatten(vec);
+    this->edges = plaid::flatten(vec);
     size_t offset = this->degree_scan[this->degree_scan.size() - 1];
     parlay::parallel_for(0, other_chunk_csr.degree_scan.size(), [&](long i) {
       other_chunk_csr.degree_scan[i] += offset;
@@ -67,21 +67,21 @@ struct chunk_csr {
   // this method should accept a vertex ID n and return a parlay sequence of the
   // (destination, weight) edges of n
   parlay::sequence<weighted_edge> get_adjacent(size_t n) const {
-    return ChunkSequenceOps::materialize<weighted_edge>(
-        ChunkSequenceOps::sequential_cut_no_compression<weighted_edge>(
+    return plaid::materialize<weighted_edge>(
+        plaid::sequential_cut_no_compression<weighted_edge>(
             this->edges, this->degree_scan[n], this->degree_scan[n + 1]));
   }
 
   // method to return a delayed external sequence of adjacent. yeah, right.
   auto delay_get_adjacent(size_t n) const {
-    return ChunkSequenceOps::delayed::cut<weighted_edge>(
+    return plaid::delayed::cut<weighted_edge>(
         this->edges, this->degree_scan[n], this->degree_scan[n + 1]);
   }
 
   bool edge_exist(size_t n, size_t edge_id) {
     parlay::sequence<weighted_edge> inter =
-        ChunkSequenceOps::materialize<weighted_edge>(
-            ChunkSequenceOps::sequential_cut_no_compression<weighted_edge>(
+        plaid::materialize<weighted_edge>(
+            plaid::sequential_cut_no_compression<weighted_edge>(
                 this->edges, this->degree_scan[n], this->degree_scan[n + 1]));
     auto iterator = parlay::find_if(inter, [&](const weighted_edge& e) {
       return e.connecting_vertex == edge_id;
@@ -99,7 +99,7 @@ struct chunk_csr {
   parlay::sequence<R> segmented_reduce_over_edges(ElemFn elem_to_val,
                                                   Monoid monoid,
                                                   size_t reader_threads = 10) {
-    return ChunkSequenceOps::ChunkSegmentedReduce<weighted_edge, R>(
+    return plaid::ChunkSegmentedReduce<weighted_edge, R>(
         this->edges, this->degree_scan, elem_to_val, monoid, reader_threads);
   }
 
@@ -168,7 +168,7 @@ struct chunk_csr {
           cursor[parsed[i].v1].fetch_add(1, std::memory_order_relaxed);
       placed[pos] = {parsed[i].v2, parsed[i].w};
     });
-    this->edges = ChunkSequenceOps::to_chunk_seq(placed, result_prefix);
+    this->edges = plaid::to_chunk_seq(placed, result_prefix);
   }
 
   // one thing that might be useful is conversion to compressed sparse column
@@ -264,7 +264,7 @@ struct chunk_csr {
 
 //         size_t degrees = this->degree_scan[n+1] - this->degree_scan[n];
 //         return
-//         ChunkSequenceOps::materialize(ChunkSequenceOps::sequential_cut_no_compression<size_t>(this->adjacent,
+//         plaid::materialize(plaid::sequential_cut_no_compression<size_t>(this->adjacent,
 //         this->degree_scan[n], degrees));
 //     }
 
@@ -272,14 +272,14 @@ struct chunk_csr {
 //     chunk_seq& delay_get_adjacent(size_t n){
 //         size_t degrees = this->degree_scan[n+1] - this->degree_scan[n];
 //         return
-//         ChunkSequenceOps::delayed::sequential_cut_no_compression<size_t>(this->adjacent,
+//         plaid::delayed::sequential_cut_no_compression<size_t>(this->adjacent,
 //         this->degree_scan[n], degrees);
 //     }
 
 //     bool edge_exist(size_t edge_id){
 //         size_t degrees = this->degree_scan[n+1] - this->degree_scan[n];
 //         parlay::sequence<size_t> inter =
-//         ChunkSequenceOps::materialize(ChunkSequenceOps::sequential_cut_no_compression<size_t>(this->adjacent,
+//         plaid::materialize(plaid::sequential_cut_no_compression<size_t>(this->adjacent,
 //         this->degree_scan[n], degrees)); auto iterator =
 //         parlay::find_if(inter, [&](size_t id){
 //             return inter[id] == edge_id;

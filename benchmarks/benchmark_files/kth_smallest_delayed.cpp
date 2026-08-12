@@ -171,13 +171,13 @@ int main(int argc, char* argv[]) {
   selectors[0].prefixes = kFastPrefixes;
   selectors[0].build = [&] {
     auto t0 = Clock::now();
-    fast_seq = ChunkSequenceOps::tabulate<uint64_t>(n, "kthd_fast_in", key_at);
+    fast_seq = plaid::tabulate<uint64_t>(n, "kthd_fast_in", key_at);
     return elapsed(t0);
   };
   selectors[0].select = [&] {
     auto t0 = Clock::now();
     selectors[0].result =
-        ChunkSequenceOps::kth_smallest_fast<uint64_t>(fast_seq, (long)k);
+        plaid::kth_smallest_fast<uint64_t>(fast_seq, (long)k);
     return elapsed(t0);
   };
 
@@ -187,12 +187,12 @@ int main(int argc, char* argv[]) {
   selectors[1].build = [&] {
     auto t0 = Clock::now();
     delayed_seq =
-        ChunkSequenceOps::tabulate<uint64_t>(n, "kthd_delayed_in", key_at);
+        plaid::tabulate<uint64_t>(n, "kthd_delayed_in", key_at);
     return elapsed(t0);
   };
   selectors[1].select = [&] {
     auto t0 = Clock::now();
-    selectors[1].result = ChunkSequenceOps::kth_smallest_delayed<uint64_t>(
+    selectors[1].result = plaid::kth_smallest_delayed<uint64_t>(
         delayed_seq, (long)k, delayed_write_bytes, eager_write_bytes);
     return elapsed(t0);
   };

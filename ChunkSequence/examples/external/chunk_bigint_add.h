@@ -40,7 +40,7 @@
 #include "parlay/primitives.h"
 #include "utils/file_utils.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 namespace bigint_detail {
 
@@ -73,8 +73,8 @@ inline chunk_seq ChunkBigIntAdd(const chunk_seq& a, const chunk_seq& b,
                                 bool extra_one = false) {
   using namespace bigint_detail;
 
-  size_t n_a = ChunkSequenceOps::size(a);
-  size_t n_b = ChunkSequenceOps::size(b);
+  size_t n_a = plaid::size(a);
+  size_t n_b = plaid::size(b);
 
   // Keep a the longer operand so only b needs sign-extension padding.
   if (n_a < n_b) return ChunkBigIntAdd(b, a, result_prefix, extra_one);
@@ -139,8 +139,8 @@ inline chunk_seq ChunkBigIntAddEager(const chunk_seq& a, const chunk_seq& b,
                                      bool extra_one = false) {
   using namespace bigint_detail;
 
-  size_t n_a = ChunkSequenceOps::size(a);
-  size_t n_b = ChunkSequenceOps::size(b);
+  size_t n_a = plaid::size(a);
+  size_t n_b = plaid::size(b);
 
   // Keep a the longer operand so only b needs sign-extension padding.
   if (n_a < n_b) return ChunkBigIntAddEager(b, a, result_prefix, extra_one);
@@ -254,6 +254,6 @@ bigint add(const Bigint1& a, const Bigint2& b, bool extra_one = false) {
 
 }  // namespace bigint_reference
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_BIGINT_ADD_H

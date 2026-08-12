@@ -10,7 +10,7 @@
 
 /**
  * Verify the scalar element ops on a materialized chunk_seq:
- *   ChunkSequenceOps::size    — total element count (not chunk count)
+ *   plaid::size    — total element count (not chunk count)
  *   chunk_seq::operator[]     — read one element at a logical index
  *   chunk_seq::push_back      — append one element (in place)
  *
@@ -22,7 +22,7 @@
 int main(int argc, char* argv[]) {
   ParseGlobalArguments(argc, argv);
 
-  namespace ops = ChunkSequenceOps;
+  namespace ops = plaid;
   using T = uint64_t;
 
   int fails = 0;
@@ -107,7 +107,7 @@ int main(int argc, char* argv[]) {
 
   // ── delayed::size (file / map / index / zip) ───────────────────────────────
   {
-    namespace d = ChunkSequenceOps::delayed;
+    namespace d = plaid::delayed;
     chunk_seq base = ops::iota(n);  // fresh, exactly n elems
     auto del = d::delay(base);
     expect(d::size(del) == n, "delayed::size(delay(seq)) != n");

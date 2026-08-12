@@ -16,7 +16,7 @@
 #include "ChunkSequence/Primitives/chunk_seq_reader.h"
 #include "configs.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 template <typename T = uint64_t, typename Less = std::less<>>
 chunk_seq sort_buckets(std::vector<chunk_seq>& buckets, Less less = {},
@@ -110,6 +110,6 @@ chunk_seq sort_buckets(std::vector<chunk_seq>& buckets, Less less = {},
   return flatten(wave_outputs);
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // SORT_BUCKETS_H

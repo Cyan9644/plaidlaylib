@@ -22,7 +22,7 @@
 #include "utils/file_utils.h"
 #include "utils/unordered_file_writer.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 /**
  * The unified out-of-core transform engine shared by the eager streaming
@@ -209,6 +209,6 @@ auto RemoveWorker(const chunk_seq& seq, size_t reader_threads, WorkerFn worker)
       /*granularity=*/1);
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // EXTERNAL_ENGINE_H

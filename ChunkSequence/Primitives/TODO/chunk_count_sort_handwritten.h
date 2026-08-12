@@ -25,7 +25,7 @@
 #define PRACTICAL_SSDS 8
 #endif
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 // ChunkCountSort should take in an external chunk sequence and reorder
 // physically or logically such that (stably) all elements with ID 0 come before
@@ -57,7 +57,7 @@ chunk_seq& count_sort(const chunk_seq& seq, const chunk_seq& ids,
   // nested also we can't hold the full sequences in DRAM at once, so I hope
   // this doesn't try to do that this is what we implemneted NRemoveWorker for
 
-  // auto remove_from_ids = ChunkSequenceOps::RemoveWorker<T>(seq,  10,
+  // auto remove_from_ids = plaid::RemoveWorker<T>(seq,  10,
   // [&](ChunkSequenceReader<T>& reader1){
   //     // parlay::sequence<size_t> remove(num_unique, 0);
   //     while(true){
@@ -74,7 +74,7 @@ chunk_seq& count_sort(const chunk_seq& seq, const chunk_seq& ids,
   //     return remove;
   // });
 
-  auto remove_from_queue = ChunkSequenceOps::NRemoveWorker<T>(
+  auto remove_from_queue = plaid::NRemoveWorker<T>(
       ids, seq, 10, [&](ChunkSequenceReader<T>& reader) {
         // parlay::sequence<size_t> remove(num_unique, 0);
         while (true) {
@@ -123,7 +123,7 @@ chunk_seq& count_sort(const chunk_seq& seq, const chunk_seq& ids,
   // return total;
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 parlay::sequence<size_t> fuse(parlay::sequence<chunk_seq&>& seq) {}
 

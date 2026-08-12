@@ -26,7 +26,7 @@
 #include "utils/simple_queue.h"
 #include "utils/unordered_file_writer.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 // Virtual chunks processed per batch.  Each batch holds at most
 // DENSE_PACK_BATCH_SIZE * CHUNK_SIZE bytes of producer output in memory
@@ -429,6 +429,6 @@ chunk_seq DensePackStream(const chunk_seq& seq,
   return {out_chunks};
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // DENSE_PACK_H

@@ -13,7 +13,7 @@
 #include "configs.h"
 #include "parlay/sequence.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 namespace detail {
 
 // A finite field modulo a Mersenne prime, ported from parlaylib's rabin_karp
@@ -138,6 +138,6 @@ chunk_seq ChunkRabinKarp(const chunk_seq& seq, const std::string& result_prefix,
       });
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_RABIN_KARP_H

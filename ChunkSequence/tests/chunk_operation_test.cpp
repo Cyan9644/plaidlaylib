@@ -21,8 +21,8 @@
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
 
-using ChunkSequenceOps::ChunkOperation;
-using ChunkSequenceOps::apply;
+using plaid::ChunkOperation;
+using plaid::apply;
 
 namespace {
 
@@ -45,7 +45,7 @@ static std::vector<chunk_seq> build_buckets(size_t num_buckets,
                                             const std::string& prefix) {
   std::vector<chunk_seq> buckets(num_buckets);
   for (size_t b = 0; b < num_buckets; b++) {
-    buckets[b] = ChunkSequenceOps::tabulate<uint64_t>(
+    buckets[b] = plaid::tabulate<uint64_t>(
         elems_per_bucket, prefix + "_" + std::to_string(b),
         [b](size_t i) { return key_at(b, i); });
   }

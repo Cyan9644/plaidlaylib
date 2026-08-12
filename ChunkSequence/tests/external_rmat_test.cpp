@@ -149,7 +149,7 @@ bool run_case(size_t n_req, size_t avg_degree, const std::string& label) {
   }
 
   if (ok) {
-    auto edges = ChunkSequenceOps::materialize<weighted_edge>(graph.edges);
+    auto edges = plaid::materialize<weighted_edge>(graph.edges);
     CHECK(edges.size() >= m)
         << "materialize returned " << edges.size() << " < " << m << " edges";
     for (size_t v = 0; v < n && ok; v++) {

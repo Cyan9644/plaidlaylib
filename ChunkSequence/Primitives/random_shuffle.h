@@ -34,7 +34,7 @@ chunk_seq random_shuffle_method(chunk_seq& seq,
                                 const std::string& prefix = "rs") {
   // parlay::sequence<chunk_seq>
 
-  namespace d = ChunkSequenceOps::delayed;
+  namespace d = plaid::delayed;
   parlay::random_generator gen;
 
   static std::atomic<size_t> ss_counter{0};
@@ -59,19 +59,19 @@ chunk_seq random_shuffle_method(chunk_seq& seq,
   // artifact, and a shuffle has no pivot tree -- it just costs extra buckets,
   // i.e. extra files and smaller writes
   if (n < num_samples) {
-    auto par = ChunkSequenceOps::materialize<T>(seq);
+    auto par = plaid::materialize<T>(seq);
     par = parlay::random_shuffle(par);
 
-    // return ChunkSequenceOps::to_chunk_seq(par, "random_base_" + tag "_" +
+    // return plaid::to_chunk_seq(par, "random_base_" + tag "_" +
     // std::to_string(i));
-    return ChunkSequenceOps::to_chunk_seq(par, prefix + "_base_" + tag);
+    return plaid::to_chunk_seq(par, prefix + "_base_" + tag);
   }
   auto num_buckets = num_samples + 1;
 
   std::vector<chunk_seq> externalSequenceVector(num_buckets);
 
   // auto ids =
-  // ChunkSequenceOps::delayed::map(ChunkSequenceOps::delayed::delay<T>(seq),[&](T
+  // plaid::delayed::map(plaid::delayed::delay<T>(seq),[&](T
   // o, size_t r){
   //    parlay::random_generator gen;
   //   std::uniform_int_distribution<long> dis(0, num_buckets-1);
@@ -79,9 +79,9 @@ chunk_seq random_shuffle_method(chunk_seq& seq,
   //     return std::pair<T, size_t>{o, (size_t)dis(g)};
   // });
 
-  auto src = ChunkSequenceOps::delayed::delay<T>(seq);
-  auto ids = ChunkSequenceOps::delayed::map(
-      d::zip(src, ChunkSequenceOps::delayed::tabulate(
+  auto src = plaid::delayed::delay<T>(seq);
+  auto ids = plaid::delayed::map(
+      d::zip(src, plaid::delayed::tabulate(
                       src.length(), [](size_t i) { return i; })),
       [&, num_buckets](const std::pair<T, size_t>& e) {
         auto g = gen[e.second];
@@ -89,10 +89,10 @@ chunk_seq random_shuffle_method(chunk_seq& seq,
         return std::pair<T, size_t>{e.first, dis(g)};
       });
 
-  // ChunkSequenceOps::inplace_bucket_sort(seq, ids,
+  // plaid::inplace_bucket_sort(seq, ids,
   // externalSequenceVector,"random_bucket_" + tag);
 
-  ChunkSequenceOps::count_sort(ids, num_buckets, externalSequenceVector,
+  plaid::count_sort(ids, num_buckets, externalSequenceVector,
                                prefix + "_bucket_" + tag);
   // Less less = //we want this less function to allow us to sort by chunk
   // filename
@@ -119,7 +119,7 @@ chunk_seq random_shuffle_method(chunk_seq& seq,
   // count sort's chunks can be shuffled in place
   //  auto seed = 42;
   // parlay::random rng(seed);
-  // ChunkSequenceOps::process_buckets_inplace<T>(externalSequenceVector,[&](size_t
+  // plaid::process_buckets_inplace<T>(externalSequenceVector,[&](size_t
   // b, T* buf, size_t nelem){
   //     auto shuffled = parlay::random_shuffle(parlay::make_slice(buf, buf +
   //     nelem),rng.fork(b)); std::memcpy(buf, shuffled.data(), nelem *
@@ -128,19 +128,19 @@ chunk_seq random_shuffle_method(chunk_seq& seq,
 
   // we know here that each bucket has its own filename and therefore cannot
   // have bled into another chunk, so we don't need to cut by indices
-  //  auto new_seq = ChunkSequenceOps::delayed::cut_by_chunk(seq,
+  //  auto new_seq = plaid::delayed::cut_by_chunk(seq,
   //  bucket_indices[i], bucket_indices[i+1]); auto parlay_seq =
-  //  ChunkSequenceOps::materialize(new_seq); parlay_seq =
+  //  plaid::materialize(new_seq); parlay_seq =
   //  parlay::random_shuffle(parlay_seq); externalSequenceVector[i] =
-  //  ChunkSequenceOps::to_chunk_seq(parlay_seq); auto parlay_seq =
-  //  ChunkSequenceOps::sequential_materialize<T>(externalSequenceVector[i]);
+  //  plaid::to_chunk_seq(parlay_seq); auto parlay_seq =
+  //  plaid::sequential_materialize<T>(externalSequenceVector[i]);
   //  parlay_seq = parlay::random_shuffle(parlay_seq);
-  //  externalSequenceVector[i]= ChunkSequenceOps::to_chunk_seq(parlay_seq,
+  //  externalSequenceVector[i]= plaid::to_chunk_seq(parlay_seq,
   //  prefix + "_out_" + tag +  "_" + std::to_string(i));
   //    });
   auto seed = 42;
   parlay::random rng(seed);
-  ChunkSequenceOps::process_inplace<T>(
+  plaid::process_inplace<T>(
       externalSequenceVector, [&](size_t b, T* buf, size_t nelem) {
         auto shuffled = parlay::random_shuffle(
             parlay::make_slice(buf, buf + nelem), rng.fork(b));
@@ -153,7 +153,7 @@ chunk_seq random_shuffle_method(chunk_seq& seq,
   // bucket (everything up to our current filename) into memory and shuffle the
   // contents
 
-  return ChunkSequenceOps::flatten(externalSequenceVector);
+  return plaid::flatten(externalSequenceVector);
   //   std::uniform_int_distribution<long> dis(0, n-1);
   //   auto locals = RemoveWorker<T>(seq, /*reader_threads=*/10,
   //     [&, num_buckets, epct](ChunkSequenceReader<T>& reader) {
@@ -180,7 +180,7 @@ chunk_seq random_shuffle_method(chunk_seq& seq,
 // Permutation — originally written by Peter Li, ported to the chunk_seq
 // interface by claude
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 template <typename T = uint64_t>
 class Permutation {
@@ -224,14 +224,14 @@ class Permutation {
   chunk_seq Run(const chunk_seq& seq, const std::string& result_prefix,
                 size_t num_buckets, Assigner assigner, Processor processor) {
     CHECK(num_buckets > 0) << "Permutation::Run: need at least one bucket";
-    namespace d = ChunkSequenceOps::delayed;
+    namespace d = plaid::delayed;
 
     // Phase 1 (AssignToBucket).  The assigner wants the element's global
     // index, so zip the input against the identity — a generated leaf, so it
     // costs no I/O — and count-sort the resulting {value, bucket} pairs.
-    auto src = ChunkSequenceOps::delayed::delay<T>(seq);
-    auto ids = ChunkSequenceOps::delayed::map(
-        d::zip(src, ChunkSequenceOps::delayed::tabulate(
+    auto src = plaid::delayed::delay<T>(seq);
+    auto ids = plaid::delayed::map(
+        d::zip(src, plaid::delayed::tabulate(
                         src.length(), [](size_t i) { return i; })),
         [&](const std::pair<T, size_t>& e) {
           return std::pair<T, size_t>{e.first, assigner(e.first, e.second)};
@@ -278,7 +278,7 @@ class Permutation {
   }
 };
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 // //this is the version of random shuffle that does not rely on primitives, and
 // is therefore the official version for the library
@@ -311,7 +311,7 @@ class Permutation {
 // parlay::internal::heap_tree ss(seconds);
 
 // std::vector<std::vector<T>> buffers[NUM_SSDS]; //buffer list
-// auto remove_from_queue = ChunkSequenceOps::RemoveWorker<T>(seq,
+// auto remove_from_queue = plaid::RemoveWorker<T>(seq,
 // /*reader_threads=*/10, [&](ChunkSequenceReader<T>& reader, size_t i){
 
 //     while(true){

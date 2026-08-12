@@ -29,7 +29,7 @@
 #include "configs.h"
 #include "utils/file_utils.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 namespace sa_detail {
 
 // (pos, rank) — the naming pass's output element (rank is 1-based; see below).
@@ -161,6 +161,6 @@ inline RankResult assign_ranks(const chunk_seq& sorted, const std::string& pfx,
 }
 
 }  // namespace sa_detail
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_SA_COMMON_H

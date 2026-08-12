@@ -32,7 +32,7 @@
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
 
-using digit = ChunkSequenceOps::bigint_detail::digit;
+using digit = plaid::bigint_detail::digit;
 using u128 = unsigned __int128;
 static constexpr digit MAX = ~(digit)0;
 
@@ -77,7 +77,7 @@ static std::vector<digit> materialize(const chunk_seq& seq) {
 static chunk_seq make_seq(const std::vector<digit>& v,
                           const std::string& prefix) {
   if (v.empty()) return {};
-  return ChunkSequenceOps::tabulate<digit>(v.size(), prefix,
+  return plaid::tabulate<digit>(v.size(), prefix,
                                            [&v](size_t i) { return v[i]; });
 }
 
@@ -163,7 +163,7 @@ static void check(const std::string& name, const std::vector<digit>& a,
 
   chunk_seq A = make_seq(a, "bmt_a");
   chunk_seq B = make_seq(b, "bmt_b");
-  chunk_seq P = ChunkSequenceOps::ChunkBigIntMul(A, B, "bmt_out", TEST_BUDGET);
+  chunk_seq P = plaid::ChunkBigIntMul(A, B, "bmt_out", TEST_BUDGET);
   const std::vector<digit> got = normalize(materialize(P));
 
   report(name, got == expected,

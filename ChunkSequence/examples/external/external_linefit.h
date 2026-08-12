@@ -8,7 +8,7 @@
 #include "ChunkSequence/Primitives/delayed.h"
 #include "ChunkSequence/Primitives/chunk_seq.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 using point = std::pair<double, double>;
 
@@ -33,13 +33,13 @@ auto linefit(const chunk_seq& x, const chunk_seq& y) {
   // zip the two external sequences into a single external sequence, accessed
   // delayed so that we don't instantiate the entire sequence on disk I don't
   // really know what casting to delayed::delay doeos here
-  auto zipper = ChunkSequenceOps::delayed::zip(
-      ChunkSequenceOps::delayed::delay<double>(x),
-      ChunkSequenceOps::delayed::delay<double>(y));
+  auto zipper = plaid::delayed::zip(
+      plaid::delayed::delay<double>(x),
+      plaid::delayed::delay<double>(y));
 
   // without instantiating the sequence, access its elements individually and
   // compute the sums for both axis points
-  auto [xsum, ysum] = ChunkSequenceOps::delayed::reduce(zipper, add_points);
+  auto [xsum, ysum] = plaid::delayed::reduce(zipper, add_points);
 
   // get mean of the points
   double xa = xsum / n;
@@ -51,7 +51,7 @@ auto linefit(const chunk_seq& x, const chunk_seq& y) {
   // zipped sequence and finding v = x - xa, the difference of the x coordinate
   // of the point from its mean, this is squared for least-squares distance this
   // is also multiplied by y because it's equivalent to finding the y difference
-  auto tmp = ChunkSequenceOps::delayed::map(zipper, [=](point p) {
+  auto tmp = plaid::delayed::map(zipper, [=](point p) {
     auto [x, y] = p;
     double v = x - xa;
     return point(v * v, v * y);
@@ -60,7 +60,7 @@ auto linefit(const chunk_seq& x, const chunk_seq& y) {
   // so now we have a series of points that represent the squared x and y
   // distances to the mean line so now we're going to add all of these up
   // without instantiating
-  auto [Stt, bb] = ChunkSequenceOps::delayed::reduce(tmp, add_points);
+  auto [Stt, bb] = plaid::delayed::reduce(tmp, add_points);
 
   // b = ysum/xsum = slope
   double b = bb / Stt;
@@ -70,5 +70,5 @@ auto linefit(const chunk_seq& x, const chunk_seq& y) {
   return point(a, b);
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 #endif

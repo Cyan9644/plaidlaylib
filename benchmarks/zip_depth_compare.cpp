@@ -45,7 +45,7 @@
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
 
-namespace cd = ChunkSequenceOps::delayed;
+namespace cd = plaid::delayed;
 
 constexpr size_t MAX_K = 128;
 
@@ -134,7 +134,7 @@ int main(int argc, char* argv[]) {
             << " each...\n";
   std::vector<chunk_seq> srcs(max_k);
   for (size_t i = 0; i < max_k; i++)
-    srcs[i] = ChunkSequenceOps::tabulate<uint64_t>(
+    srcs[i] = plaid::tabulate<uint64_t>(
         n, "zsrc" + std::to_string(i), [](size_t j) { return (uint64_t)j; });
   std::cout << "\n--- zip chain depth sweep: reduce(sum) ---\n";
 

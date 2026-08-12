@@ -171,7 +171,7 @@ inline chunk_csr external_rmat_symmetric_graph(size_t n_req, size_t m_req,
   // logn-deep recursions that the drives are waiting on anyway.
   const std::string gen_pfx = prefix + "_gen";
   chunk_seq raw =
-      ChunkSequenceOps::tabulate<src_edge>(2 * m_gen, gen_pfx, [&](size_t i) {
+      plaid::tabulate<src_edge>(2 * m_gen, gen_pfx, [&](size_t i) {
         const bool reversed = (i >= m_gen);
         auto [u, v] =
             detail::rmat_edge_at(reversed ? i - m_gen : i, logn, a, b, c);
@@ -181,9 +181,9 @@ inline chunk_csr external_rmat_symmetric_graph(size_t n_req, size_t m_req,
 
   // ── 2. CSR order ─────────────────────────────────────────────────────────
   const std::string srt_pfx = prefix + "_srt";
-  chunk_seq sorted = ChunkSequenceOps::direct_sample_sort<src_edge>(
+  chunk_seq sorted = plaid::direct_sample_sort<src_edge>(
       raw, std::less<>{}, srt_pfx);
-  ChunkSequenceOps::sa_detail::sweep(gen_pfx);
+  plaid::sa_detail::sweep(gen_pfx);
 
   // The forward halo below is only a correct "logical successor" if no chunk
   // is empty.  direct_sample_sort never emits one (an empty bucket
@@ -193,7 +193,7 @@ inline chunk_csr external_rmat_symmetric_graph(size_t n_req, size_t m_req,
     CHECK(ch.used > 0) << "external_rmat: empty chunk in sorted edge list";
 
   // ── 3+4. dedup, drop self-loops, project to CSR rows, count degrees ─────
-  graph.edges = ChunkSequenceOps::DensePackStream<src_edge, weighted_edge>(
+  graph.edges = plaid::DensePackStream<src_edge, weighted_edge>(
       sorted, prefix, /*halo=*/1,
       [&](const src_edge* in, size_t cnt, uint64_t /*gpos*/,
           const src_edge* halo_buf, size_t halo_n) {
@@ -229,7 +229,7 @@ inline chunk_csr external_rmat_symmetric_graph(size_t n_req, size_t m_req,
         flush_run();
         return out;
       });
-  ChunkSequenceOps::sa_detail::sweep(srt_pfx);
+  plaid::sa_detail::sweep(srt_pfx);
 
   // degree_scan[v+1] holds deg(v); an inclusive scan over [1, n] turns it
   // into the exclusive prefix sum chunk_csr expects (row v is

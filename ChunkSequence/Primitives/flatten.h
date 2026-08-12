@@ -11,7 +11,7 @@
 #include "utils/file_utils.h"
 #include "utils/unordered_file_writer.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 inline chunk_seq flatten(const std::vector<chunk_seq>& chunk_sequences) {
   size_t count = 0;
@@ -70,6 +70,6 @@ inline chunk_seq flatten(const parlay::sequence<chunk_seq>& chunk_sequences) {
   return chunker;
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif

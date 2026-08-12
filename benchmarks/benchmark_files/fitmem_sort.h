@@ -14,7 +14,7 @@
 #include "ChunkSequence/Primitives/materialize.h"
 #include "ChunkSequence/Primitives/scan_find.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 // Out-of-core sample sort, one bucketing level only.  Unlike the fully external
 // sample_sort (external_samplesort.h), this variant assumes each bucket, after
 // a single round of oversampled-pivot partitioning, is small enough to fit in
@@ -31,10 +31,10 @@ chunk_seq fitmem_sort(chunk_seq& seq, Less less1 = {}) {
   n /= sizeof(T);
 
   if (n < (2 << 12)) {
-    auto i = ChunkSequenceOps::materialize<T>(seq);
+    auto i = plaid::materialize<T>(seq);
 
     parlay::sort_inplace(i);
-    return ChunkSequenceOps::to_chunk_seq(i, "fs_base_" + tag);
+    return plaid::to_chunk_seq(i, "fs_base_" + tag);
   }
 
   int sample_size = 31;
@@ -73,7 +73,7 @@ chunk_seq fitmem_sort(chunk_seq& seq, Less less1 = {}) {
   // rank into the count sort drops that entire pass -- seq is now read once
   // here, not twice.
   std::vector<chunk_seq> externalSequenceVector(num_buckets);
-  ChunkSequenceOps::count_sort_by_key<T>(
+  plaid::count_sort_by_key<T>(
       seq, num_buckets, externalSequenceVector,
       [&](T e) { return ss.rank(e, less1); }, "fs_bucket_" + tag);
 
@@ -81,15 +81,15 @@ chunk_seq fitmem_sort(chunk_seq& seq, Less less1 = {}) {
   // write the sorted run back out.  No recursion (that is external_samplesort's
   // job).
   parlay::parallel_for(0, num_buckets, [&](long i) {
-    auto v = ChunkSequenceOps::materialize<T>(externalSequenceVector[i]);
+    auto v = plaid::materialize<T>(externalSequenceVector[i]);
     parlay::sort_inplace(v, less1);
-    externalSequenceVector[i] = ChunkSequenceOps::to_chunk_seq(
+    externalSequenceVector[i] = plaid::to_chunk_seq(
         v, "fs_sorted_" + tag + "_" + std::to_string(i));
   });
 
-  return ChunkSequenceOps::flatten(externalSequenceVector);
+  return plaid::flatten(externalSequenceVector);
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif

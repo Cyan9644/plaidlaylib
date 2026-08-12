@@ -16,7 +16,7 @@
 #include "ChunkSequence/Primitives/chunk_seq.h"
 #include "ChunkSequence/Primitives/external_engine.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 /**
  * Out-of-core word count -- the streaming, hash-fold analogue of parlaylib's
@@ -199,6 +199,6 @@ SortedByCount(const WordCounts& counts) {
     return pairs;
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_WORD_COUNT_H

@@ -1,30 +1,18 @@
-// Correctness + placement test for external_samplesort.h's drive-striped
-// count_sort bucketing.
+// Correctness + placement test for external_samplesort.h's sample_sort.
 //
-// sample_sort's bucketing step routes through BucketWriter, which by default
-// puts each bucket's entire on-disk data on exactly one drive (bucket b ->
-// drive b % num_drives); reading a contiguous slice of the sorted output
-// (e.g. its lowest-key bucket) is then throttled to that one drive. Passing
-// disk_span = GetSSDList().size() spreads each bucket across every drive
-// instead (see BucketWriter's disk_span doc in bucketed_file_writer.h).
-// direct_sample_sort and Peter's sort are untouched by this change and are
-// not exercised here.
+// sample_sort's bucketing step now routes through group_by_index
+// (Primitives/group_by.h), which writes one file per drive shared by every
+// bucket -- so, unlike the old count_sort/BucketWriter substrate, a bucket's
+// data is *always* spread across every drive; there is no longer a disk_span
+// knob to compare plain vs. striped placement against.
 //
-// This test checks, for sample_sort at disk_span=1 (default) and
-// disk_span=GetSSDList().size():
+// This test checks:
 //   1. the output is fully sorted and element-for-element identical to
 //      parlay::sort on the same (distinct) keys.
-// and, on the placement side, that the striped run's output touches
-// (strictly) more distinct drives overall than the plain run's -- the
-// regression check a future change that quietly collapsed shards back to 1
-// would fail.  This compares whole-output drive counts rather than assuming
-// anything about individual bucket sizes: with only a handful of pivots,
-// GetPivots/GetSampleSize can produce quite unevenly sized buckets, so a
-// windowed "first bucket's worth of chunks" check would be flaky; a plain
-// run's WHOLE output can only ever touch at most num_buckets drives (one per
-// bucket), while a striped one touches up to num_buckets*disk_span -- so
-// "striped touched strictly more drives than plain, for the same n" holds
-// regardless of how the buckets happened to split.
+//   2. on the placement side, that the output touches more than one distinct
+//      drive when more than one drive is available -- the regression check a
+//      future change that quietly collapsed the output back onto a single
+//      drive would fail.
 //
 // Exits 0 iff all checks pass.
 
@@ -41,7 +29,7 @@
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
 
-using ChunkSequenceOps::sample_sort;
+using plaid::sample_sort;
 
 // Which drive a chunk's file lives on, by matching its GetFileName-derived
 // path prefix against GetSSDList(); -1 if no drive matches (shouldn't happen).
@@ -91,50 +79,31 @@ int main(int argc, char* argv[]) {
   std::cout << "n=" << n << " drives=" << num_drives << "\n";
 
   bool pass = true;
+  const std::string prefix = "sst_prim_in";
 
-  struct Case {
-    const char* name;
-    size_t disk_span;
-    std::string prefix;
-  };
-  std::vector<Case> cases = {
-      {"sample_sort (disk_span=1)", 1, "sst_prim_plain"},
-      {"sample_sort (disk_span=drives)", num_drives, "sst_prim_striped"},
-  };
+  chunk_seq in = plaid::tabulate<uint64_t>(n, prefix, key_at);
+  chunk_seq out = sample_sort<uint64_t>(in);
 
-  size_t plain_drives = 0, striped_drives = 0;
+  if (!check_sorted("sample_sort", out, ref)) pass = false;
 
-  for (size_t ci = 0; ci < cases.size(); ci++) {
-    const Case& c = cases[ci];
-    chunk_seq in =
-        ChunkSequenceOps::tabulate<uint64_t>(n, c.prefix + "_in", key_at);
-    chunk_seq out = sample_sort<uint64_t>(in, std::less<>{}, c.disk_span);
-
-    if (!check_sorted(c.name, out, ref)) pass = false;
-
-    const size_t drives = distinct_drives(out);
-    std::cout << "  .. " << c.name << ": output touches " << drives
-              << " distinct drives\n";
-    (ci == 0 ? plain_drives : striped_drives) = drives;
-
-    // Sweep every file this sort touched before the next case runs.
-    // sample_sort has no prefix parameter of its own (it always uses
-    // "ss_bucket_"/"ss_base_" + a process-global counter), so those two
-    // fixed prefixes are swept unconditionally alongside the input's.
-    bench_drives::clear_drives({c.prefix, "ss_bucket_", "ss_base_"});
-  }
-
+  const size_t drives = distinct_drives(out);
+  std::cout << "  .. sample_sort: output touches " << drives
+            << " distinct drives\n";
   if (num_drives > 1) {
-    if (striped_drives <= plain_drives) {
-      std::cout << "  FAIL sample_sort: striped touched " << striped_drives
-                << " drives, plain touched " << plain_drives
-                << " -- expected striped strictly more\n";
+    if (drives <= 1) {
+      std::cout << "  FAIL sample_sort: output touched only " << drives
+                << " drive(s), expected more than 1\n";
       pass = false;
     } else {
-      std::cout << "  OK sample_sort: striped (" << striped_drives
-                << " drives) > plain (" << plain_drives << " drives)\n";
+      std::cout << "  OK sample_sort: output spread across " << drives
+                << " drives\n";
     }
   }
+
+  // Sweep every file this sort touched.  sample_sort has no prefix parameter
+  // of its own (it always uses "ss_bucket_"/"ss_base_" + a process-global
+  // counter), so those two fixed prefixes are swept alongside the input's.
+  bench_drives::clear_drives({prefix, "ss_bucket_", "ss_base_"});
 
   std::cout << (pass ? "PASS" : "FAIL") << "\n";
   return pass ? 0 : 1;

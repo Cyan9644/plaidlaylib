@@ -254,7 +254,7 @@ struct chunk_seq {
   }
 };
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 /**
  * Build a chunk_seq by applying f to every index in [0, n).
@@ -703,6 +703,6 @@ inline chunk_seq from_chunks(const parlay::sequence<chunk>& headers,
   return {chunks};
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_SEQ_H

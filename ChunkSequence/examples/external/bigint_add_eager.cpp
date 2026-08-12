@@ -42,7 +42,7 @@
 #include "utils/logger.h"
 #include "utils/trace_marker.h"
 
-using digit = ChunkSequenceOps::bigint_detail::digit;
+using digit = plaid::bigint_detail::digit;
 
 using Clock = std::chrono::steady_clock;
 static double elapsed(Clock::time_point t0) {
@@ -156,8 +156,8 @@ int main(int argc, char* argv[]) {
   std::cout << "Building two " << n << "-limb operands..." << std::flush;
   trace_mark("build_start");
   auto t0 = Clock::now();
-  chunk_seq a = ChunkSequenceOps::tabulate<digit>(n, a_prefix, limb_a);
-  chunk_seq b = ChunkSequenceOps::tabulate<digit>(n, b_prefix, limb_b);
+  chunk_seq a = plaid::tabulate<digit>(n, a_prefix, limb_a);
+  chunk_seq b = plaid::tabulate<digit>(n, b_prefix, limb_b);
   const double build_s = elapsed(t0);
   trace_mark("build_end");
   std::cout << " done (" << std::fixed << std::setprecision(4) << build_s
@@ -167,7 +167,7 @@ int main(int argc, char* argv[]) {
   std::cout << "Adding (delayed/fused)..." << std::flush;
   trace_mark("op_start");
   t0 = Clock::now();
-  chunk_seq sum = ChunkSequenceOps::ChunkBigIntAdd(a, b, sum_prefix);
+  chunk_seq sum = plaid::ChunkBigIntAdd(a, b, sum_prefix);
   const double add_s = elapsed(t0);
   trace_mark("op_end");
   std::cout << " done\n";
@@ -177,7 +177,7 @@ int main(int argc, char* argv[]) {
   std::cout << "Adding (eager/un-fused)..." << std::flush;
   trace_mark("eager_start");
   t0 = Clock::now();
-  chunk_seq eager = ChunkSequenceOps::ChunkBigIntAddEager(a, b, eager_prefix);
+  chunk_seq eager = plaid::ChunkBigIntAddEager(a, b, eager_prefix);
   const double eager_add_s = elapsed(t0);
   trace_mark("eager_end");
   std::cout << " done\n";
@@ -210,7 +210,7 @@ int main(int argc, char* argv[]) {
     auto a_mem = parlay::tabulate(n, limb_a);  // parlay::sequence<digit>
     auto b_mem = parlay::tabulate(n, limb_b);
     t0 = Clock::now();
-    auto sum_mem = ChunkSequenceOps::bigint_reference::add(a_mem, b_mem);
+    auto sum_mem = plaid::bigint_reference::add(a_mem, b_mem);
     inmem_add_s = elapsed(t0);
     std::cout << "in-mem parlaylib add: " << sum_mem.size() << " limb(s)   "
               << std::setprecision(4) << inmem_add_s << "s\n";

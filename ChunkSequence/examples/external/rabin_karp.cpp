@@ -109,7 +109,7 @@ static char text_at(size_t i) { return (char)('a' + parlay::hash64(i) % 4); }
 // text order.
 static parlay::sequence<uint64_t> in_mem_rabin_karp(
     const parlay::sequence<char>& text, const parlay::sequence<char>& pattern) {
-  namespace d = ChunkSequenceOps::detail;
+  namespace d = plaid::detail;
   const long n = (long)text.size(), m = (long)pattern.size();
   if (m == 0 || n < m) return {};
 
@@ -161,7 +161,7 @@ int main(int argc, char* argv[]) {
   std::cout << "Building " << n << "-char text..." << std::flush;
   trace_mark("build_start");
   auto t0 = Clock::now();
-  chunk_seq text = ChunkSequenceOps::tabulate<char>(n, text_prefix, text_at);
+  chunk_seq text = plaid::tabulate<char>(n, text_prefix, text_at);
   const double build_s = elapsed(t0);
   trace_mark("build_end");
   std::cout << " done (" << std::fixed << std::setprecision(4) << build_s
@@ -172,7 +172,7 @@ int main(int argc, char* argv[]) {
   trace_mark("op_start");
   t0 = Clock::now();
   chunk_seq matches =
-      ChunkSequenceOps::ChunkRabinKarp<char>(text, out_prefix, pattern);
+      plaid::ChunkRabinKarp<char>(text, out_prefix, pattern);
   const double search_s = elapsed(t0);
   trace_mark("op_end");
   std::cout << " done\n";

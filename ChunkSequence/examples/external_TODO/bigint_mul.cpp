@@ -46,7 +46,7 @@
 #include "utils/file_utils.h"
 #include "utils/trace_marker.h"
 
-using limb = ChunkSequenceOps::bigint_detail::digit;
+using limb = plaid::bigint_detail::digit;
 
 using Clock = std::chrono::steady_clock;
 static double elapsed(Clock::time_point t0) {
@@ -125,9 +125,9 @@ int main(int argc, char* argv[]) {
             << std::flush;
   trace_mark("build_start");
   auto t0 = Clock::now();
-  chunk_seq a = ChunkSequenceOps::tabulate<limb>(
+  chunk_seq a = plaid::tabulate<limb>(
       n, a_prefix, [n](size_t i) { return limb_a(i, n); });
-  chunk_seq b = ChunkSequenceOps::tabulate<limb>(
+  chunk_seq b = plaid::tabulate<limb>(
       n, b_prefix, [n](size_t i) { return limb_b(i, n); });
   const double build_s = elapsed(t0);
   trace_mark("build_end");
@@ -137,7 +137,7 @@ int main(int argc, char* argv[]) {
   std::cout << "Multiplying (Karatsuba)..." << std::flush;
   trace_mark("op_start");
   t0 = Clock::now();
-  chunk_seq prod = ChunkSequenceOps::ChunkBigIntMul(a, b, prod_prefix);
+  chunk_seq prod = plaid::ChunkBigIntMul(a, b, prod_prefix);
   const double mul_s = elapsed(t0);
   trace_mark("op_end");
   std::cout << " done\n";
@@ -160,7 +160,7 @@ int main(int argc, char* argv[]) {
     }
     t0 = Clock::now();
     std::vector<limb> prod_mem =
-        ChunkSequenceOps::bigint_detail::in_mem_karatsuba(a_mem, b_mem);
+        plaid::bigint_detail::in_mem_karatsuba(a_mem, b_mem);
     inmem_mul_s = elapsed(t0);
     std::cout << "in-mem karatsuba (reference): " << prod_mem.size()
               << " limb(s)   " << std::setprecision(4) << inmem_mul_s << "s\n";
@@ -188,6 +188,6 @@ int main(int argc, char* argv[]) {
   cleanup_prefix(a_prefix);
   cleanup_prefix(b_prefix);
   cleanup_prefix(prod_prefix);
-  cleanup_prefix(ChunkSequenceOps::zero_chunk_prefix());
+  cleanup_prefix(plaid::zero_chunk_prefix());
   return agree ? 0 : 1;
 }

@@ -1,6 +1,6 @@
-// Benchmark: ChunkSequenceOps::sample_sort (pivot sampling via the shared
-// ChunkSequenceOps::sample<T> helper, ExternalPrimitives/chunk_sample.h) vs
-// ChunkSequenceOps::sample_sort_random (the pre-refactor sibling kept in
+// Benchmark: plaid::sample_sort (pivot sampling via the shared
+// plaid::sample<T> helper, ExternalPrimitives/chunk_sample.h) vs
+// plaid::sample_sort_random (the pre-refactor sibling kept in
 // external_samplesort.h for comparison), head-to-head on the identical key
 // multiset.
 //
@@ -8,7 +8,7 @@
 // flatten pipeline and derive the same sample count from the same
 // min/max_sample_size math; the only difference is how the oversampled pivot
 // candidates are drawn:
-//   sample_sort        -- ChunkSequenceOps::sample<T>(seq, k): one pass that
+//   sample_sort        -- plaid::sample<T>(seq, k): one pass that
 //                          draws k random logical indices and looks up each
 //                          value via scan_find, returning values directly.
 //   sample_sort_random -- draws the same k random indices, but carries each
@@ -153,16 +153,16 @@ int main(int argc, char* argv[]) {
   sample_sorter.prefixes = kSampleSortPrefixes;
   sample_sorter.build = [&] {
     auto t0 = Clock::now();
-    sample_sort_in = ChunkSequenceOps::tabulate<uint64_t>(n, "sspv_in", key_at);
+    sample_sort_in = plaid::tabulate<uint64_t>(n, "sspv_in", key_at);
     return elapsed(t0);
   };
   sample_sorter.sort = [&] {
     auto t0 = Clock::now();
-    sample_sort_out = ChunkSequenceOps::sample_sort<uint64_t>(sample_sort_in);
+    sample_sort_out = plaid::sample_sort<uint64_t>(sample_sort_in);
     return elapsed(t0);
   };
   sample_sorter.read_back = [&] {
-    auto s = ChunkSequenceOps::materialize<uint64_t>(sample_sort_out);
+    auto s = plaid::materialize<uint64_t>(sample_sort_out);
     return std::vector<uint64_t>(s.begin(), s.end());
   };
 
@@ -173,17 +173,17 @@ int main(int argc, char* argv[]) {
   random_sorter.build = [&] {
     auto t0 = Clock::now();
     sample_sort_random_in =
-        ChunkSequenceOps::tabulate<uint64_t>(n, "ssrd_in", key_at);
+        plaid::tabulate<uint64_t>(n, "ssrd_in", key_at);
     return elapsed(t0);
   };
   random_sorter.sort = [&] {
     auto t0 = Clock::now();
     sample_sort_random_out =
-        ChunkSequenceOps::sample_sort_random<uint64_t>(sample_sort_random_in);
+        plaid::sample_sort_random<uint64_t>(sample_sort_random_in);
     return elapsed(t0);
   };
   random_sorter.read_back = [&] {
-    auto s = ChunkSequenceOps::materialize<uint64_t>(sample_sort_random_out);
+    auto s = plaid::materialize<uint64_t>(sample_sort_random_out);
     return std::vector<uint64_t>(s.begin(), s.end());
   };
 

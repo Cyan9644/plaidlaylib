@@ -45,7 +45,7 @@
 #include "parlay/primitives.h"
 #include "utils/file_utils.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 namespace bigint_detail {
 
@@ -172,8 +172,8 @@ constexpr size_t EPC = CHUNK_SIZE / sizeof(digit);  // ELEMS_PER_CHUNK
 // prepend_zero_chunks (metadata shift by k full chunks) and append_zero_chunk
 // (guard-limb append) live in chunk_cut.h alongside cut_by_chunk; pull them
 // into this namespace for unqualified use.
-using ChunkSequenceOps::append_zero_chunk;
-using ChunkSequenceOps::prepend_zero_chunks;
+using plaid::append_zero_chunk;
+using plaid::prepend_zero_chunks;
 
 // Default DRAM budget for the base case: a small multiple of the working set of
 // an in-memory Karatsuba, kept deliberately small so the streaming out-of-core
@@ -226,7 +226,7 @@ inline chunk_seq canonicalize(const chunk_seq& s) {
 // ~s as a chunk_seq (one fused pass), for building subtraction via
 // ChunkBigIntAdd.
 inline chunk_seq complement(Ctx& ctx, const chunk_seq& s) {
-  namespace d = ChunkSequenceOps::delayed;
+  namespace d = plaid::delayed;
   return d::force(d::map(d::delay<digit>(s), [](digit x) { return (digit)~x; }),
                   ctx.fresh("cmp"));
 }
@@ -242,7 +242,7 @@ inline chunk_seq karatsuba(Ctx& ctx, const chunk_seq& a, const chunk_seq& b) {
   size_t na = size<digit>(a), nb = size<digit>(b);
   if (na < nb) return karatsuba(ctx, b, a);  // keep a the longer
   if (nb == 0)
-    return ChunkSequenceOps::tabulate<digit>(1, ctx.fresh("zero"),
+    return plaid::tabulate<digit>(1, ctx.fresh("zero"),
                                              [](size_t) { return (digit)0; });
 
   // Base case: the pair fits DRAM, or the longer operand is <= 2 chunks.  The
@@ -256,7 +256,7 @@ inline chunk_seq karatsuba(Ctx& ctx, const chunk_seq& a, const chunk_seq& b) {
     std::vector<digit> bv = b.to_vector<digit>();
     std::vector<digit> rv = bigint_detail::in_mem_karatsuba(av, bv);
     if (rv.back() >> 63) rv.push_back(0);  // keep canonical
-    return ChunkSequenceOps::to_chunk_seq(rv, ctx.fresh("bc"));
+    return plaid::to_chunk_seq(rv, ctx.fresh("bc"));
   }
 
   // Split on a chunk boundary of the LONGER operand.  a has >= 2 chunks here
@@ -301,7 +301,7 @@ inline chunk_seq karatsuba(Ctx& ctx, const chunk_seq& a, const chunk_seq& b) {
 // negate(x) = ~x + 1 (two's-complement).  Reuses ChunkBigIntAdd's extra_one.
 inline chunk_seq negate(Ctx& ctx, const chunk_seq& x,
                         const std::string& prefix) {
-  chunk_seq zero1 = ChunkSequenceOps::tabulate<digit>(
+  chunk_seq zero1 = plaid::tabulate<digit>(
       1, ctx.fresh("nz"), [](size_t) { return (digit)0; });
   return ChunkBigIntAdd(complement(ctx, x), zero1, prefix, /*extra_one=*/true);
 }
@@ -327,7 +327,7 @@ inline chunk_seq ChunkBigIntMul(const chunk_seq& a, const chunk_seq& b,
 
   const size_t na = size<digit>(a), nb = size<digit>(b);
   if (na == 0 || nb == 0)
-    return ChunkSequenceOps::tabulate<digit>(1, result_prefix,
+    return plaid::tabulate<digit>(1, result_prefix,
                                              [](size_t) { return (digit)0; });
 
   Ctx ctx;
@@ -356,6 +356,6 @@ inline chunk_seq ChunkBigIntMul(const chunk_seq& a, const chunk_seq& b,
   return out;
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_BIGINT_MUL_H

@@ -1,5 +1,5 @@
 // Benchmark: our *direct-I/O* out-of-core sample sort (direct_samplesort.h,
-// ChunkSequenceOps::direct_sample_sort — chunk_seq in/out, but talking to
+// plaid::direct_sample_sort — chunk_seq in/out, but talking to
 // io_uring/O_DIRECT itself) vs Peter's out-of-core sample sort
 // (peter_samplesort/peter_samplesort.h, SampleSort<T> on his FileInfo /
 // scatter-gather model), head-to-head on the identical key multiset.
@@ -10,7 +10,7 @@
 // both to separate "the algorithm" from "the substrate": same algorithm, same
 // data, same drives; the only difference is what our side is built on.  Both
 // sort keys key_at(i)=parlay::hash64(i) for i in [0,n): our side builds them as
-// a chunk_seq via ChunkSequenceOps::tabulate and Peter's side builds them as
+// a chunk_seq via plaid::tabulate and Peter's side builds them as
 // raw per-drive files (peter_shim::BuildInput) in the layout his FindFiles
 // expects.  Because the keys are distinct the sorted order is unique, so the
 // two outputs must agree exactly (element-wise cross-check when the inputs fit
@@ -188,16 +188,16 @@ int main(int argc, char* argv[]) {
   sorters[1].prefixes = kOurPrefixes;
   sorters[1].build = [&] {
     auto t0 = Clock::now();
-    ext_in_seq = ChunkSequenceOps::tabulate<uint64_t>(n, ext_in, key_at);
+    ext_in_seq = plaid::tabulate<uint64_t>(n, ext_in, key_at);
     return elapsed(t0);
   };
   sorters[1].sort = [&] {
     auto t0 = Clock::now();
-    ext_out_seq = ChunkSequenceOps::direct_sample_sort<uint64_t>(ext_in_seq);
+    ext_out_seq = plaid::direct_sample_sort<uint64_t>(ext_in_seq);
     return elapsed(t0);
   };
   sorters[1].read_back = [&] {
-    auto s = ChunkSequenceOps::materialize<uint64_t>(ext_out_seq);
+    auto s = plaid::materialize<uint64_t>(ext_out_seq);
     return std::vector<uint64_t>(s.begin(), s.end());
   };
 

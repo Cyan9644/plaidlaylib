@@ -42,9 +42,9 @@
 // ceil(chunk_len(ci)/epc) physical output pieces instead of assuming exactly
 // one -- kept local to this example rather than changing delayed::force itself.
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
-namespace cd = ChunkSequenceOps::delayed;
+namespace cd = plaid::delayed;
 
 namespace detail {
 
@@ -162,7 +162,7 @@ chunk_seq materialize_wide(const D& d, const std::string& result_prefix) {
 inline std::vector<uint64_t> quickhull_ext_lazy(const chunk_seq& pts, hpoint l,
                                                 hpoint r, size_t budget_elems,
                                                 const std::string& scratch) {
-  const size_t n = ChunkSequenceOps::size<hpoint>(pts);
+  const size_t n = plaid::size<hpoint>(pts);
   if (n == 0) return {};
 
   // Base case: identical to quickhull_ext's -- materialize and finish in DRAM.
@@ -220,7 +220,7 @@ inline std::vector<uint64_t> UpperHullLazyFilter(
     const chunk_seq& points, size_t dram_budget_bytes,
     const std::string& scratch_prefix = "ch_lazy_scratch") {
   detail::ext_split_counter().store(0, std::memory_order_relaxed);
-  if (ChunkSequenceOps::size<hpoint>(points) == 0) return {};
+  if (plaid::size<hpoint>(points) == 0) return {};
 
   const size_t budget_elems =
       std::max<size_t>(1, dram_budget_bytes / sizeof(hpoint));
@@ -249,6 +249,6 @@ inline std::vector<uint64_t> UpperHullLazyFilter(
   return out;
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_CONVEX_HULL_LAZY_FILTER_H

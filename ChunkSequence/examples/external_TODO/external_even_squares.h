@@ -10,7 +10,7 @@
 #include "ChunkSequence/Primitives/filter.h"
 #include "ChunkSequence/Primitives/chunk_seq.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 struct AddMonoid {
   size_t identity = 0;
@@ -20,10 +20,10 @@ inline constexpr AddMonoid add{};
 
 template <typename T>
 size_t sum_of_even_squares_delay(chunk_seq& seq) {
-  return ChunkSequenceOps::delayed::reduce(
-      ChunkSequenceOps::delayed::map(
-          ChunkSequenceOps::delayed::lazy_filter(
-              ChunkSequenceOps::delayed::delay<T>(seq),
+  return plaid::delayed::reduce(
+      plaid::delayed::map(
+          plaid::delayed::lazy_filter(
+              plaid::delayed::delay<T>(seq),
               [&](T element) { return ((element % 2 == 0) ? 1 : 0); }),
           [&](T element) { return element * element; }),
       add);
@@ -31,13 +31,13 @@ size_t sum_of_even_squares_delay(chunk_seq& seq) {
 
 template <typename T>
 size_t sum_of_even_squares_eager(chunk_seq& seq) {
-  chunk_seq filtered = ChunkSequenceOps::ChunkFilter<T>(
+  chunk_seq filtered = plaid::ChunkFilter<T>(
       seq, "even_squares_tmp",
       [&](T element) { return ((element % 2 == 0) ? 1 : 0); });
 
-  return ChunkSequenceOps::delayed::reduce(
-      ChunkSequenceOps::delayed::map(
-          ChunkSequenceOps::delayed::delay<T>(filtered),
+  return plaid::delayed::reduce(
+      plaid::delayed::map(
+          plaid::delayed::delay<T>(filtered),
           [&](T element) { return element * element; }),
       add);
 }
@@ -65,6 +65,6 @@ size_t sum_of_even_squares_parlay_eager(parlay::sequence<T> seq) {
       [&](T k) { return k * k; }));
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif

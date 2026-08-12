@@ -95,7 +95,7 @@ int main(int argc, char* argv[]) {
   trace_mark("build_start");
   auto t0 = Clock::now();
   chunk_seq input =
-      ChunkSequenceOps::tabulate<uint64_t>(n, in_prefix, value_at);
+      plaid::tabulate<uint64_t>(n, in_prefix, value_at);
   const double build_s = elapsed(t0);
   trace_mark("build_end");
   std::cout << " done (" << std::fixed << std::setprecision(4) << build_s
@@ -108,7 +108,7 @@ int main(int argc, char* argv[]) {
   trace_mark("eager_op_start");
   t0 = Clock::now();
   const size_t eager_result =
-      ChunkSequenceOps::sum_of_even_squares_eager<uint64_t>(input);
+      plaid::sum_of_even_squares_eager<uint64_t>(input);
   const double eager_op_s = elapsed(t0);
   trace_mark("eager_op_end");
   const double eager_gb_s = to_gb(n * sizeof(uint64_t)) / eager_op_s;
@@ -125,7 +125,7 @@ int main(int argc, char* argv[]) {
   trace_mark("delay_op_start");
   t0 = Clock::now();
   const size_t delay_result =
-      ChunkSequenceOps::sum_of_even_squares_delay<uint64_t>(input);
+      plaid::sum_of_even_squares_delay<uint64_t>(input);
   const double delay_op_s = elapsed(t0);
   trace_mark("delay_op_end");
   const double delay_gb_s = to_gb(n * sizeof(uint64_t)) / delay_op_s;
@@ -145,7 +145,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Running in-memory eager..." << std::flush;
     t0 = Clock::now();
     inmem_eager_result =
-        ChunkSequenceOps::sum_of_even_squares_parlay_eager<uint64_t>(mem_input);
+        plaid::sum_of_even_squares_parlay_eager<uint64_t>(mem_input);
     inmem_eager_op_s = elapsed(t0);
     std::cout << " done (" << std::setprecision(4) << inmem_eager_op_s
               << "s)\n";
@@ -153,7 +153,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Running in-memory delayed..." << std::flush;
     t0 = Clock::now();
     inmem_delay_result =
-        ChunkSequenceOps::sum_of_even_squares_parlay_delayed<uint64_t>(
+        plaid::sum_of_even_squares_parlay_delayed<uint64_t>(
             mem_input);
     inmem_delay_op_s = elapsed(t0);
     std::cout << " done (" << std::setprecision(4) << inmem_delay_op_s
@@ -163,7 +163,7 @@ int main(int argc, char* argv[]) {
               << std::flush;
     t0 = Clock::now();
     inmem_actually_delay_result =
-        ChunkSequenceOps::sum_of_even_squares_parlay_actually_delayed<uint64_t>(
+        plaid::sum_of_even_squares_parlay_actually_delayed<uint64_t>(
             mem_input);
     inmem_actually_delay_op_s = elapsed(t0);
     std::cout << " done (" << std::setprecision(4) << inmem_actually_delay_op_s

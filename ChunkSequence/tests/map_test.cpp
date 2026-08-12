@@ -78,7 +78,7 @@ bool run_test(const std::string& name, const chunk_seq& input,
   std::cout << "  " << name << " ... " << std::flush;
 
   const chunk_seq output =
-      ChunkSequenceOps::ChunkMap<uint64_t, R>(input, result_prefix, f);
+      plaid::ChunkMap<uint64_t, R>(input, result_prefix, f);
 
   // Assert output files are on configured SSD mounts.
   {
@@ -156,7 +156,7 @@ int main(int argc, char* argv[]) {
   using T = uint64_t;
 
   std::cout << "Building iota(" << n << ")...\n" << std::flush;
-  const chunk_seq input = ChunkSequenceOps::iota(n);
+  const chunk_seq input = plaid::iota(n);
   std::cout << input.chunks.size() << " chunks across " << GetSSDList().size()
             << " drives\n\n";
 

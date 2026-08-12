@@ -36,7 +36,7 @@
 // 2. The end of the requested chunk may not be aligned, in which case we'll
 // again read that chunk and create a new chunk header for it
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 inline chunk_seq cut_by_chunk(const chunk_seq& seq, size_t chunk_begin,
                               size_t chunk_end) {
@@ -134,7 +134,7 @@ inline chunk_seq append_zero_chunk(const chunk_seq& seq, size_t used) {
 template <typename T>
 chunk_seq sequential_cut_no_compression(const chunk_seq& seq,
                                         size_t start_index, size_t end_index) {
-  // if(end_index > (ChunkSequenceOps::size(seq) * CHUNK_SIZE / sizeof(T)) ||
+  // if(end_index > (plaid::size(seq) * CHUNK_SIZE / sizeof(T)) ||
   // start_index >= end_index){ //start_index is size_t unsigned
   if (end_index > (size<T>(seq)) ||
       start_index >= end_index) {  // start_index is size_t unsigned
@@ -265,6 +265,6 @@ chunk_seq sequential_cut_no_compression(const chunk_seq& seq,
   return sequence;
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif

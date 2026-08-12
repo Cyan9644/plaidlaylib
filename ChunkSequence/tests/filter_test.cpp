@@ -40,12 +40,12 @@ static bool run_order_test(const std::string& name, size_t n,
             << ")\n"
             << std::flush;
 
-  chunk_seq seq = ChunkSequenceOps::iota(n);
+  chunk_seq seq = plaid::iota(n);
 
   const std::string out_prefix = "filter_test_out";
   const std::string consolidated = "filter_test_order_consolidated";
   chunk_seq filtered =
-      ChunkSequenceOps::ChunkFilter<uint64_t>(seq, out_prefix, pred);
+      plaid::ChunkFilter<uint64_t>(seq, out_prefix, pred);
 
   bool pass = true;
 
@@ -126,11 +126,11 @@ static bool run_filter_test(const std::string& name, size_t n,
             << ")\n"
             << std::flush;
 
-  chunk_seq seq = ChunkSequenceOps::iota(n);
+  chunk_seq seq = plaid::iota(n);
 
   const std::string out_prefix = "filter_test_out";
   chunk_seq filtered =
-      ChunkSequenceOps::ChunkFilter<uint64_t>(seq, out_prefix, pred);
+      plaid::ChunkFilter<uint64_t>(seq, out_prefix, pred);
 
   bool pass = true;
 
@@ -189,7 +189,7 @@ static bool run_filter_test(const std::string& name, size_t n,
   // 5. Sum via ChunkReduce (skip for empty output to avoid reducing empty seq).
   if (expected_count > 0) {
     const uint64_t actual_sum =
-        ChunkSequenceOps::ChunkReduce<uint64_t>(filtered, SumMonoid{});
+        plaid::ChunkReduce<uint64_t>(filtered, SumMonoid{});
     if (actual_sum != expected_sum) {
       std::cout << "    FAIL sum: got=" << actual_sum
                 << " expected=" << expected_sum << "\n";

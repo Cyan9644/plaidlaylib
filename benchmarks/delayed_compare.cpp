@@ -6,7 +6,7 @@
 //     technique in RAM); skipped once the input exceeds a RAM budget;
 //   * chunk-eager                — ChunkMap/ChunkReduce, round-tripping every
 //     intermediate through the SSDs;
-//   * chunk-delayed              — ChunkSequenceOps::delayed, fused.
+//   * chunk-delayed              — plaid::delayed, fused.
 // Plus a raw-read ceiling (a bare ChunkReduce = one read pass).
 //
 // Pipelines (data generated outside the timed region):
@@ -44,7 +44,7 @@
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
 
-namespace cd = ChunkSequenceOps::delayed;
+namespace cd = plaid::delayed;
 
 // Chunk-side monoid (operator()-style, as ChunkReduce/cd::reduce expect).
 struct SumMonoid {
@@ -110,7 +110,7 @@ int main(int argc, char* argv[]) {
 
   // ── data generation (outside every timed region) ─────────────────────────
   std::cout << "Generating chunk_seq iota(" << n << ")..." << std::flush;
-  const chunk_seq cseq = ChunkSequenceOps::iota(n);
+  const chunk_seq cseq = plaid::iota(n);
   const size_t in_bytes = chunk_seq_bytes(cseq);
   std::cout << " " << cseq.chunks.size() << " chunks, " << to_gb(in_bytes)
             << " GB\n";
@@ -137,7 +137,7 @@ int main(int argc, char* argv[]) {
   std::cout << "--- raw read: ChunkReduce(sum) — device-read ceiling ---\n";
   {
     auto t0 = Clock::now();
-    uint64_t r = ChunkSequenceOps::ChunkReduce<uint64_t>(cseq, SumMonoid{});
+    uint64_t r = plaid::ChunkReduce<uint64_t>(cseq, SumMonoid{});
     raw_s = elapsed(t0);
     (void)r;
     print_row("raw read", in_bytes, raw_s);
@@ -148,8 +148,8 @@ int main(int argc, char* argv[]) {
   {
     auto t0 = Clock::now();
     e_mr = 0;
-    uint64_t r = ChunkSequenceOps::ChunkReduce<uint64_t>(
-        ChunkSequenceOps::ChunkMap<uint64_t>(cseq, "bw_dl_m", add1),
+    uint64_t r = plaid::ChunkReduce<uint64_t>(
+        plaid::ChunkMap<uint64_t>(cseq, "bw_dl_m", add1),
         SumMonoid{});
     e_mr = elapsed(t0);
     cleanup_prefix("bw_dl_m");
@@ -177,9 +177,9 @@ int main(int argc, char* argv[]) {
   std::cout << "\n--- map(x+1) | map(2x) | reduce(sum) ---\n";
   {
     auto t0 = Clock::now();
-    mmr_e = ChunkSequenceOps::ChunkReduce<uint64_t>(
-        ChunkSequenceOps::ChunkMap<uint64_t>(
-            ChunkSequenceOps::ChunkMap<uint64_t>(cseq, "bw_dl_m1", add1),
+    mmr_e = plaid::ChunkReduce<uint64_t>(
+        plaid::ChunkMap<uint64_t>(
+            plaid::ChunkMap<uint64_t>(cseq, "bw_dl_m1", add1),
             "bw_dl_m2", mul2),
         SumMonoid{});
     e_mmr = elapsed(t0);
@@ -210,10 +210,10 @@ int main(int argc, char* argv[]) {
   std::cout << "\n--- force(map(x+1) | map(2x)) — write-terminated ---\n";
   {
     auto t0 = Clock::now();
-    chunk_seq m1 = ChunkSequenceOps::ChunkMap<uint64_t>(cseq, "bw_dl_g1", add1);
-    chunk_seq m2 = ChunkSequenceOps::ChunkMap<uint64_t>(m1, "bw_dl_g2", mul2);
+    chunk_seq m1 = plaid::ChunkMap<uint64_t>(cseq, "bw_dl_g1", add1);
+    chunk_seq m2 = plaid::ChunkMap<uint64_t>(m1, "bw_dl_g2", mul2);
     e_f = elapsed(t0);
-    uint64_t f_e = ChunkSequenceOps::ChunkReduce<uint64_t>(
+    uint64_t f_e = plaid::ChunkReduce<uint64_t>(
         m2, SumMonoid{});  // verify (untimed)
     cleanup_prefix("bw_dl_g1");
     cleanup_prefix("bw_dl_g2");
@@ -223,7 +223,7 @@ int main(int argc, char* argv[]) {
     chunk_seq out =
         cd::force(cd::map(cd::map(cd::delay(cseq), add1), mul2), "bw_dl_gf");
     d_f = elapsed(t1);
-    uint64_t f_d = ChunkSequenceOps::ChunkReduce<uint64_t>(out, SumMonoid{});
+    uint64_t f_d = plaid::ChunkReduce<uint64_t>(out, SumMonoid{});
     cleanup_prefix("bw_dl_gf");
     print_row("chunk-delayed", in_bytes, d_f);
     check("force  eager == delayed", f_e == f_d);

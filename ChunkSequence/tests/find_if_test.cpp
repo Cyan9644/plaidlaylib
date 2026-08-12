@@ -27,7 +27,7 @@ int main(int argc, char* argv[]) {
   const size_t n = (argc > 1) ? std::stoull(argv[1]) : 5'000'000ULL;
 
   std::cout << "Building iota(" << n << ")...\n" << std::flush;
-  const chunk_seq input = ChunkSequenceOps::iota(n);
+  const chunk_seq input = plaid::iota(n);
   std::cout << input.chunks.size() << " chunks across " << GetSSDList().size()
             << " drives\n\n";
 
@@ -39,21 +39,21 @@ int main(int argc, char* argv[]) {
   if (n > 524'289) targets.push_back(524'289);
   for (size_t t : targets) {
     all_pass &= report("find_if(== " + std::to_string(t) + ")",
-                       ChunkSequenceOps::ChunkFindIf<uint64_t>(
+                       plaid::ChunkFindIf<uint64_t>(
                            input, [t](uint64_t x) { return x == t; }),
                        t);
   }
 
   // Predicate that is never satisfied -> not found -> returns n.
   all_pass &= report("find_if(no match)",
-                     ChunkSequenceOps::ChunkFindIf<uint64_t>(
+                     plaid::ChunkFindIf<uint64_t>(
                          input, [n](uint64_t x) { return x >= n; }),
                      n);
 
   // Predicate satisfied by many elements -> first satisfying index.
   // x >= n/2 first holds at x == n/2, i.e. position n/2.
   all_pass &= report("find_if(>= n/2)",
-                     ChunkSequenceOps::ChunkFindIf<uint64_t>(
+                     plaid::ChunkFindIf<uint64_t>(
                          input, [n](uint64_t x) { return x >= n / 2; }),
                      n / 2);
 

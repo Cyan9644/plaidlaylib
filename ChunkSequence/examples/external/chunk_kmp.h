@@ -12,7 +12,7 @@
 #include "configs.h"
 #include "parlay/sequence.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 namespace detail {
 
 /**
@@ -100,6 +100,6 @@ chunk_seq ChunkKmp(const chunk_seq& seq, const std::string& result_prefix,
       });
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_KMP_H

@@ -65,7 +65,7 @@ int main(int argc, char* argv[]) {
   const size_t n = (argc > 1) ? std::stoull(argv[1]) : 5'000'000ULL;
 
   std::cout << "Building iota(" << n << ")...\n" << std::flush;
-  const chunk_seq input = ChunkSequenceOps::iota(n);
+  const chunk_seq input = plaid::iota(n);
   std::cout << input.chunks.size() << " chunks across " << GetSSDList().size()
             << " drives\n\n";
 
@@ -74,24 +74,24 @@ int main(int argc, char* argv[]) {
   // sum of 0+1+…+(n-1) = n*(n-1)/2
   all_pass &=
       report("sum  0+1+…+(n-1)",
-             ChunkSequenceOps::ChunkReduce<uint64_t>(input, SumMonoid{}),
+             plaid::ChunkReduce<uint64_t>(input, SumMonoid{}),
              (uint64_t)(n - 1) * n / 2);
 
   // max element of iota(n) = n-1
   all_pass &=
       report("max  element",
-             ChunkSequenceOps::ChunkReduce<uint64_t>(input, MaxMonoid{}),
+             plaid::ChunkReduce<uint64_t>(input, MaxMonoid{}),
              (uint64_t)(n - 1));
 
   // min element of iota(n) = 0
   all_pass &=
       report("min  element",
-             ChunkSequenceOps::ChunkReduce<uint64_t>(input, MinMonoid{}), 0ULL);
+             plaid::ChunkReduce<uint64_t>(input, MinMonoid{}), 0ULL);
 
   // XOR of 0^1^…^(n-1), computed via closed-form prefix formula
   all_pass &=
       report("xor  0^1^…^(n-1)",
-             ChunkSequenceOps::ChunkReduce<uint64_t>(input, XorMonoid{}),
+             plaid::ChunkReduce<uint64_t>(input, XorMonoid{}),
              xor_prefix((uint64_t)(n - 1)));
 
   std::cout << "\n" << (all_pass ? "ALL PASS" : "SOME FAILED") << "\n";

@@ -108,7 +108,7 @@ bool run_test(const std::string& name, const chunk_seq& input,
   // Plain variables (not a structured binding) so `output` can be captured by
   // the parlay::parallel_for lambda below under -std=c++17.
   const auto scan_result =
-      ChunkSequenceOps::ChunkScan<uint64_t, R>(input, result_prefix, monoid);
+      plaid::ChunkScan<uint64_t, R>(input, result_prefix, monoid);
   const chunk_seq& output = scan_result.first;
   const R total = scan_result.second;
 
@@ -194,7 +194,7 @@ int main(int argc, char* argv[]) {
   const size_t n = (argc > 1) ? std::stoull(argv[1]) : 134'217'728ULL;
 
   std::cout << "Building iota(" << n << ")...\n" << std::flush;
-  const chunk_seq input = ChunkSequenceOps::iota(n);
+  const chunk_seq input = plaid::iota(n);
   std::cout << input.chunks.size() << " chunks across " << GetSSDList().size()
             << " drives\n\n";
 

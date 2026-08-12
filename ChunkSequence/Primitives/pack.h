@@ -12,7 +12,7 @@
 #include "ChunkSequence/Primitives/dense_pack.h"
 #include "parlay/primitives.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 // Retained name for the input-chunk batch size (== the DensePack batch size).
 // chunk_delayed.h's own Pack terminal reads this.
@@ -420,6 +420,6 @@ chunk_seq pack_value(const chunk_seq& seq, const std::string& result_prefix,
   });
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // CHUNK_PACK_H

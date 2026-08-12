@@ -120,7 +120,7 @@
 #include "utils/file_utils.h"
 #include "utils/simple_queue.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 namespace direct_ss {
 
 // ── Peter's constants
@@ -151,12 +151,12 @@ constexpr size_t kReaderQueueSize =
 
 // BucketWriter, bucket_allocator and BucketData now live in
 // ChunkSequence/ExternalPrimitives/bucketed_file_writer.h (namespace
-// ChunkSequenceOps), shared with the primitives-based partitioner. Pull them
+// plaid), shared with the primitives-based partitioner. Pull them
 // into direct_ss so every ds::BucketWriter / ds::bucket_allocator /
 // ds::BucketData reference below keeps resolving unchanged.
-using ChunkSequenceOps::bucket_allocator;
-using ChunkSequenceOps::BucketData;
-using ChunkSequenceOps::BucketWriter;
+using plaid::bucket_allocator;
+using plaid::BucketData;
+using plaid::BucketWriter;
 
 // Elements per chunk, tolerating a non-dense input (e.g. another sort's
 // output): prefix[i] = number of elements in chunks[0..i).  The chunk-grid
@@ -769,6 +769,6 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
     return out;
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // DIRECT_SAMPLESORT_H

@@ -201,7 +201,7 @@ int main(int argc, char* argv[]) {
   trace_mark(("build_start_" + label).c_str());
   std::cout << "Generating chunk_seq iota(" << n << ")..." << std::flush;
   auto tb0 = Clock::now();
-  const chunk_seq cseq = ChunkSequenceOps::iota(n);
+  const chunk_seq cseq = plaid::iota(n);
   const double build_s = elapsed(tb0);
   const size_t in_bytes = chunk_seq_bytes(cseq);
   std::cout << " " << cseq.chunks.size() << " chunks, " << std::fixed
@@ -233,7 +233,7 @@ int main(int argc, char* argv[]) {
 
     trace_mark(("op_start_" + label).c_str());
     auto t0 = Clock::now();
-    chunk_seq out = ChunkSequenceOps::ChunkMap<uint64_t>(cseq, "bw_we_m", f);
+    chunk_seq out = plaid::ChunkMap<uint64_t>(cseq, "bw_we_m", f);
     op_s = elapsed(t0);
     trace_mark(("op_end_" + label).c_str());
 
@@ -241,7 +241,7 @@ int main(int argc, char* argv[]) {
     check("chunk0 readback matches churn()", agree);
 
     if (inmem_ok) {
-      result_sum = ChunkSequenceOps::ChunkReduce<uint64_t>(out, SumMonoid{});
+      result_sum = plaid::ChunkReduce<uint64_t>(out, SumMonoid{});
       const parlay::plus<uint64_t> psum{};
       uint64_t expected = parlay::reduce(parlay::map(A, f), psum);
       check("full-sequence sum matches in-memory", result_sum == expected);
@@ -258,7 +258,7 @@ int main(int argc, char* argv[]) {
     trace_mark(("op_start_" + label).c_str());
     auto t0 = Clock::now();
     for (size_t r = 0; r < std::max<size_t>(R, 1); r++) {
-      uint64_t s = ChunkSequenceOps::ChunkReduce<uint64_t>(cseq, SumMonoid{});
+      uint64_t s = plaid::ChunkReduce<uint64_t>(cseq, SumMonoid{});
       if (r == 0)
         first_round = s;
       else if (s != first_round)

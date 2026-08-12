@@ -1,6 +1,6 @@
 // Old vs new delayed-filter windowing benchmark.
 //
-// ChunkSequenceOps::delayed::filter is a windowed terminal built directly on
+// plaid::delayed::filter is a windowed terminal built directly on
 // for_each_window, so it inherited the node-tree rewrite (407b97d "alt zip
 // impl with nodes, will bench") and the read-dedup Planner/Resolver machinery
 // added on top of it (840ff7e "faster zipping") even though filter itself
@@ -10,13 +10,13 @@
 // overhead as n grows, by timing three variants of the same filter on the
 // same input:
 //
-//   eager        ChunkSequenceOps::ChunkFilter        — current eager
+//   eager        plaid::ChunkFilter        — current eager
 //                (DensePack-based); a device-throughput reference point, the
 //                same role "raw read" plays in delayed_compare.cpp.
-//   old-delayed  ChunkSequenceOps::old_delayed::filter — pre-node-tree design
+//   old-delayed  plaid::old_delayed::filter — pre-node-tree design
 //                (benchmarks/old_filter/old_chunk_delayed.h, frozen at
 //                c5c3406).
-//   new-delayed  ChunkSequenceOps::delayed::filter      — current node/Planner
+//   new-delayed  plaid::delayed::filter      — current node/Planner
 //                windowing.
 //
 // Cross-substrate correctness check on every run (element count + sum of
@@ -44,8 +44,8 @@
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
 
-namespace cd = ChunkSequenceOps::delayed;
-namespace ocd = ChunkSequenceOps::old_delayed;
+namespace cd = plaid::delayed;
+namespace ocd = plaid::old_delayed;
 
 struct SumMonoid {
   uint64_t identity = 0;
@@ -82,7 +82,7 @@ static void print_row(const std::string& label, size_t in_bytes, double secs) {
 static std::pair<size_t, uint64_t> count_and_sum(const chunk_seq& out) {
   size_t count = 0;
   for (const auto& c : out.chunks) count += c.used / sizeof(uint64_t);
-  uint64_t sum = ChunkSequenceOps::ChunkReduce<uint64_t>(out, SumMonoid{});
+  uint64_t sum = plaid::ChunkReduce<uint64_t>(out, SumMonoid{});
   return {count, sum};
 }
 
@@ -93,7 +93,7 @@ int main(int argc, char* argv[]) {
   auto keep_even = [](uint64_t x) { return x % 2 == 0; };
 
   std::cout << "Generating chunk_seq iota(" << n << ")..." << std::flush;
-  const chunk_seq cseq = ChunkSequenceOps::iota(n);
+  const chunk_seq cseq = plaid::iota(n);
   const size_t in_bytes = chunk_seq_bytes(cseq);
   std::cout << " " << cseq.chunks.size() << " chunks, " << std::fixed
             << std::setprecision(3) << to_gb(in_bytes) << " GB\n\n";
@@ -111,7 +111,7 @@ int main(int argc, char* argv[]) {
 
   auto t0 = Clock::now();
   chunk_seq out_eager =
-      ChunkSequenceOps::ChunkFilter<uint64_t>(cseq, "bw_fc_eager", keep_even);
+      plaid::ChunkFilter<uint64_t>(cseq, "bw_fc_eager", keep_even);
   eager_s = elapsed(t0);
   auto [cnt_eager, sum_eager] = count_and_sum(out_eager);
   cleanup_prefix("bw_fc_eager");

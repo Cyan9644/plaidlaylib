@@ -10,7 +10,7 @@
 #include "ChunkSequence/Primitives/chunk_seq.h"
 
 // template<typename T>
-// T ChunkSequenceOps::LinearFind(chunk_seq& seq, size_t index){
+// T plaid::LinearFind(chunk_seq& seq, size_t index){
 // size_t top = seq.chunks.size();
 // for(int i = 0; i < top; i++){
 //     if(index < seq.chunks[i].used){

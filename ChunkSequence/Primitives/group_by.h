@@ -1,5 +1,5 @@
-#ifndef CHUNK_PARTITION_H
-#define CHUNK_PARTITION_H
+#ifndef CHUNK_GROUP_BY_H
+#define CHUNK_GROUP_BY_H
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -7,6 +7,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "ChunkSequence/Primitives/chunk_seq.h"
@@ -19,50 +20,49 @@
 
 namespace plaid {
 
-// key_fn may return this to DROP an element (route it to no bucket), so callers
-// that only keep some elements (e.g. a filter, or quickhull discarding points
-// inside the peak triangle) never pay to copy or write them.
-inline constexpr size_t PARTITION_DROP = SIZE_MAX;
-
 /**
  * Split `seq` into `num_buckets` output chunk_seqs in a SINGLE streaming read
- * pass: each element is routed to bucket `key_fn(elem)` (or dropped if that is
- * PARTITION_DROP).  This is the k-way generalization of ChunkFilter — one
- * filter is `num_buckets == 1` with a keep/drop key_fn — done with **one**
- * long-lived reader and **one** writer instead of k separate filter passes (k
- * reads + k reader/writer setups).  Routing runs across all parlay workers
- * (each polls the shared reader to exhaustion, mirroring
- * ChunkReduce/RemoveWorker).
+ * pass: every element is routed to bucket `key_fn(elem)`.  Architecturally
+ * this is ChunkPartition's exact shape (Primitives/partition.h) — one shared
+ * ChunkSequenceReader<T> polled to exhaustion by every parlay worker; private
+ * per-(worker,bucket) assembly buffers drawn from the reader's pool allocator
+ * so the scatter needs no lock; one emit_chunk mutex guarding only
+ * drive/offset placement and a bucket's chunk-list append; a sequential
+ * post-pass tail-merge of every worker's partial leftovers into
+ * dense-except-last chunks — reimplemented standalone rather than delegated
+ * to, because this is pure GROUPING, not filtering: unlike ChunkPartition
+ * there is no PARTITION_DROP-style sentinel, so every element must land in a
+ * valid bucket (`key_fn` returning a value outside [0, num_buckets) is a
+ * CHECK failure, not a silent skip).
  *
- * INVARIANT: each returned bucket is a valid library chunk_seq — index-ordered
- * and **dense-except-last** (every chunk but the bucket's final one holds
- * exactly CHUNK_SIZE/sizeof(T) elements), exactly like a ChunkFilter output.  A
- * bucket buffer is flushed only when full; its one short chunk is the last,
- * highest- index one.  Buckets are returned SEPARATELY on purpose: do NOT
- * concatenate them into one sequence — that would drop each bucket's trailing
- * partial chunk into the middle of the sequence, breaking the delayed layer's
- * ELEMS_PER_CHUNK grid (zip alignment) and eager plaid::size.  A
- * caller needing one fused sequence must re-densify (a repack pass /
- * from_chunks), not glue chunk lists.
+ * INVARIANT: each returned bucket is index-ordered and dense-except-last,
+ * exactly like ChunkPartition's / ChunkFilter's output.  Buckets are returned
+ * SEPARATELY on purpose: do NOT concatenate them into one sequence — that
+ * would drop each bucket's trailing partial chunk into the middle of the
+ * sequence, breaking the delayed layer's ELEMS_PER_CHUNK grid (zip alignment)
+ * and eager plaid::size.  A caller needing one fused sequence must
+ * re-densify (a repack pass / from_chunks), not glue chunk lists.
  *
  * Ordering within a bucket is completion order (the reader is unordered), NOT
  * the input order — callers needing sorted/index order must not rely on it.
  *
  * All buckets share one file per drive under `result_prefix` (each chunk
- * records its own file + offset), so removing the prefix's files frees every
- * bucket.
+ * records its own file + offset, round-robined across every bucket
+ * combined), so removing the prefix's files frees every bucket, and every
+ * bucket's data is automatically spread across every drive (no per-bucket
+ * "one file = one drive" placement, unlike count_sort/BucketWriter's default
+ * at disk_span=1).
  *
- * @tparam T       Element type stored in seq.
- * @tparam KeyFn   Callable T -> size_t bucket in [0, num_buckets) or
- * PARTITION_DROP.
+ * @tparam T     Element type stored in seq.
+ * @tparam KeyFn Callable T -> size_t bucket in [0, num_buckets).
  */
 template <typename T, typename KeyFn>
-std::vector<chunk_seq> ChunkPartition(const chunk_seq& seq, size_t num_buckets,
-                                      const std::string& result_prefix,
-                                      KeyFn key_fn) {
+std::vector<chunk_seq> group_by_index(const chunk_seq& seq, size_t num_buckets,
+                                       const std::string& result_prefix,
+                                       KeyFn key_fn) {
   static_assert(CHUNK_SIZE % sizeof(T) == 0,
                 "sizeof(T) must divide CHUNK_SIZE for O_DIRECT alignment");
-  CHECK(num_buckets > 0) << "ChunkPartition: num_buckets must be > 0";
+  CHECK(num_buckets > 0) << "group_by_index: num_buckets must be > 0";
 
   std::vector<chunk_seq> out(num_buckets);
   if (seq.chunks.empty()) return out;
@@ -93,8 +93,8 @@ std::vector<chunk_seq> ChunkPartition(const chunk_seq& seq, size_t num_buckets,
   // so an emitted chunk is a recycled pool buffer (returned by the writer's
   // deleter after the write lands), never a fresh aligned_alloc.  A fresh
   // aligned_alloc(CHUNK_SIZE) per emitted chunk goes through mmap (>128 KB) and
-  // takes the process-wide mmap_sem, which serializes all workers — the same
-  // trap to_vector hit — so we must reuse pool buffers instead.
+  // takes the process-wide mmap_sem, which serializes all workers, so we must
+  // reuse pool buffers instead.
   ChunkSequenceReader<T> reader;
   reader.PrepChunks(seq);
   reader.Start(/*num_threads=*/10, /*queue_depth=*/32, /*max_requests=*/16);
@@ -103,8 +103,8 @@ std::vector<chunk_seq> ChunkPartition(const chunk_seq& seq, size_t num_buckets,
   // Drive/offset assignment + per-bucket chunk-list append.  This is the ONLY
   // lock on the hot path and it is touched just once per FULL chunk (once per
   // ept elements a worker routes to a bucket), so it is uncontended in
-  // practice. writer.Push runs OUTSIDE it: a full writer queue then stalls only
-  // the one emitting worker, never a shared bucket.
+  // practice.  writer.Push runs OUTSIDE it: a full writer queue then stalls
+  // only the one emitting worker, never a shared bucket.
   std::mutex place_mu;
   size_t slot = 0;
   std::vector<size_t> drive_off(num_drives, 0);
@@ -145,9 +145,8 @@ std::vector<chunk_seq> ChunkPartition(const chunk_seq& seq, size_t num_buckets,
           if (ptr == nullptr) break;  // sequence exhausted
           for (size_t k = 0; k < n; k++) {
             const size_t j = key_fn(ptr[k]);
-            if (j == PARTITION_DROP) continue;
             CHECK(j < num_buckets)
-                << "ChunkPartition: bucket id " << j
+                << "group_by_index: bucket id " << j
                 << " out of range (num_buckets=" << num_buckets << ")";
             const size_t si = w * num_buckets + j;
             if (cur[si] == nullptr) {
@@ -207,6 +206,37 @@ std::vector<chunk_seq> ChunkPartition(const chunk_seq& seq, size_t num_buckets,
   return out;
 }
 
+/**
+ * Group `seq` by an arbitrary key `key_of(elem)`, approximated via
+ * `bucket = hash(key_of(elem)) % num_buckets` — the same hash-bucket
+ * convention count_sort_by_key/unique.h already use, NOT parlaylib's
+ * group_by_key (which returns exactly one entry per distinct key via a
+ * hash-based collect_reduce_sparse).  Two distinct keys MAY collide into the
+ * same output bucket here; callers that need every distinct key isolated
+ * must pick num_buckets large enough to make collisions acceptable for their
+ * use, or post-process a bucket further (e.g. unique.h's own in-memory
+ * std::unique finishing pass per bucket).  Implemented by composing the
+ * hash-mod key function and forwarding straight to group_by_index (see its
+ * doc for the ordering/no-drop/no-concatenate invariants, which apply
+ * unchanged here).
+ *
+ * @tparam T      Element type stored in seq.
+ * @tparam KeyOf  Callable T -> K, the key to group by.
+ * @tparam Hash   Callable K -> size_t; defaults to std::hash<K>.
+ */
+template <typename T, typename KeyOf,
+          typename Hash = std::hash<std::invoke_result_t<KeyOf, T>>>
+std::vector<chunk_seq> group_by_key(const chunk_seq& seq, size_t num_buckets,
+                                     const std::string& result_prefix,
+                                     KeyOf key_of, Hash hash = {}) {
+  CHECK(num_buckets > 0) << "group_by_key: num_buckets must be > 0";
+  return group_by_index<T>(
+      seq, num_buckets, result_prefix,
+      [key_of, hash, num_buckets](const T& e) {
+        return (size_t)(hash(key_of(e)) % num_buckets);
+      });
+}
+
 }  // namespace plaid
 
-#endif  // CHUNK_PARTITION_H
+#endif  // CHUNK_GROUP_BY_H

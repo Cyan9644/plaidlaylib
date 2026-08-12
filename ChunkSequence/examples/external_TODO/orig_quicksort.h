@@ -17,7 +17,7 @@
 #include "ChunkSequence/Primitives/map.h"
 #include "ChunkSequence/Primitives/pack.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 template <typename T, typename Less = std::less<>>
 chunk_seq quicksort(chunk_seq& seq, Less less1 = {}) {
   static std::atomic<size_t> ss_counter{0};
@@ -34,14 +34,14 @@ chunk_seq quicksort(chunk_seq& seq, Less less1 = {}) {
     // to be packed in a single chunk. Therefore we're using an arbitrary number
     // of chunks, to be tuned later
 
-    auto i = ChunkSequenceOps::materialize<T>(seq);
+    auto i = plaid::materialize<T>(seq);
 
     parlay::sort_inplace(i, less1);
     // this incurs heavy write costs, so eventually we may want to figure out a
     // way around this in fact this can only really be used for quicksort as an
     // example. the quicksort we want in our external samplesort should be a
     // primtive that directly invokes the writer/reader
-    return ChunkSequenceOps::to_chunk_seq(i, "ss_base_" + tag);
+    return plaid::to_chunk_seq(i, "ss_base_" + tag);
   }
 
   //   int sample_size = 31;
@@ -90,7 +90,7 @@ chunk_seq quicksort(chunk_seq& seq, Less less1 = {}) {
                                  [&](T e) { return ss.rank(e, less1); });
 
   std::vector<chunk_seq> externalSequenceVector(2);
-  ChunkSequenceOps::count_sort2<T>(seq, ids, externalSequenceVector,
+  plaid::count_sort2<T>(seq, ids, externalSequenceVector,
                                    "ss_bucket_" + tag);
   auto& left = externalSequenceVector[0];
   auto& right = externalSequenceVector[1];
@@ -108,7 +108,7 @@ chunk_seq quicksort(chunk_seq& seq, Less less1 = {}) {
 
   return flatten(externalSequenceVector);
   // std::vector<chunk_seq> externalSequenceVector(num_buckets);
-  // ChunkSequenceOps::count_sort2<T>(seq, ids, externalSequenceVector,
+  // plaid::count_sort2<T>(seq, ids, externalSequenceVector,
   // "ss_bucket_" + tag);
 
   // parlay::parallel_for(0, num_buckets, [&](long i){
@@ -119,9 +119,9 @@ chunk_seq quicksort(chunk_seq& seq, Less less1 = {}) {
   //     }
   //     if (z ==n) {
   //         auto v =
-  //         ChunkSequenceOps::materialize<T>(externalSequenceVector[i]);
+  //         plaid::materialize<T>(externalSequenceVector[i]);
   //         std::sort(v.begin(), v.end(), less1);
-  //         externalSequenceVector[i] = ChunkSequenceOps::to_chunk_seq(
+  //         externalSequenceVector[i] = plaid::to_chunk_seq(
   //             v, "ss_deg_" + tag + "_" + std::to_string(i));
   //         return;
   //     }
@@ -132,6 +132,6 @@ chunk_seq quicksort(chunk_seq& seq, Less less1 = {}) {
   // });
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif

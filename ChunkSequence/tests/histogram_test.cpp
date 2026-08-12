@@ -20,7 +20,7 @@ int main(int argc, char* argv[]) {
   const size_t n = (argc > 1) ? std::stoull(argv[1]) : 2'000'000ULL;
 
   std::cout << "Building iota(" << n << ")...\n" << std::flush;
-  const chunk_seq input = ChunkSequenceOps::iota(n);
+  const chunk_seq input = plaid::iota(n);
   std::cout << input.chunks.size() << " chunks across " << GetSSDList().size()
             << " drives\n\n";
 
@@ -29,7 +29,7 @@ int main(int argc, char* argv[]) {
   // 1. Histogram of iota(n) with num_unique = n: every value 0..n-1 appears
   //    exactly once, so every bucket must be 1.
   {
-    auto h = ChunkSequenceOps::ChunkHistogramByIndex<uint64_t>(input, n);
+    auto h = plaid::ChunkHistogramByIndex<uint64_t>(input, n);
     bool ok = (h.size() == n);
     for (size_t b = 0; ok && b < n; b++) ok = (h[b] == 1);
     all_pass &= report("iota(n): all buckets == 1", ok);
@@ -39,9 +39,9 @@ int main(int argc, char* argv[]) {
   //    divides n, that's exactly n/k per bucket.
   {
     const size_t k = 10;
-    chunk_seq mod = ChunkSequenceOps::ChunkMap<uint64_t>(
+    chunk_seq mod = plaid::ChunkMap<uint64_t>(
         input, "hist_mod", [k](uint64_t x) { return x % k; });
-    auto h = ChunkSequenceOps::ChunkHistogramByIndex<uint64_t>(mod, k);
+    auto h = plaid::ChunkHistogramByIndex<uint64_t>(mod, k);
     bool ok = (h.size() == k);
     size_t sum = 0;
     for (size_t b = 0; b < k; b++) {

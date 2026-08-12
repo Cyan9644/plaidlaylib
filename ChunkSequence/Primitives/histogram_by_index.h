@@ -93,7 +93,7 @@
 //     // return seq;
 // }
 
-namespace ChunkSequenceOps {
+namespace plaid {
 
 template <typename T>
 parlay::sequence<size_t> ChunkHistogramByIndex(const chunk_seq& seq,
@@ -105,7 +105,7 @@ parlay::sequence<size_t> ChunkHistogramByIndex(const chunk_seq& seq,
   // balancing poll blocks if the queue is empty but filling, will return nulptr
   // once all readers have finished and the queue is empty this stops the
   // workers
-  auto remove_from_queue = ChunkSequenceOps::RemoveWorker<T>(
+  auto remove_from_queue = plaid::RemoveWorker<T>(
       seq, /*reader_threads=*/10, [&](ChunkSequenceReader<T>& reader) {
         // create parlay seq init to 0 with num_unique values
         parlay::sequence<size_t> remove(num_unique, 0);
@@ -146,7 +146,7 @@ parlay::sequence<size_t> ChunkHistogramByIndex(const chunk_seq& seq,
 template <typename T, typename KeyFn>
 parlay::sequence<size_t> ChunkHistogramByKey(const chunk_seq& seq,
                                              size_t num_buckets, KeyFn key_fn) {
-  auto locals = ChunkSequenceOps::RemoveWorker<T>(
+  auto locals = plaid::RemoveWorker<T>(
       seq, /*reader_threads=*/10, [&](ChunkSequenceReader<T>& reader) {
         parlay::sequence<size_t> h(num_buckets, 0);
         while (true) {
@@ -163,6 +163,6 @@ parlay::sequence<size_t> ChunkHistogramByKey(const chunk_seq& seq,
   return total;
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif

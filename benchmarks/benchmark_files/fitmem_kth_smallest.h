@@ -17,7 +17,7 @@
 
 // we are currently assuming that not all elemsents go into 1 bucket, for
 // obvious reasons.
-namespace ChunkSequenceOps {
+namespace plaid {
 // randomized ~O(n) algorithm
 template <typename T, typename Less = std::less<>>
 T fitmem_kth_smallest(chunk_seq& seq, long k, Less less1 = {}) {
@@ -33,7 +33,7 @@ T fitmem_kth_smallest(chunk_seq& seq, long k, Less less1 = {}) {
   if (n < 1536) {  // 1536 elements is the point at which we say we can
                    // materialize and sort directly
 
-    auto i = ChunkSequenceOps::materialize<T>(
+    auto i = plaid::materialize<T>(
         seq);  // materialize external sequence to parlay sequence (not yet
                // cleanly implemented)
     // no reason to sort over select
@@ -107,7 +107,7 @@ T fitmem_kth_smallest(chunk_seq& seq, long k, Less less1 = {}) {
 
   // Count how many keys fall in each bucket, straight from the values.
   auto sums =
-      ChunkSequenceOps::ChunkHistogramByKey<T>(seq, sample_size + 1, key_of);
+      plaid::ChunkHistogramByKey<T>(seq, sample_size + 1, key_of);
 
   // find which bucket k belongs in, and pack the keys in that bucket into next
   auto [offsets, total] = parlay::scan(sums);
@@ -116,7 +116,7 @@ T fitmem_kth_smallest(chunk_seq& seq, long k, Less less1 = {}) {
 
   // Pack the winning bucket directly on the value predicate -- one read pass
   // over seq, no id chunk_seq to read alongside it.
-  auto next = ChunkSequenceOps::pack_value<T>(
+  auto next = plaid::pack_value<T>(
       seq, "fk_next_" + std::to_string(n),
       [&, id](T e) { return key_of(e) == (size_t)id; });
   // The winning bucket is assumed to fit in DRAM (its probabilistic size bound
@@ -126,10 +126,10 @@ T fitmem_kth_smallest(chunk_seq& seq, long k, Less less1 = {}) {
   // element (into the sequence passed in), so dereference it while the
   // materialized bucket is still alive (its lifetime extends to the end of this
   // full return expression).
-  return *parlay::kth_smallest(ChunkSequenceOps::materialize<T>(next),
+  return *parlay::kth_smallest(plaid::materialize<T>(next),
                                (size_t)(k - offsets[id]), less1);
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif

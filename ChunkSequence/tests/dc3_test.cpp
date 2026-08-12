@@ -90,9 +90,9 @@ std::vector<uint32_t> read_sa(const chunk_seq& sa) {
 std::vector<uint32_t> dc3_of(const std::string& s, const char* budget) {
   set_budget(budget);
   const std::string tin = "dc3t_in", tout = "dc3t_out";
-  chunk_seq text = ChunkSequenceOps::tabulate<char>(
+  chunk_seq text = plaid::tabulate<char>(
       s.size(), tin, [&s](size_t i) { return s[i]; });
-  chunk_seq sa = ChunkSequenceOps::ChunkDC3(text, tout);
+  chunk_seq sa = plaid::ChunkDC3(text, tout);
   std::vector<uint32_t> res = read_sa(sa);
   cleanup_prefix(tin);
   cleanup_prefix(tout);

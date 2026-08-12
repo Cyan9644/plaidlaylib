@@ -10,12 +10,12 @@ int main() {
   // just ten digits, but can be scaled up. The two seqs don't need to be
   // equally long the seq is interpreted as a sequence of digits of len 64 bits,
   // in a 2^64 base number system
-  chunk_seq a = ChunkSequenceOps::tabulate(10, "a", [](size_t i) { return i; });
-  chunk_seq b = ChunkSequenceOps::tabulate(10, "b", [](size_t i) { return 1; });
+  chunk_seq a = plaid::tabulate(10, "a", [](size_t i) { return i; });
+  chunk_seq b = plaid::tabulate(10, "b", [](size_t i) { return 1; });
   // call the hand rolled impl shown below
   chunk_seq c = add(a, b, 0);
   // the real version requires you to name the file for the output on the drives
-  // (maybe should be changed) chunk_seq c = ChunkSequenceOps::ChunkBigIntAdd(a,
+  // (maybe should be changed) chunk_seq c = plaid::ChunkBigIntAdd(a,
   // b, "sum", false); this combines the chunks back to one file dropped in
   // current working directory, can be inspected in a hex editor
   c.consolidate("result");
@@ -27,15 +27,15 @@ using double_digit = unsigned __int128;
 constexpr int digit_len = sizeof(digit) * 8;
 
 chunk_seq add(const chunk_seq& a, const chunk_seq& b, bool extra_one) {
-  size_t n_a = ChunkSequenceOps::size(a);
-  size_t n_b = ChunkSequenceOps::size(b);
+  size_t n_a = plaid::size(a);
+  size_t n_b = plaid::size(b);
   // if a is shorter than b, flip the order (a should be the longer one)
   if (n_a < n_b) return add(b, a, extra_one);
   if (n_b == 0) return a;
 
   enum carry : char { no = 0, yes = 1, propagate = 2 };
 
-  using namespace ChunkSequenceOps;
+  using namespace plaid;
 
   // this issues a random read so it's not meant to be used frequently
   // this example intereprets the most significant chunk as a signed number

@@ -1,5 +1,5 @@
 // Example: out-of-core kth-smallest selection via
-// ChunkSequenceOps::kth_smallest.
+// plaid::kth_smallest.
 //
 // Builds an n-element sequence of pseudo-random uint64 keys across the SSDs
 // (deterministic from parlay::hash64, so it is reproducible and
@@ -111,7 +111,7 @@ int main(int argc, char* argv[]) {
 
   std::cout << "Building " << n << "-key input..." << std::flush;
   auto t0 = Clock::now();
-  chunk_seq seq = ChunkSequenceOps::tabulate<uint64_t>(n, in_prefix, key_at);
+  chunk_seq seq = plaid::tabulate<uint64_t>(n, in_prefix, key_at);
   const double build_s = elapsed(t0);
   std::cout << " done (" << std::fixed << std::setprecision(4) << build_s
             << "s)\n";
@@ -120,7 +120,7 @@ int main(int argc, char* argv[]) {
   std::cout << "Selecting k=" << k << " (0-based) of " << n << "..."
             << std::flush;
   t0 = Clock::now();
-  uint64_t result = ChunkSequenceOps::kth_smallest<uint64_t>(seq, (long)k);
+  uint64_t result = plaid::kth_smallest<uint64_t>(seq, (long)k);
   const double select_s = elapsed(t0);
   std::cout << " done\n";
 

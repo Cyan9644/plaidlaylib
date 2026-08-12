@@ -14,7 +14,7 @@ using chunk_csr = parlay::sequence<parlay::sequence<T>>;
 
 template <typename T>
 auto kcore(chunk_csr<T>& G) {
-  using namespace ChunkSequenceOps;
+  using namespace plaid;
   int n = G.size();
   auto done = sequence<bool>(n, false);
   auto d = map(G, [](auto& ngh) -> T { return ngh.size(); });

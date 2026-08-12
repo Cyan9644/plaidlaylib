@@ -14,7 +14,7 @@
 // actually used in a sequence, which allows us to more efficiently search the
 // external sequence this is just sequential for now but I'll parallelize it
 // later on
-namespace ChunkSequenceOps {
+namespace plaid {
 template <typename T>
 void scan_size(const chunk_seq& seq, parlay::sequence<size_t>& pseq) {
   size_t acc = 0;
@@ -53,6 +53,6 @@ T scan_find(const chunk_seq& seq, const parlay::sequence<size_t>& pseq,
   return val;
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif

@@ -62,7 +62,7 @@
 #include "configs.h"
 #include "utils/file_utils.h"
 
-namespace ChunkSequenceOps {
+namespace plaid {
 namespace direct_rs {
 
 // Same target as direct_ss::kTargetBucketBytes -- kept as its own constant
@@ -78,9 +78,9 @@ constexpr size_t kReaderQueueDepth = 32;
 constexpr size_t kReaderMaxInFlight = 8;
 constexpr size_t kReaderQueueSize = 128;
 
-using ChunkSequenceOps::bucket_allocator;
-using ChunkSequenceOps::BucketData;
-using ChunkSequenceOps::BucketWriter;
+using plaid::bucket_allocator;
+using plaid::BucketData;
+using plaid::BucketWriter;
 
 // prefix[i] = number of elements in chunks[0..i) -- the chunk-grid stand-in
 // for a global element offset, same as direct_ss::ElementPrefix.
@@ -94,7 +94,7 @@ inline std::vector<size_t> ElementPrefix(const chunk_seq& seq,
 
 // Bucket count: enough buckets that one lands near kTargetBucketBytes,
 // bounded below by parallelism and above by n -- the same formula
-// direct_ss::GetSampleSize (sort) and ChunkSequenceOps::random_shuffle
+// direct_ss::GetSampleSize (sort) and plaid::random_shuffle
 // (external_random_shuffle.h) already use.
 inline size_t GetBucketCount(size_t total_bytes, size_t n) {
   const size_t min_buckets = std::max<size_t>(
@@ -485,6 +485,6 @@ chunk_seq direct_random_shuffle(const chunk_seq& seq, size_t seed = 0,
     return out;
 }
 
-}  // namespace ChunkSequenceOps
+}  // namespace plaid
 
 #endif  // DIRECT_RANDOM_SHUFFLE_H
