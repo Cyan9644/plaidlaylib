@@ -1,10 +1,13 @@
 // Correctness + placement test for external_samplesort.h's sample_sort.
 //
-// sample_sort's bucketing step now routes through group_by_index
-// (Primitives/group_by.h), which writes one file per drive shared by every
-// bucket -- so, unlike the old count_sort/BucketWriter substrate, a bucket's
-// data is *always* spread across every drive; there is no longer a disk_span
-// knob to compare plain vs. striped placement against.
+// sample_sort's bucketing step routes through group_by_index
+// (Primitives/group_by.h), which shares its bounded BucketWriter substrate
+// with count_sort -- one file per bucket (same as sample_sort_random/
+// sample_sort_singledrive).  A bucket's file is placed via
+// GetFileName(prefix, bucket_index) (bucket_index % num_drives), so with
+// more buckets than drives -- true well before this test's default n -- the
+// overall output spreads across every drive even though each individual
+// bucket lives in a single file.
 //
 // This test checks:
 //   1. the output is fully sorted and element-for-element identical to

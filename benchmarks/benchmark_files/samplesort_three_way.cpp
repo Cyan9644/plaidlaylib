@@ -30,11 +30,9 @@
 // measures all three against one another in one run, on the identical keys and
 // drives.
 //
-// Both chunk_seq contestants ((2) and (3)) run at their default disk_span=1
-// (one file per bucket), matching Peter's (1) single-file-per-bucket layout,
-// so all three stay apples-to-apples on substrate/primitives cost alone --
-// see the disk_span doc on sample_sort (external_samplesort.h) for why
-// striping a bucket's own intermediate data doesn't help this phase.
+// Both chunk_seq contestants ((2) and (3)) use one file per bucket, matching
+// Peter's (1) single-file-per-bucket layout, so all three stay
+// apples-to-apples on substrate/primitives cost alone.
 //
 // All three sort key_at(i) = parlay::hash64(i) for i in [0,n).  The keys are
 // distinct, so the sorted order is unique and every output must equal the same

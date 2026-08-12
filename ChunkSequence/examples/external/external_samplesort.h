@@ -157,7 +157,7 @@ chunk_seq sample_sort(chunk_seq& seq, Less less1 = {}) {
 
 
 template <typename T, typename Less = std::less<>>
-chunk_seq sample_sort_random(chunk_seq& seq, Less less1 = {}, size_t disk_span = 1) {
+chunk_seq sample_sort_random(chunk_seq& seq, Less less1 = {}) {
   static std::atomic<size_t> ss_counter{0};
   const std::string tag = std::to_string(ss_counter++);
   SsPhaseTimer _pt(tag.c_str());
@@ -262,7 +262,7 @@ chunk_seq sample_sort_random(chunk_seq& seq, Less less1 = {}, size_t disk_span =
   // plaid::count_sort(ids, num_buckets,
   // externalSequenceVector,"ss_bucket_" + tag);
   plaid::count_sort(ids, num_buckets, externalSequenceVector,
-                               "ss_bucket_" + tag, disk_span);
+                               "ss_bucket_" + tag);
   _pt.mark("count_sort");
 
   // it should now be the case that externalSequenceVector is a full vector of
