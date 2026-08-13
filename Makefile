@@ -315,9 +315,9 @@ distclean: clean
 # every pipeline's intermediates) under /mnt/ssd*, cleared between every sweep
 # point already but worth a manual pass after a crash or an interrupted run.
 # Leaves results/ (the actual figures/CSVs) alone unless CLEAN_BENCH_ARGS adds
-# --results.  See benchmarks/clean_bench_data.py --help for all options.
+# --results.  See benchmarks/clean_bench_data.sh --help for all options.
 #   make clean-bench-data
 #   make clean-bench-data CLEAN_BENCH_ARGS=--dry-run
 #   make clean-bench-data CLEAN_BENCH_ARGS=--results
 clean-bench-data:
-	python3 benchmarks/clean_bench_data.py $(CLEAN_BENCH_ARGS)
+	bash benchmarks/clean_bench_data.sh $(CLEAN_BENCH_ARGS)
