@@ -112,7 +112,7 @@ int main(int argc, char* argv[]) {
   if (inmem_ok) {
     auto keys_mem = parlay::tabulate(n, key_at);
     t0 = Clock::now();
-    auto sorted_mem = parlay::counting_sort(keys_mem, NUM_BUCKETS);
+    auto sorted_mem = parlay::counting_sort(keys_mem, NUM_BUCKETS).first;
     inmem_sort_s = elapsed(t0);
     std::cout << "in-mem parlay::counting_sort: " << std::setprecision(4)
               << inmem_sort_s << "s\n";
