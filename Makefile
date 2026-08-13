@@ -104,7 +104,7 @@ PETER_DIR := ChunkSequence/examples/external_TODO/peter_samplesort
 
 LINK = $(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
-.PHONY: all clean distclean deps test examples bench bench-full bench-examples bench-examples-full bench-summary trace format format-check
+.PHONY: all clean distclean deps test examples bench bench-full bench-examples bench-examples-full bench-summary trace clean-bench-data format format-check
 
 all:
 	$(MAKE) deps
@@ -553,3 +553,14 @@ clean:
 
 distclean: clean
 	rm -rf deps $(BINDIR) $(OBJDIR)
+
+# Remove files the benchmarks left behind: per-drive data (iota<drive> inputs +
+# every pipeline's intermediates) under /mnt/ssd*, cleared between every sweep
+# point already but worth a manual pass after a crash or an interrupted run.
+# Leaves results/ (the actual figures/CSVs) alone unless CLEAN_BENCH_ARGS adds
+# --results.  See benchmarks/clean_bench_data.py --help for all options.
+#   make clean-bench-data
+#   make clean-bench-data CLEAN_BENCH_ARGS=--dry-run
+#   make clean-bench-data CLEAN_BENCH_ARGS=--results
+clean-bench-data:
+	python3 benchmarks/clean_bench_data.py $(CLEAN_BENCH_ARGS)
