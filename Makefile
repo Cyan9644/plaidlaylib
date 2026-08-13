@@ -83,6 +83,15 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/bfsExample \
                     $(BINDIR)/even_squaresExample \
                     $(BINDIR)/word_countExample \
+                    $(BINDIR)/count_sortExample \
+                    $(BINDIR)/filterExample \
+                    $(BINDIR)/histogram_by_indexExample \
+                    $(BINDIR)/mapExample \
+                    $(BINDIR)/packExample \
+                    $(BINDIR)/reduceExample \
+                    $(BINDIR)/scanExample \
+                    $(BINDIR)/tabulateExample \
+                    $(BINDIR)/zipExample \
 
 # Peter's external sample sort (the second contestant in the
 # external_samplesort_vs_peter comparison) ships its own configs.h /
@@ -95,7 +104,7 @@ PETER_DIR := ChunkSequence/examples/external_TODO/peter_samplesort
 
 LINK = $(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
-.PHONY: all clean distclean deps test examples bench bench-full bench-examples bench-examples-full trace format format-check
+.PHONY: all clean distclean deps test examples bench bench-full bench-examples bench-examples-full bench-summary trace format format-check
 
 all:
 	$(MAKE) deps
@@ -520,6 +529,15 @@ bench-examples-mid:
 bench-examples-full:
 	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add,convex_hull" --outdir results \
 	    --example-sizes "1GiB 4GiB 16GiB 64GiB 256GiB 1TiB"
+
+# Combined bar chart: 21 primitives/examples, each run ONCE at the largest n
+# where its own in-mem parlaylib baseline still fits DRAM, plotted as a
+# relative-performance bar chart (in-mem pinned at 1.0). See
+# benchmarks/summary_figure.py.  Real-scale run -- not for a tmpfs dev box
+# (some entries' RAM-cliff n is large); dry-run with a small
+# EXAMPLE_INMEM_BUDGET_BYTES override first (see the plan/verification notes).
+bench-summary:
+	python3 benchmarks/summary_figure.py --outdir results
 
 # Single-run IO/CPU trace of one example (per-SSD read/write throughput + %util +
 # CPU over time; build/op phases marked).  Meaningful on real block devices only.
