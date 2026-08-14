@@ -125,6 +125,7 @@
 #include "ChunkSequence/examples/in_memory/graph/graph_utils/graph_utils.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/trace_marker.h"
 // Before external_bellman_ford.h: this pulls in dense_pack/direct_samplesort,
 // which must be parsed before external_compressed_sparse_row.h's bare macros.
@@ -142,7 +143,7 @@ static double to_gb(size_t bytes) {
 static void cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 // The two implementations use different sentinel encodings for "unreached":

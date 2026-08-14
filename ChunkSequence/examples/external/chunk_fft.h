@@ -81,6 +81,7 @@
 #include "configs.h"
 #include "parlay/primitives.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/simple_queue.h"
 #include "utils/unordered_file_writer.h"
 
@@ -370,9 +371,9 @@ inline void stage2_cols(chunk_seq& s1, const Dims& d,
   for (size_t dd = 0; dd < num_drives; dd++) {
     const std::string fn = GetFileName(prefix, dd);
     fidx[fn] = (int)dd;
-    rd_fds[dd] = open(fn.c_str(), O_DIRECT | O_RDONLY);
+    rd_fds[dd] = plaid::io::Open(fn.c_str(), O_DIRECT | O_RDONLY);
     SYSCALL(rd_fds[dd]);
-    wr_fds[dd] = open(fn.c_str(), O_DIRECT | O_WRONLY);
+    wr_fds[dd] = plaid::io::Open(fn.c_str(), O_DIRECT | O_WRONLY);
     SYSCALL(wr_fds[dd]);
   }
 
@@ -502,8 +503,8 @@ inline void stage2_cols(chunk_seq& s1, const Dims& d,
   for (auto& t : gatherers) t.join();
   for (auto& t : scatterers) t.join();
   for (cd* b : all_bufs) free(b);
-  for (int fd : rd_fds) close(fd);
-  for (int fd : wr_fds) close(fd);
+  for (int fd : rd_fds) plaid::io::Close(fd);
+  for (int fd : wr_fds) plaid::io::Close(fd);
 }
 
 // Output permutation: logical index k -> physical position holding X[k].
@@ -609,11 +610,11 @@ inline std::pair<chunk_seq, std::vector<std::string>> alloc_layout(
         const size_t file_size = drive_chunks[dd].size() * CHUNK_SIZE;
         if (file_size == 0) return;
         int fd =
-            open(filenames[dd].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            plaid::io::Open(filenames[dd].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         SYSCALL(fd);
-        if (fallocate(fd, 0, 0, (off_t)file_size) != 0)
-          SYSCALL(ftruncate(fd, (off_t)file_size));
-        SYSCALL(close(fd));
+        if (plaid::io::Fallocate(fd, 0, 0, (off_t)file_size) != 0)
+          SYSCALL(plaid::io::Ftruncate(fd, (off_t)file_size));
+        SYSCALL(plaid::io::Close(fd));
       },
       /*granularity=*/1);
 
@@ -646,7 +647,7 @@ inline chunk_seq transpose_pass(const chunk_seq& s1, const Dims& d,
   for (const chunk& c : s1.chunks) {
     if (in_fidx.count(c.filename)) continue;
     in_fidx[c.filename] = (int)rd_fds.size();
-    int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+    int fd = plaid::io::Open(c.filename.c_str(), O_DIRECT | O_RDONLY);
     SYSCALL(fd);
     rd_fds.push_back(fd);
   }
@@ -659,7 +660,7 @@ inline chunk_seq transpose_pass(const chunk_seq& s1, const Dims& d,
   std::map<std::string, int> out_fidx;
   for (size_t dd = 0; dd < num_drives; dd++) {
     out_fidx[out_filenames[dd]] = (int)dd;
-    wr_fds[dd] = open(out_filenames[dd].c_str(), O_DIRECT | O_WRONLY);
+    wr_fds[dd] = plaid::io::Open(out_filenames[dd].c_str(), O_DIRECT | O_WRONLY);
     SYSCALL(wr_fds[dd]);
   }
   std::vector<int> out_chunk_drive(out.chunks.size());
@@ -710,7 +711,7 @@ inline chunk_seq transpose_pass(const chunk_seq& s1, const Dims& d,
           const size_t s = std::max(p_lo, cs), e = std::min(p_hi, ce);
           const int fd = rd_fds[in_fidx.at(s1.chunks[ci].filename)];
           const size_t foff = s1.chunks[ci].begin_addr + (s - cs) * sizeof(cd);
-          SYSCALL(pread(fd, (char*)band + (s - p_lo) * sizeof(cd),
+          SYSCALL(plaid::io::Pread(fd, (char*)band + (s - p_lo) * sizeof(cd),
                         (e - s) * sizeof(cd), (off_t)foff));
         },
         /*granularity=*/1);
@@ -732,8 +733,8 @@ inline chunk_seq transpose_pass(const chunk_seq& s1, const Dims& d,
 
   free(band);
   free(tbuf);
-  for (int fd : rd_fds) close(fd);
-  for (int fd : wr_fds) close(fd);
+  for (int fd : rd_fds) plaid::io::Close(fd);
+  for (int fd : wr_fds) plaid::io::Close(fd);
   return out;
 }
 

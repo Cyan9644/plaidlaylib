@@ -34,6 +34,7 @@
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 // ── monoids (shared with the per-primitive tests) ────────────────────────────
 struct SumMonoid {
@@ -72,7 +73,7 @@ static bool report(const std::string& name, bool ok,
 static void cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 // Read a chunk_seq's elements, in index order, into a vector<T> via
@@ -82,19 +83,19 @@ static std::vector<T> materialize(const chunk_seq& seq) {
   const std::string tmp = "combined_test_materialize.tmp";
   seq.consolidate(tmp);
 
-  int fd = open(tmp.c_str(), O_RDONLY);
+  int fd = plaid::io::Open(tmp.c_str(), O_RDONLY);
   CHECK(fd >= 0) << "materialize: open(" << tmp << "): " << strerror(errno);
 
   std::vector<T> out;
   std::vector<T> buf(1 << 20);  // 1 Mi elements per read
   while (true) {
-    const ssize_t got = read(fd, buf.data(), buf.size() * sizeof(T));
+    const ssize_t got = plaid::io::Read(fd, buf.data(), buf.size() * sizeof(T));
     CHECK(got >= 0) << "materialize: read: " << strerror(errno);
     if (got == 0) break;
     out.insert(out.end(), buf.begin(), buf.begin() + (size_t)got / sizeof(T));
   }
-  close(fd);
-  unlink(tmp.c_str());
+  plaid::io::Close(fd);
+  plaid::io::Unlink(tmp.c_str());
   return out;
 }
 

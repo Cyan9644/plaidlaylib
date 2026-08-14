@@ -13,6 +13,7 @@
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 // One chunk of char text holds CHUNK_SIZE elements.
 static constexpr size_t CHARS_PER_CHUNK = CHUNK_SIZE / sizeof(char);
@@ -21,7 +22,7 @@ static constexpr size_t CHARS_PER_CHUNK = CHUNK_SIZE / sizeof(char);
 static void cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 // Sequential reference search (KMP, so the reference is independent of the
@@ -111,7 +112,7 @@ static bool run_rk_test(const std::string& name, size_t n,
   // 4. Exact positions: consolidate to a local file, stream-compare.
   if (pass && actual_count > 0) {
     matches.consolidate(consolidated);
-    int fd = open(consolidated.c_str(), O_RDONLY);
+    int fd = plaid::io::Open(consolidated.c_str(), O_RDONLY);
     if (fd < 0) {
       std::cout << "    FAIL open(" << consolidated << "): " << strerror(errno)
                 << "\n";
@@ -122,7 +123,7 @@ static bool run_rk_test(const std::string& name, size_t n,
       size_t j = 0;
       bool ok = true;
       while (ok) {
-        const ssize_t got = read(fd, buf.data(), BUF_ELEMS * sizeof(uint64_t));
+        const ssize_t got = plaid::io::Read(fd, buf.data(), BUF_ELEMS * sizeof(uint64_t));
         if (got < 0) {
           std::cout << "    FAIL read: " << strerror(errno) << "\n";
           pass = ok = false;
@@ -141,7 +142,7 @@ static bool run_rk_test(const std::string& name, size_t n,
           }
         }
       }
-      close(fd);
+      plaid::io::Close(fd);
       if (ok && j != expected.size()) {
         std::cout << "    FAIL positions: read " << j << " elements, expected "
                   << expected.size() << "\n";
@@ -156,7 +157,7 @@ static bool run_rk_test(const std::string& name, size_t n,
 
   cleanup_prefix(text_prefix);
   cleanup_prefix(out_prefix);
-  unlink(consolidated.c_str());
+  plaid::io::Unlink(consolidated.c_str());
   return pass;
 }
 

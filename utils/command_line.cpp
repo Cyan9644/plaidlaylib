@@ -10,6 +10,7 @@
 #include "absl/log/log.h"
 #include "configs.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 void ParseGlobalArguments(int& argc, char** argv) {
   std::map<std::string, std::string> arguments = {
@@ -41,6 +42,18 @@ void ParseGlobalArguments(int& argc, char** argv) {
       arguments[arg_name.substr(2)] = arg_value;
     }
   }
+  // --in_memory / --in_memory=1 backs every chunk_seq with heap arenas instead
+  // of files, so the program needs no /mnt setup at all; --in_memory=0 forces
+  // disk even when PLAID_IN_MEMORY is set in the environment.  Tested with
+  // count() rather than operator[] so the lookup does not insert the key (the
+  // pre-existing `!arguments["v"].empty()` below is why a bare `-v` never
+  // actually enables verbose -- do not copy that pattern).
+  if (arguments.count("in_memory") != 0) {
+    const std::string& v = arguments.at("in_memory");
+    plaid::io::SetDefaultBackend(v == "0" ? plaid::io::Backend::Disk
+                                          : plaid::io::Backend::Memory);
+  }
+
   bool verbose = false;
   if (!arguments["v"].empty() || !arguments["verbose"].empty()) {
     verbose = true;

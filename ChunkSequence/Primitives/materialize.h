@@ -13,6 +13,7 @@
 #include "ChunkSequence/Primitives/delayed.h"
 #include "ChunkSequence/Primitives/chunk_seq.h"
 #include "ChunkSequence/Primitives/external_engine.h"
+#include "utils/io_backend.h"
 
 namespace plaid {
 
@@ -97,14 +98,14 @@ parlay::sequence<T> sequential_materialize(const chunk_seq& seq) {
     if (c->used == 0) continue;
     auto [it, inserted] = fd_cache.emplace(c->filename, -1);
     if (inserted) {
-      it->second = open(c->filename.c_str(), O_RDONLY | O_DIRECT);
+      it->second = plaid::io::Open(c->filename.c_str(), O_RDONLY | O_DIRECT);
       SYSCALL(it->second);
     }
-    SYSCALL(pread(it->second, buf, AlignUp(c->used), (off_t)c->begin_addr));
+    SYSCALL(plaid::io::Pread(it->second, buf, AlignUp(c->used), (off_t)c->begin_addr));
     std::memcpy(out.data() + elem_offset[i], buf, c->used);
   }
 
-  for (auto& [name, fd] : fd_cache) close(fd);
+  for (auto& [name, fd] : fd_cache) plaid::io::Close(fd);
   free(buf);
   return out;
 }

@@ -44,6 +44,7 @@
 #include "absl/log/check.h"
 #include "parlay/primitives.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 namespace plaid {
 
@@ -309,7 +310,7 @@ inline chunk_seq negate(Ctx& ctx, const chunk_seq& x,
 inline void cleanup(const Ctx& ctx) {
   const size_t nd = GetSSDList().size();
   for (const std::string& p : ctx.prefixes)
-    for (size_t d = 0; d < nd; d++) unlink(GetFileName(p, d).c_str());
+    for (size_t d = 0; d < nd; d++) plaid::io::Unlink(GetFileName(p, d).c_str());
 }
 
 }  // namespace bigint_mul_detail

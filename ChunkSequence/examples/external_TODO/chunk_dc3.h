@@ -73,6 +73,7 @@
 #include "configs.h"
 #include "parlay/primitives.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 namespace plaid {
 namespace dc3_detail {
@@ -230,10 +231,10 @@ inline parlay::sequence<uint32_t> read_u32(const chunk_seq& seq, size_t n) {
   size_t j = 0;
   for (const chunk* c : ord) {
     if (c->used == 0) continue;
-    int fd = open(c->filename.c_str(), O_RDONLY | O_DIRECT);
+    int fd = plaid::io::Open(c->filename.c_str(), O_RDONLY | O_DIRECT);
     SYSCALL(fd);
-    SYSCALL(pread(fd, buf, AlignUp(c->used), (off_t)c->begin_addr));
-    close(fd);
+    SYSCALL(plaid::io::Pread(fd, buf, AlignUp(c->used), (off_t)c->begin_addr));
+    plaid::io::Close(fd);
     const auto* e = (const uint32_t*)buf;
     const size_t cnt = c->used / sizeof(uint32_t);
     for (size_t i = 0; i < cnt; i++) out[j++] = e[i];

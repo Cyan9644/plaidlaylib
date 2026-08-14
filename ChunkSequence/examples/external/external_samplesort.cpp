@@ -50,6 +50,7 @@
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/logger.h"
 // Out-of-core algorithm under test and the in-memory parlaylib baseline it is
 // modelled on.  Both are pulled in here so the driver can time them
@@ -81,7 +82,7 @@ static double to_gb(size_t bytes) {
 static void cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 // Deterministic, duplicate-free key i, computable anywhere so the out-of-core

@@ -58,6 +58,7 @@
 #include "parlay/random.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 using Clock = std::chrono::steady_clock;
 static double elapsed(Clock::time_point t0) {
@@ -94,27 +95,13 @@ static double to_gb(size_t bytes) {
 //     otherwise accumulate across sweep points and quietly change what later
 //     points measure.
 static void remove_prefixes(const std::vector<std::string>& prefixes) {
-  for (const std::string& dir : GetSSDList()) {
-    std::error_code ec;
-    for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
-      const std::string name = e.path().filename().string();
-      for (const std::string& p : prefixes) {
-        if (name.rfind(p, 0) == 0) {  // name starts with p
-          std::filesystem::remove(e.path(), ec);
-          break;
-        }
-      }
-    }
-  }
+  for (const std::string& p : prefixes) plaid::io::UnlinkPrefix(p);
 }
 
 static std::set<std::string> snapshot_drives() {
   std::set<std::string> files;
-  for (const std::string& dir : GetSSDList()) {
-    std::error_code ec;
-    for (const auto& e : std::filesystem::directory_iterator(dir, ec))
-      files.insert(e.path().string());
-  }
+  for (const std::string& dir : GetSSDList())
+    for (const auto& e : plaid::io::ListDir(dir)) files.insert(e.path);
   return files;
 }
 

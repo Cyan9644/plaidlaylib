@@ -31,6 +31,7 @@
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 using digit = plaid::bigint_detail::digit;
 using u128 = unsigned __int128;
@@ -52,25 +53,25 @@ static bool report(const std::string& name, bool ok,
 static void cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 static std::vector<digit> materialize(const chunk_seq& seq) {
   if (seq.chunks.empty()) return {};
   const std::string tmp = "bigint_mul_test_materialize.tmp";
   seq.consolidate(tmp);
-  int fd = open(tmp.c_str(), O_RDONLY);
+  int fd = plaid::io::Open(tmp.c_str(), O_RDONLY);
   CHECK(fd >= 0) << "materialize: open(" << tmp << "): " << strerror(errno);
   std::vector<digit> out, buf(1 << 16);
   while (true) {
-    ssize_t got = read(fd, buf.data(), buf.size() * sizeof(digit));
+    ssize_t got = plaid::io::Read(fd, buf.data(), buf.size() * sizeof(digit));
     CHECK(got >= 0);
     if (got == 0) break;
     out.insert(out.end(), buf.begin(),
                buf.begin() + (size_t)got / sizeof(digit));
   }
-  close(fd);
-  unlink(tmp.c_str());
+  plaid::io::Close(fd);
+  plaid::io::Unlink(tmp.c_str());
   return out;
 }
 

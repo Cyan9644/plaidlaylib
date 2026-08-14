@@ -34,19 +34,17 @@
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 namespace {
 
 void set_budget(const char* v) { setenv("DC3_DRAM_BUDGET_BYTES", v, 1); }
 
 void cleanup_prefix(const std::string& prefix) {
-  for (const std::string& dir : GetSSDList()) {
-    std::error_code ec;
-    for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
-      const std::string name = e.path().filename().string();
-      if (name.rfind(prefix, 0) == 0) std::filesystem::remove(e.path(), ec);
-    }
-  }
+  // plaid::io::UnlinkPrefix so this also sweeps heap-backed files; the raw
+  // directory_iterator yields an empty range when the root does not exist,
+  // which under the in-memory backend would silently free nothing.
+  plaid::io::UnlinkPrefix(prefix);
 }
 
 // Reference suffix array: sort all suffix start positions lexicographically.
@@ -76,10 +74,10 @@ std::vector<uint32_t> read_sa(const chunk_seq& sa) {
   std::vector<uint32_t> out;
   for (const chunk* c : ord) {
     if (c->used == 0) continue;
-    int fd = open(c->filename.c_str(), O_RDONLY | O_DIRECT);
+    int fd = plaid::io::Open(c->filename.c_str(), O_RDONLY | O_DIRECT);
     SYSCALL(fd);
-    SYSCALL(pread(fd, buf, AlignUp(c->used), (off_t)c->begin_addr));
-    close(fd);
+    SYSCALL(plaid::io::Pread(fd, buf, AlignUp(c->used), (off_t)c->begin_addr));
+    plaid::io::Close(fd);
     const auto* e = (const uint32_t*)buf;
     for (size_t i = 0; i < c->used / sizeof(uint32_t); i++) out.push_back(e[i]);
   }

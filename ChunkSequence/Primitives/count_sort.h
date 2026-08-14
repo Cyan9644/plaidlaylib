@@ -19,6 +19,7 @@
 #include "absl/log/check.h"
 #include "configs.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/unordered_file_writer.h"
 
 namespace plaid {
@@ -40,9 +41,9 @@ void count_sort(const chunk_seq& seq, const chunk_seq& ids,
   std::vector<std::string> filenames(num_drives);
   for (size_t d = 0; d < num_drives; d++) {
     filenames[d] = GetFileName(result_prefix, d);
-    int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int fd = plaid::io::Open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     SYSCALL(fd);
-    SYSCALL(close(fd));
+    SYSCALL(plaid::io::Close(fd));
   }
 
   UnorderedWriterConfig wcfg;
@@ -140,9 +141,9 @@ void count_sort_by_key(const chunk_seq& seq, size_t num_buckets,
   std::vector<std::string> filenames(num_drives);
   for (size_t d = 0; d < num_drives; d++) {
     filenames[d] = GetFileName(result_prefix, d);
-    int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int fd = plaid::io::Open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     SYSCALL(fd);
-    SYSCALL(close(fd));
+    SYSCALL(plaid::io::Close(fd));
   }
 
   UnorderedWriterConfig wcfg;
@@ -251,9 +252,9 @@ void count_sort_serial(const D& dseq, size_t num_buckets,
   std::vector<std::string> filenames(num_drives);
   for (size_t d = 0; d < num_drives; d++) {
     filenames[d] = GetFileName(result_prefix, d);
-    int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int fd = plaid::io::Open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     SYSCALL(fd);
-    SYSCALL(close(fd));
+    SYSCALL(plaid::io::Close(fd));
   }
 
   UnorderedWriterConfig wcfg;

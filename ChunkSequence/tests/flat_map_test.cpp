@@ -16,6 +16,7 @@
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 // One chunk of uint64_t holds EPCT elements.
 static constexpr size_t EPCT = CHUNK_SIZE / sizeof(uint64_t);
@@ -24,7 +25,7 @@ static constexpr size_t EPCT = CHUNK_SIZE / sizeof(uint64_t);
 static void cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 // Verify `matches` against `expected`: element count, tight packing, the
@@ -72,19 +73,19 @@ static bool verify(const std::string& name, const chunk_seq& matches,
     matches.consolidate(consolidated);
     std::vector<uint64_t> got = [&] {
       std::vector<uint64_t> v(actual_count);
-      int fd = open(consolidated.c_str(), O_RDONLY);
+      int fd = plaid::io::Open(consolidated.c_str(), O_RDONLY);
       CHECK(fd >= 0) << "open(" << consolidated << "): " << strerror(errno);
       size_t off = 0;
       while (off < actual_count * sizeof(uint64_t)) {
-        ssize_t g = read(fd, (char*)v.data() + off,
+        ssize_t g = plaid::io::Read(fd, (char*)v.data() + off,
                          actual_count * sizeof(uint64_t) - off);
         CHECK(g > 0) << "short read";
         off += (size_t)g;
       }
-      close(fd);
+      plaid::io::Close(fd);
       return v;
     }();
-    unlink(consolidated.c_str());
+    plaid::io::Unlink(consolidated.c_str());
 
     bool ok = true;
     for (size_t i = 0; i < actual_count && ok; i++)

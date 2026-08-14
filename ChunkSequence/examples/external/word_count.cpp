@@ -50,6 +50,7 @@
 
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/trace_marker.h"
 #include "ChunkSequence/Primitives/chunk_seq.h"
 #include "ChunkSequence/examples/external/chunk_word_count.h"
@@ -62,7 +63,7 @@ static double to_gb(size_t bytes) { return (double)bytes / (1024.0 * 1024.0 * 10
 
 static void cleanup_prefix(const std::string& prefix) {
     const auto& ssds = GetSSDList();
-    for (size_t d = 0; d < ssds.size(); d++) unlink(GetFileName(prefix, d).c_str());
+    for (size_t d = 0; d < ssds.size(); d++) plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 // ── Deterministic synthetic text ────────────────────────────────────────────────

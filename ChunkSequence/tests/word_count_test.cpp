@@ -9,6 +9,7 @@
 
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "ChunkSequence/Primitives/chunk_seq.h"
 #include "ChunkSequence/examples/external/chunk_word_count.h"
 
@@ -18,7 +19,7 @@ static constexpr size_t CHARS_PER_CHUNK = CHUNK_SIZE / sizeof(char);
 static void cleanup_prefix(const std::string& prefix) {
     const auto& ssds = GetSSDList();
     for (size_t d = 0; d < ssds.size(); d++)
-        unlink(GetFileName(prefix, d).c_str());
+        plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 // Sequential reference word count: regenerate the text char-by-char from f(i)

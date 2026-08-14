@@ -39,6 +39,7 @@
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/logger.h"
 #include "utils/trace_marker.h"
 
@@ -55,7 +56,7 @@ static double to_gb(size_t bytes) {
 static void cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 // Element-wise check of an out-of-core uint64_t result against an in-RAM
@@ -69,10 +70,10 @@ static bool contents_equal(const chunk_seq& cs, const Seq& expected) {
   size_t j = 0;
   for (const chunk& c : cs.chunks) {
     if (!ok || c.used == 0) continue;
-    int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+    int fd = plaid::io::Open(c.filename.c_str(), O_DIRECT | O_RDONLY);
     SYSCALL(fd);
-    SYSCALL(pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
-    close(fd);
+    SYSCALL(plaid::io::Pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
+    plaid::io::Close(fd);
     const uint64_t* elems = reinterpret_cast<const uint64_t*>(buf);
     const size_t cnt = c.used / sizeof(uint64_t);
     for (size_t i = 0; i < cnt && ok; i++, j++)
@@ -101,14 +102,14 @@ static bool chunkseqs_equal(const chunk_seq& x, const chunk_seq& y) {
       break;
     }
     if (cx.used == 0) continue;
-    int fx = open(cx.filename.c_str(), O_DIRECT | O_RDONLY);
+    int fx = plaid::io::Open(cx.filename.c_str(), O_DIRECT | O_RDONLY);
     SYSCALL(fx);
-    SYSCALL(pread(fx, bx, AlignUp(cx.used), (off_t)cx.begin_addr));
-    close(fx);
-    int fy = open(cy.filename.c_str(), O_DIRECT | O_RDONLY);
+    SYSCALL(plaid::io::Pread(fx, bx, AlignUp(cx.used), (off_t)cx.begin_addr));
+    plaid::io::Close(fx);
+    int fy = plaid::io::Open(cy.filename.c_str(), O_DIRECT | O_RDONLY);
     SYSCALL(fy);
-    SYSCALL(pread(fy, by, AlignUp(cy.used), (off_t)cy.begin_addr));
-    close(fy);
+    SYSCALL(plaid::io::Pread(fy, by, AlignUp(cy.used), (off_t)cy.begin_addr));
+    plaid::io::Close(fy);
     if (memcmp(bx, by, cx.used) != 0) ok = false;
   }
   free(bx);

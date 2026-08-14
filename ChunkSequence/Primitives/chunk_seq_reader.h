@@ -16,6 +16,7 @@
 #include "ChunkSequence/Primitives/chunk_seq.h"
 #include "configs.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/logger.h"
 #include "utils/simple_queue.h"
 
@@ -119,7 +120,7 @@ class ChunkSequenceReader {
     is_open = false;
     Wait();
     // Workers have all joined; no further reads can reference these fds.
-    for (auto& [name, fd] : shared_fds) close(fd);
+    for (auto& [name, fd] : shared_fds) plaid::io::Close(fd);
     shared_fds.clear();
   }
 
@@ -146,7 +147,7 @@ class ChunkSequenceReader {
     // which is what caused EMFILE under highly-parallel recursive sorts.
     for (const chunk& c : chunks) {
       if (shared_fds.find(c.filename) == shared_fds.end()) {
-        int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+        int fd = plaid::io::Open(c.filename.c_str(), O_DIRECT | O_RDONLY);
         SYSCALL(fd);
         shared_fds[c.filename] = fd;
       }
@@ -195,9 +196,19 @@ class ChunkSequenceReader {
 
   static void Worker(ChunkSequenceReader* self, std::vector<chunk> work,
                      size_t queue_depth, size_t max_requests) {
+    // The ring is created lazily, on the first chunk that actually lives on a
+    // real device.  A fully heap-backed chunk_seq therefore never builds one --
+    // which matters because ring setup costs ~40 ms and the recursive sorts
+    // spin up a reader per subproblem.  Mixed sequences are fine too: each
+    // chunk picks its path independently from its own fd.
     struct io_uring ring;
-    SYSCALL(
-        InitIoUringWithRetry(queue_depth, &ring, IORING_SETUP_SINGLE_ISSUER));
+    bool ring_ready = false;
+    auto ensure_ring = [&]() {
+      if (ring_ready) return;
+      SYSCALL(
+          InitIoUringWithRetry(queue_depth, &ring, IORING_SETUP_SINGLE_ISSUER));
+      ring_ready = true;
+    };
 
     // fds are opened once in Start() and shared read-only across workers;
     // the map is not mutated after Start(), so lookups here need no lock.
@@ -234,6 +245,21 @@ class ChunkSequenceReader {
       bool submitted = false;
       while (!free_pool.empty() && !pending.empty() &&
              outstanding < max_requests) {
+        // Heap-backed chunk: copy it out right here.  No SQE, no request slot,
+        // no completion to reap -- the buffer_queue's size limit still supplies
+        // the same back-pressure the io_uring path gets.
+        if (plaid::io::IsVirtual(get_fd(pending.front().filename))) {
+          const chunk c = pending.front();
+          pending.pop_front();
+          T* buf = self->allocator.Alloc();
+          SYSCALL(plaid::io::Pread(get_fd(c.filename), buf, AlignUp(c.used),
+                                   (off_t)c.begin_addr));
+          self->buffer_queue.Push({buf, c.used / sizeof(T), c.index});
+          completed++;
+          continue;
+        }
+
+        ensure_ring();
         struct io_uring_sqe* sqe = io_uring_get_sqe(&ring);
         if (sqe == nullptr) break;
 
@@ -275,7 +301,7 @@ class ChunkSequenceReader {
       }
     }
 
-    io_uring_queue_exit(&ring);
+    if (ring_ready) io_uring_queue_exit(&ring);
     free(pool);
     // Shared fds are closed once in ~ChunkSequenceReader, not per worker.
 
@@ -343,7 +369,7 @@ class PersistentChunkSequenceReader {
     // fd per distinct file, shared read-only across all worker threads.
     for (const chunk& c : seq.chunks) {
       if (shared_fds.find(c.filename) == shared_fds.end()) {
-        int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+        int fd = plaid::io::Open(c.filename.c_str(), O_DIRECT | O_RDONLY);
         SYSCALL(fd);
         shared_fds[c.filename] = fd;
       }
@@ -394,7 +420,7 @@ class PersistentChunkSequenceReader {
     cv.notify_all();
     for (auto& t : worker_threads)
       if (t->joinable()) t->join();
-    for (auto& [name, fd] : shared_fds) close(fd);
+    for (auto& [name, fd] : shared_fds) plaid::io::Close(fd);
     shared_fds.clear();
   }
 
@@ -426,9 +452,16 @@ class PersistentChunkSequenceReader {
   static void Worker(PersistentChunkSequenceReader* self,
                      std::vector<chunk> work, size_t queue_depth,
                      size_t max_requests) {
+    // Created lazily on the first real-device chunk; see
+    // ChunkSequenceReader::Worker.  A fully heap-backed sequence builds no ring.
     struct io_uring ring;
-    SYSCALL(
-        InitIoUringWithRetry(queue_depth, &ring, IORING_SETUP_SINGLE_ISSUER));
+    bool ring_ready = false;
+    auto ensure_ring = [&]() {
+      if (ring_ready) return;
+      SYSCALL(
+          InitIoUringWithRetry(queue_depth, &ring, IORING_SETUP_SINGLE_ISSUER));
+      ring_ready = true;
+    };
 
     // fds are opened once in Start() and shared read-only across workers
     // and rounds; the map is not mutated after Start(), so lookups here
@@ -483,6 +516,19 @@ class PersistentChunkSequenceReader {
         bool submitted = false;
         while (!free_pool.empty() && !pending.empty() &&
                outstanding < max_requests) {
+          // Heap-backed chunk: copy it out here, no SQE and no completion.
+          if (plaid::io::IsVirtual(get_fd(pending.front().filename))) {
+            const chunk c = pending.front();
+            pending.pop_front();
+            T* buf = self->allocator.Alloc();
+            SYSCALL(plaid::io::Pread(get_fd(c.filename), buf, AlignUp(c.used),
+                                     (off_t)c.begin_addr));
+            self->buffer_queue.Push({buf, c.used / sizeof(T), c.index});
+            completed++;
+            continue;
+          }
+
+          ensure_ring();
           struct io_uring_sqe* sqe = io_uring_get_sqe(&ring);
           if (sqe == nullptr) break;
 
@@ -526,7 +572,7 @@ class PersistentChunkSequenceReader {
       // Round done; loop back to wait for the next StartRound().
     }
 
-    io_uring_queue_exit(&ring);
+    if (ring_ready) io_uring_queue_exit(&ring);
     free(pool);
     // Shared fds are closed once in Shutdown(), not per worker.
   }

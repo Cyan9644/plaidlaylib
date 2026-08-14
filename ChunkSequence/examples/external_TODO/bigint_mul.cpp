@@ -44,6 +44,7 @@
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/trace_marker.h"
 
 using limb = plaid::bigint_detail::digit;
@@ -59,7 +60,7 @@ static double to_gb(size_t bytes) {
 static void cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 // Read a whole chunk_seq back into a vector<limb> (baseline only runs when it
@@ -68,18 +69,18 @@ static std::vector<limb> materialize(const chunk_seq& seq) {
   if (seq.chunks.empty()) return {};
   const std::string tmp = "bigint_mul_materialize.tmp";
   seq.consolidate(tmp);
-  int fd = open(tmp.c_str(), O_RDONLY);
+  int fd = plaid::io::Open(tmp.c_str(), O_RDONLY);
   CHECK(fd >= 0);
   std::vector<limb> out, buf(1 << 20);
   while (true) {
-    ssize_t got = read(fd, buf.data(), buf.size() * sizeof(limb));
+    ssize_t got = plaid::io::Read(fd, buf.data(), buf.size() * sizeof(limb));
     CHECK(got >= 0);
     if (got == 0) break;
     out.insert(out.end(), buf.begin(),
                buf.begin() + (size_t)got / sizeof(limb));
   }
-  close(fd);
-  unlink(tmp.c_str());
+  plaid::io::Close(fd);
+  plaid::io::Unlink(tmp.c_str());
   return out;
 }
 

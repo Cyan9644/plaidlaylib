@@ -37,6 +37,7 @@
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/trace_marker.h"
 
 using Clock = std::chrono::steady_clock;
@@ -50,7 +51,7 @@ static double to_gb(size_t bytes) {
 static void cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 static uint64_t f_scalar(size_t i) { return (uint64_t)i * (uint64_t)i + 1; }

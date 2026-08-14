@@ -17,6 +17,7 @@
 #include "configs.h"
 #include "parlay/parallel.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/unordered_file_writer.h"
 
 namespace plaid {
@@ -218,9 +219,9 @@ std::vector<chunk_seq> group_by_index_partition_small(
   std::vector<std::string> filenames(num_drives);
   for (size_t d = 0; d < num_drives; d++) {
     filenames[d] = GetFileName(result_prefix, d);
-    int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int fd = plaid::io::Open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     SYSCALL(fd);
-    SYSCALL(close(fd));
+    SYSCALL(plaid::io::Close(fd));
   }
 
   UnorderedWriterConfig wcfg;

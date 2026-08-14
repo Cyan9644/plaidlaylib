@@ -13,6 +13,7 @@
 #include "configs.h"
 #include "parlay/primitives.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/unordered_file_writer.h"
 
 // Variant of UpperHull (chunk_convex_hull.h) that uses delayed::lazy_filter in
@@ -101,11 +102,11 @@ chunk_seq materialize_wide(const D& d, const std::string& result_prefix) {
         const size_t file_size = drive_pieces[dr].size() * CHUNK_SIZE;
         if (file_size == 0) return;
         int fd =
-            open(filenames[dr].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            plaid::io::Open(filenames[dr].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         SYSCALL(fd);
-        if (fallocate(fd, 0, 0, (off_t)file_size) != 0)
-          SYSCALL(ftruncate(fd, (off_t)file_size));
-        SYSCALL(close(fd));
+        if (plaid::io::Fallocate(fd, 0, 0, (off_t)file_size) != 0)
+          SYSCALL(plaid::io::Ftruncate(fd, (off_t)file_size));
+        SYSCALL(plaid::io::Close(fd));
       },
       /*granularity=*/1);
 

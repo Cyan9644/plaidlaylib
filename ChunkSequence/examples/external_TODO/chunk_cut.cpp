@@ -67,6 +67,7 @@
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/logger.h"
 // Out-of-core operation under test.  The in-memory baseline is just parlaylib's
 // slice::cut, pulled in with the rest of parlay/primitives.h above.
@@ -107,10 +108,10 @@ static std::vector<T> read_in_order(const chunk_seq& seq) {
   T* buf = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
   CHECK(buf != nullptr) << "read_in_order: buffer allocation failed";
   for (const chunk& c : seq.chunks) {
-    int fd = open(c.filename.c_str(), O_RDONLY | O_DIRECT);
+    int fd = plaid::io::Open(c.filename.c_str(), O_RDONLY | O_DIRECT);
     SYSCALL(fd);
-    SYSCALL(pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
-    close(fd);
+    SYSCALL(plaid::io::Pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
+    plaid::io::Close(fd);
     const size_t cnt = c.used / sizeof(T);
     out.insert(out.end(), buf, buf + cnt);
   }
@@ -248,10 +249,10 @@ int main(int argc, char* argv[]) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++) {
     const std::string f = GetFileName(in_prefix, d);
-    unlink(f.c_str());
-    unlink((f + "_cut_start").c_str());
-    unlink((f + "_cut_end").c_str());
-    unlink(GetFileName("cut_out", d).c_str());
+    plaid::io::Unlink(f.c_str());
+    plaid::io::Unlink((f + "_cut_start").c_str());
+    plaid::io::Unlink((f + "_cut_end").c_str());
+    plaid::io::Unlink(GetFileName("cut_out", d).c_str());
   }
   return agree ? 0 : 1;
 }

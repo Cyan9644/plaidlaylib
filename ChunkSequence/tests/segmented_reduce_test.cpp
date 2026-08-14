@@ -8,6 +8,7 @@
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 // ── monoids ──────────────────────────────────────────────────────────────────
 
@@ -159,7 +160,7 @@ int main(int argc, char* argv[]) {
             input, bounds, id, MaxMonoid{}),
         bounds_v, expected_max);
 
-    for (const auto& c : input.chunks) unlink(c.filename.c_str());
+    for (const auto& c : input.chunks) plaid::io::Unlink(c.filename.c_str());
   }
 
   std::cout << "\n" << (all_pass ? "ALL PASS" : "SOME FAILED") << "\n";

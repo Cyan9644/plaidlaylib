@@ -17,6 +17,7 @@
 #include "configs.h"
 #include "parlay/primitives.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/logger.h"
 #include "utils/unordered_file_writer.h"
 
@@ -41,7 +42,7 @@ struct chunk_seq {
   // output file is opened with ordinary (buffered) I/O so no alignment is
   // needed on the write side.
   void consolidate(const std::string& output_path) const {
-    int out_fd = open(output_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int out_fd = plaid::io::Open(output_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     SYSCALL(out_fd);
 
     // Process chunks in logical index order regardless of vector ordering.
@@ -61,16 +62,16 @@ struct chunk_seq {
       if (c->used == 0) continue;
       auto [it, inserted] = fd_cache.emplace(c->filename, -1);
       if (inserted) {
-        it->second = open(c->filename.c_str(), O_DIRECT | O_RDONLY);
+        it->second = plaid::io::Open(c->filename.c_str(), O_DIRECT | O_RDONLY);
         SYSCALL(it->second);
       }
-      SYSCALL(pread(it->second, buf, AlignUp(c->used), (off_t)c->begin_addr));
-      SYSCALL(write(out_fd, buf, c->used));
+      SYSCALL(plaid::io::Pread(it->second, buf, AlignUp(c->used), (off_t)c->begin_addr));
+      SYSCALL(plaid::io::Write(out_fd, buf, c->used));
     }
 
     free(buf);
-    for (auto& [name, fd] : fd_cache) close(fd);
-    close(out_fd);
+    for (auto& [name, fd] : fd_cache) plaid::io::Close(fd);
+    plaid::io::Close(out_fd);
   }
   const size_t headers_size() { return this->chunks.size(); }
 
@@ -118,7 +119,7 @@ struct chunk_seq {
     std::map<std::string, int> fds;
     for (const chunk* c : ordered)
       if (c->used && fds.find(c->filename) == fds.end()) {
-        int fd = open(c->filename.c_str(), O_DIRECT | O_RDONLY);
+        int fd = plaid::io::Open(c->filename.c_str(), O_DIRECT | O_RDONLY);
         SYSCALL(fd);
         fds[c->filename] = fd;
       }
@@ -139,7 +140,7 @@ struct chunk_seq {
           }
           // O_DIRECT needs an aligned buffer and an aligned read length; the
           // trailing padding beyond c->used is read but not copied out.
-          SYSCALL(pread(fds.at(c->filename), wbuf[w], AlignUp(c->used),
+          SYSCALL(plaid::io::Pread(fds.at(c->filename), wbuf[w], AlignUp(c->used),
                         (off_t)c->begin_addr));
           memcpy(out.data() + offset[i], wbuf[w], c->used);
         },
@@ -147,7 +148,7 @@ struct chunk_seq {
 
     for (T* b : wbuf)
       if (b) free(b);
-    for (auto& [name, fd] : fds) close(fd);
+    for (auto& [name, fd] : fds) plaid::io::Close(fd);
 
     return out;
   }
@@ -179,12 +180,12 @@ struct chunk_seq {
 
     void* buf = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, O_DIRECT_MULTIPLE);
     CHECK(buf != nullptr) << "operator[]: buffer allocation failed";
-    int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+    int fd = plaid::io::Open(c.filename.c_str(), O_DIRECT | O_RDONLY);
     SYSCALL(fd);
-    SYSCALL(pread(fd, buf, O_DIRECT_MULTIPLE, (off_t)block));
+    SYSCALL(plaid::io::Pread(fd, buf, O_DIRECT_MULTIPLE, (off_t)block));
     T value;
     memcpy(&value, (char*)buf + (byte - block), sizeof(T));
-    close(fd);
+    plaid::io::Close(fd);
     free(buf);
     return value;
   }
@@ -208,12 +209,12 @@ struct chunk_seq {
 
       void* buf = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, O_DIRECT_MULTIPLE);
       CHECK(buf != nullptr) << "push_back: buffer allocation failed";
-      int fd = open(last.filename.c_str(), O_DIRECT | O_RDWR);
+      int fd = plaid::io::Open(last.filename.c_str(), O_DIRECT | O_RDWR);
       SYSCALL(fd);
-      SYSCALL(pread(fd, buf, O_DIRECT_MULTIPLE, (off_t)block));
+      SYSCALL(plaid::io::Pread(fd, buf, O_DIRECT_MULTIPLE, (off_t)block));
       memcpy((char*)buf + (byte - block), &value, sizeof(T));
-      SYSCALL(pwrite(fd, buf, O_DIRECT_MULTIPLE, (off_t)block));
-      close(fd);
+      SYSCALL(plaid::io::Pwrite(fd, buf, O_DIRECT_MULTIPLE, (off_t)block));
+      plaid::io::Close(fd);
       free(buf);
       last.used += sizeof(T);
       return;
@@ -236,18 +237,18 @@ struct chunk_seq {
     const size_t begin_addr = slot * CHUNK_SIZE;
 
     // Grow the file to cover the new slot (matches tabulate's allocation).
-    int fd = open(filename.c_str(), O_DIRECT | O_RDWR);
+    int fd = plaid::io::Open(filename.c_str(), O_DIRECT | O_RDWR);
     SYSCALL(fd);
     const size_t file_size = (slot + 1) * CHUNK_SIZE;
-    if (fallocate(fd, 0, 0, (off_t)file_size) != 0)
-      SYSCALL(ftruncate(fd, (off_t)file_size));
+    if (plaid::io::Fallocate(fd, 0, 0, (off_t)file_size) != 0)
+      SYSCALL(plaid::io::Ftruncate(fd, (off_t)file_size));
 
     void* buf = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, O_DIRECT_MULTIPLE);
     CHECK(buf != nullptr) << "push_back: buffer allocation failed";
     memset(buf, 0, O_DIRECT_MULTIPLE);
     memcpy(buf, &value, sizeof(T));
-    SYSCALL(pwrite(fd, buf, O_DIRECT_MULTIPLE, (off_t)begin_addr));
-    close(fd);
+    SYSCALL(plaid::io::Pwrite(fd, buf, O_DIRECT_MULTIPLE, (off_t)begin_addr));
+    plaid::io::Close(fd);
     free(buf);
 
     chunks.push_back({filename, begin_addr, sizeof(T), chunks.size()});
@@ -315,13 +316,13 @@ chunk_seq tabulate(size_t n, const std::string& result_prefix, F f,
         filenames[d] = GetFileName(result_prefix, d);
         const size_t file_size = drive_chunks[d].size() * CHUNK_SIZE;
         if (file_size == 0) return;
-        int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int fd = plaid::io::Open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         SYSCALL(fd);
         // fallocate guarantees contiguous allocation; fall back to ftruncate
         // on filesystems that don't support it (e.g. tmpfs).
-        if (fallocate(fd, 0, 0, (off_t)file_size) != 0)
-          SYSCALL(ftruncate(fd, (off_t)file_size));
-        SYSCALL(close(fd));
+        if (plaid::io::Fallocate(fd, 0, 0, (off_t)file_size) != 0)
+          SYSCALL(plaid::io::Ftruncate(fd, (off_t)file_size));
+        SYSCALL(plaid::io::Close(fd));
       },
       /*granularity=*/1);
 
@@ -403,10 +404,10 @@ chunk_seq from_file(const std::string& input_path,
   static_assert(CHUNK_SIZE % sizeof(T) == 0,
                 "sizeof(T) must divide CHUNK_SIZE for O_DIRECT alignment");
 
-  int in_fd = open(input_path.c_str(), O_RDONLY);
+  int in_fd = plaid::io::Open(input_path.c_str(), O_RDONLY);
   SYSCALL(in_fd);
   struct stat st;
-  SYSCALL(fstat(in_fd, &st));
+  SYSCALL(plaid::io::Fstat(in_fd, &st));
   const size_t nbytes = (size_t)st.st_size;
   CHECK(nbytes % sizeof(T) == 0)
       << "from_file: file size " << nbytes << " not a multiple of sizeof(T)";
@@ -415,7 +416,7 @@ chunk_seq from_file(const std::string& input_path,
   const size_t ept = CHUNK_SIZE / sizeof(T);
   const size_t num_chunks = (n + ept - 1) / ept;
   if (num_chunks == 0) {
-    close(in_fd);
+    plaid::io::Close(in_fd);
     return {};
   }
   const size_t num_drives = GetSSDList().size();
@@ -443,11 +444,11 @@ chunk_seq from_file(const std::string& input_path,
         filenames[d] = GetFileName(result_prefix, d);
         const size_t file_size = drive_chunks[d].size() * CHUNK_SIZE;
         if (file_size == 0) return;
-        int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int fd = plaid::io::Open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         SYSCALL(fd);
-        if (fallocate(fd, 0, 0, (off_t)file_size) != 0)
-          SYSCALL(ftruncate(fd, (off_t)file_size));
-        SYSCALL(close(fd));
+        if (plaid::io::Fallocate(fd, 0, 0, (off_t)file_size) != 0)
+          SYSCALL(plaid::io::Ftruncate(fd, (off_t)file_size));
+        SYSCALL(plaid::io::Close(fd));
       },
       /*granularity=*/1);
 
@@ -487,7 +488,7 @@ chunk_seq from_file(const std::string& input_path,
           CHECK(buf != nullptr) << "from_file: buffer allocation failed";
           size_t got = 0;
           while (got < bytes) {
-            ssize_t r = pread(in_fd, (char*)buf + got, bytes - got,
+            ssize_t r = plaid::io::Pread(in_fd, (char*)buf + got, bytes - got,
                               (off_t)(start * sizeof(T) + got));
             SYSCALL(r);
             CHECK(r > 0) << "from_file: unexpected EOF reading " << input_path;
@@ -503,7 +504,7 @@ chunk_seq from_file(const std::string& input_path,
       /*granularity=*/1);
 
   writer.Wait();
-  close(in_fd);
+  plaid::io::Close(in_fd);
   return {chunks};
 }
 
@@ -572,11 +573,11 @@ chunk_seq sequential_tabulate(size_t n, const std::string& result_prefix, F f) {
 
     const std::string filename = GetFileName(result_prefix, d);
     int fd =
-        open(filename.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0644);
+        plaid::io::Open(filename.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0644);
     SYSCALL(fd);
     const size_t file_size = mine.size() * CHUNK_SIZE;
-    if (fallocate(fd, 0, 0, (off_t)file_size) != 0)
-      SYSCALL(ftruncate(fd, (off_t)file_size));
+    if (plaid::io::Fallocate(fd, 0, 0, (off_t)file_size) != 0)
+      SYSCALL(plaid::io::Ftruncate(fd, (off_t)file_size));
 
     // Slot s of this drive's file holds chunk mine[s], so every begin_addr is
     // CHUNK_SIZE-aligned exactly as in tabulate.
@@ -586,10 +587,10 @@ chunk_seq sequential_tabulate(size_t n, const std::string& result_prefix, F f) {
       const size_t count = std::min(ept, n - start);
       for (size_t j = 0; j < count; j++) buf[j] = f(start + j);
       if (count < ept) memset(buf + count, 0, (ept - count) * sizeof(T));
-      SYSCALL(pwrite(fd, buf, CHUNK_SIZE, (off_t)(s * CHUNK_SIZE)));
+      SYSCALL(plaid::io::Pwrite(fd, buf, CHUNK_SIZE, (off_t)(s * CHUNK_SIZE)));
       chunks[i] = {filename, s * CHUNK_SIZE, count * sizeof(T), i};
     }
-    close(fd);
+    plaid::io::Close(fd);
   }
 
   free(buf);
@@ -663,11 +664,11 @@ inline chunk_seq from_chunks(const parlay::sequence<chunk>& headers,
         filenames[d] = GetFileName(result_prefix, d);
         const size_t file_size = drive_chunks[d].size() * CHUNK_SIZE;
         if (file_size == 0) return;
-        int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int fd = plaid::io::Open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         SYSCALL(fd);
-        if (fallocate(fd, 0, 0, (off_t)file_size) != 0)
-          SYSCALL(ftruncate(fd, (off_t)file_size));
-        SYSCALL(close(fd));
+        if (plaid::io::Fallocate(fd, 0, 0, (off_t)file_size) != 0)
+          SYSCALL(plaid::io::Ftruncate(fd, (off_t)file_size));
+        SYSCALL(plaid::io::Close(fd));
       },
       /*granularity=*/1);
 
@@ -686,16 +687,16 @@ inline chunk_seq from_chunks(const parlay::sequence<chunk>& headers,
         const chunk& src = headers[i];
         void* buf = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
         CHECK(buf != nullptr) << "from_chunks: buffer allocation failed";
-        int rfd = open(src.filename.c_str(), O_RDONLY | O_DIRECT);
+        int rfd = plaid::io::Open(src.filename.c_str(), O_RDONLY | O_DIRECT);
         SYSCALL(rfd);
-        SYSCALL(pread(rfd, buf, AlignUp(src.used), (off_t)src.begin_addr));
-        close(rfd);
+        SYSCALL(plaid::io::Pread(rfd, buf, AlignUp(src.used), (off_t)src.begin_addr));
+        plaid::io::Close(rfd);
         if (src.used < CHUNK_SIZE)
           memset((char*)buf + src.used, 0, CHUNK_SIZE - src.used);
-        int wfd = open(filenames[drive_of[i]].c_str(), O_WRONLY | O_DIRECT);
+        int wfd = plaid::io::Open(filenames[drive_of[i]].c_str(), O_WRONLY | O_DIRECT);
         SYSCALL(wfd);
-        SYSCALL(pwrite(wfd, buf, CHUNK_SIZE, (off_t)(slot_of[i] * CHUNK_SIZE)));
-        close(wfd);
+        SYSCALL(plaid::io::Pwrite(wfd, buf, CHUNK_SIZE, (off_t)(slot_of[i] * CHUNK_SIZE)));
+        plaid::io::Close(wfd);
         free(buf);
       },
       /*granularity=*/1);

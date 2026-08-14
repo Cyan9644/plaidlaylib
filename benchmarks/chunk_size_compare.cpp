@@ -36,6 +36,7 @@
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 namespace cd = plaid::delayed;
 
@@ -60,7 +61,7 @@ static double to_gb(size_t bytes) {
 
 static void cleanup_prefix(const std::string& prefix) {
   for (size_t d = 0; d < GetSSDList().size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 static void print_row(const std::string& label, size_t in_bytes, double secs) {

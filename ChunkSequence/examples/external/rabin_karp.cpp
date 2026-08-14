@@ -54,6 +54,7 @@
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/logger.h"
 #include "utils/trace_marker.h"
 
@@ -68,7 +69,7 @@ static double to_gb(size_t bytes) {
 static void cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 // Element-wise check of an out-of-core uint64_t result against the in-mem
@@ -83,10 +84,10 @@ static bool contents_equal(const chunk_seq& cs, const Seq& expected) {
   size_t j = 0;
   for (const chunk& c : cs.chunks) {
     if (!ok || c.used == 0) continue;
-    int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+    int fd = plaid::io::Open(c.filename.c_str(), O_DIRECT | O_RDONLY);
     SYSCALL(fd);
-    SYSCALL(pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
-    close(fd);
+    SYSCALL(plaid::io::Pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
+    plaid::io::Close(fd);
     const uint64_t* elems = reinterpret_cast<const uint64_t*>(buf);
     const size_t cnt = c.used / sizeof(uint64_t);
     for (size_t i = 0; i < cnt && ok; i++, j++)

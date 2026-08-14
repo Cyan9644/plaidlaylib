@@ -44,6 +44,7 @@
 #include "ChunkSequence/Primitives/chunk_seq.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 namespace cd = plaid::delayed;
 
@@ -64,7 +65,7 @@ static double to_gb(size_t bytes) {
 
 static void cleanup_prefix(const std::string& prefix) {
   for (size_t d = 0; d < GetSSDList().size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 // Left-nested zip chain over srcs[0..K), each zip immediately collapsed to a

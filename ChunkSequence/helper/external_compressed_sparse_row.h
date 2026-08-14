@@ -16,6 +16,7 @@
 #include "ChunkSequence/Primitives/segmented_reduce.h"
 #include "ChunkSequence/Primitives/chunk_seq.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 using vertex = size_t;
 using weight = long double;
@@ -106,18 +107,18 @@ struct chunk_csr {
   // temp method, maybe not the logic we want to use
   void from_file(const std::string& filename,
                  const std::string& result_prefix = "csr_edges") {
-    int fd = open(filename.c_str(), O_RDONLY);
+    int fd = plaid::io::Open(filename.c_str(), O_RDONLY);
     SYSCALL(fd);
     struct stat st;
-    SYSCALL(fstat(fd, &st));
+    SYSCALL(plaid::io::Fstat(fd, &st));
     const size_t file_size = (size_t)st.st_size;
     std::vector<char> buf(file_size);
     for (size_t done = 0; done < file_size;) {
-      ssize_t r = read(fd, buf.data() + done, file_size - done);
+      ssize_t r = plaid::io::Read(fd, buf.data() + done, file_size - done);
       SYSCALL(r);
       done += (size_t)r;
     }
-    close(fd);
+    plaid::io::Close(fd);
     const char* data = buf.data();
 
     parlay::sequence<size_t> line_start =

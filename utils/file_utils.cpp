@@ -12,6 +12,7 @@
 #include <set>
 
 #include "parlay/parallel.h"
+#include "utils/io_backend.h"
 #include "utils/logger.h"
 
 using std::filesystem::directory_iterator;
@@ -34,9 +35,10 @@ using std::filesystem::path;
   const auto ssd_list = GetSSDList();
   // go through every SSD
   for (const std::string& ssd_name : ssd_list) {
-    path p(ssd_name);
-    for (auto const& dir_entry : directory_iterator{p}) {
-      auto path_str = dir_entry.path().string();
+    // ListDir, not directory_iterator: it also returns heap-backed files, and
+    // it does not throw when the root does not exist at all.
+    for (auto const& dir_entry : plaid::io::ListDir(ssd_name)) {
+      const auto& path_str = dir_entry.path;
       size_t index = path_str.find("/" + prefix);
       if (index != std::string::npos) {
         size_t file_index = 0;
@@ -46,7 +48,7 @@ using std::filesystem::path;
         if (!index_substring.empty()) {
           file_index = std::stol(index_substring);
         }
-        result.emplace_back(path_str, file_index, 0, dir_entry.file_size());
+        result.emplace_back(path_str, file_index, 0, dir_entry.size);
       }
     }
   }
@@ -169,16 +171,16 @@ std::string GetFileName(const std::string& prefix, size_t file_number) {
  * @param offset The byte at which we want to start reading
  */
 void ReadFileOnce(const std::string& file_name, void* buffer, size_t offset) {
-  int fd = open(file_name.c_str(), O_RDONLY | O_DIRECT);
+  int fd = plaid::io::Open(file_name.c_str(), O_RDONLY | O_DIRECT);
   SYSCALL(fd);
   CHECK(offset % O_DIRECT_MULTIPLE == 0)
       << "File read offset is " << offset << ", which is not a multiple of "
       << O_DIRECT_MULTIPLE;
-  auto res = lseek64(fd, (long)offset, SEEK_SET);
+  auto res = plaid::io::Lseek64(fd, (long)offset, SEEK_SET);
   CHECK(res != off64_t(-1))
       << std::strerror(errno) << " " << file_name << " at offset " << offset;
-  SYSCALL(read(fd, buffer, O_DIRECT_MULTIPLE));
-  SYSCALL(close(fd));
+  SYSCALL(plaid::io::Read(fd, buffer, O_DIRECT_MULTIPLE));
+  SYSCALL(plaid::io::Close(fd));
 }
 
 /**
@@ -195,21 +197,21 @@ void ReadFileOnce(const std::string& file_name, void* buffer, size_t offset) {
  */
 void ReadFileOnce(const std::string& file_name, void* buffer, size_t start,
                   size_t read_size) {
-  int fd = open(file_name.c_str(), O_RDONLY | O_DIRECT);
+  int fd = plaid::io::Open(file_name.c_str(), O_RDONLY | O_DIRECT);
   SYSCALL(fd);
   size_t start_aligned = AlignDown(start);
   size_t end = start + read_size;
   // compute the nearest aligned byte
   size_t end_aligned = AlignUp(end);
   size_t aligned_read_size = end_aligned - start_aligned;
-  auto res = lseek64(fd, (long)start_aligned, SEEK_SET);
+  auto res = plaid::io::Lseek64(fd, (long)start_aligned, SEEK_SET);
   SYSCALL(res);
   // read everything into a temporary buffer and then copy the data to the
   // original buffer
   unsigned char temp_buffer[aligned_read_size];
-  SYSCALL(read(fd, temp_buffer, O_DIRECT_MULTIPLE));
+  SYSCALL(plaid::io::Read(fd, temp_buffer, O_DIRECT_MULTIPLE));
   memcpy(buffer, temp_buffer + (start - start_aligned), read_size);
-  SYSCALL(close(fd));
+  SYSCALL(plaid::io::Close(fd));
 }
 
 /**
@@ -224,17 +226,18 @@ void* ReadEntireFile(const std::string& file_name, size_t read_size) {
   // align the read for O_DIRECT
   read_size = AlignUp(read_size);
   void* buffer = std::aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, read_size);
-  int fd = open(file_name.c_str(), O_RDONLY | O_DIRECT);
+  int fd = plaid::io::Open(file_name.c_str(), O_RDONLY | O_DIRECT);
   SYSCALL(fd);
   // reads cannot exceed 2147479552 bytes on Linux, so we need this loop to
   // perform multiple reads
   size_t result_size = 0;
   while (result_size < read_size) {
-    size_t cur_size =
-        read(fd, (char*)buffer + result_size, read_size - result_size);
+    size_t cur_size = plaid::io::Read(fd, (char*)buffer + result_size,
+                                      read_size - result_size);
     SYSCALL(cur_size);
     result_size += cur_size;
   }
+  SYSCALL(plaid::io::Close(fd));
   return buffer;
 }
 
@@ -272,7 +275,7 @@ double GetThroughput(const std::vector<FileInfo>& files, double time) {
 
 inline size_t GetFileSize(const std::string& file_name) {
   struct stat stat_buf;
-  SYSCALL(stat(file_name.c_str(), &stat_buf));
+  SYSCALL(plaid::io::Stat(file_name.c_str(), &stat_buf));
   return stat_buf.st_size;
 }
 
@@ -280,7 +283,7 @@ void Read(int fd, void* buffer, size_t read_size) {
   // Loop for large buffers for both read/write.
   auto* p = static_cast<unsigned char*>(buffer);
   while (read_size > 0) {
-    auto n = read(fd, p, read_size);
+    auto n = plaid::io::Read(fd, p, read_size);
     CHECK(n > 0);
     p += n;
     read_size -= static_cast<size_t>(n);
@@ -290,7 +293,7 @@ void Read(int fd, void* buffer, size_t read_size) {
 void Write(int fd, const void* buffer, size_t write_size) {
   auto* p = static_cast<const unsigned char*>(buffer);
   while (write_size > 0) {
-    auto n = write(fd, p, write_size);
+    auto n = plaid::io::Write(fd, p, write_size);
     CHECK(n > 0);
     p += n;
     write_size -= static_cast<size_t>(n);

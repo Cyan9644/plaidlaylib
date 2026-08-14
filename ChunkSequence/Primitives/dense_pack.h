@@ -23,6 +23,7 @@
 #include "parlay/primitives.h"
 #include "parlay/sequence.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/simple_queue.h"
 #include "utils/unordered_file_writer.h"
 
@@ -86,9 +87,9 @@ chunk_seq DensePack(size_t num_virtual, const std::string& result_prefix,
       0, num_drives,
       [&](size_t d) {
         filenames[d] = GetFileName(result_prefix, d);
-        int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int fd = plaid::io::Open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         SYSCALL(fd);
-        SYSCALL(close(fd));
+        SYSCALL(plaid::io::Close(fd));
       },
       /*granularity=*/1);
 
@@ -261,9 +262,9 @@ chunk_seq DensePackStream(const chunk_seq& seq,
       0, num_drives,
       [&](size_t d) {
         filenames[d] = GetFileName(result_prefix, d);
-        int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int fd = plaid::io::Open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         SYSCALL(fd);
-        SYSCALL(close(fd));
+        SYSCALL(plaid::io::Close(fd));
       },
       /*granularity=*/1);
 

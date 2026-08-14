@@ -26,6 +26,7 @@
 #include "configs.h"
 #include "parlay/primitives.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/unordered_file_writer.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -883,11 +884,11 @@ struct SequentialReadContext {
     }
     if (fd_cache.size() >= MAX_CACHED_FDS) {
       const std::string& victim = lru.back();
-      close(fd_cache.at(victim).first);
+      plaid::io::Close(fd_cache.at(victim).first);
       fd_cache.erase(victim);
       lru.pop_back();
     }
-    int fd = open(filename.c_str(), O_RDONLY | O_DIRECT);
+    int fd = plaid::io::Open(filename.c_str(), O_RDONLY | O_DIRECT);
     CHECK(fd >= 0) << "SequentialReadContext: open failed for " << filename
                    << ": " << std::strerror(errno);
     lru.push_front(filename);
@@ -897,7 +898,7 @@ struct SequentialReadContext {
 
   ~SequentialReadContext() {
     for (char* p : buf_pool) free(p);
-    for (auto& [name, entry] : fd_cache) close(entry.first);
+    for (auto& [name, entry] : fd_cache) plaid::io::Close(entry.first);
   }
 };
 
@@ -946,7 +947,7 @@ void sequential_for_each_chunk(const D& d, SequentialReadContext& ctx,
       char* buf = ctx.buf_pool[s];
       if (c.used == 0) continue;
       int fd = ctx.get_fd(c.filename);
-      SYSCALL(pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
+      SYSCALL(plaid::io::Pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
     }
 
     Resolver r{&ctx.buf_pool, &pl.leaf_slots, 0};
@@ -1355,11 +1356,11 @@ chunk_seq force(const D& d, const std::string& result_prefix) {
         const size_t file_size = drive_chunks[dr].size() * CHUNK_SIZE;
         if (file_size == 0) return;
         int fd =
-            open(filenames[dr].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            plaid::io::Open(filenames[dr].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         SYSCALL(fd);
-        if (fallocate(fd, 0, 0, (off_t)file_size) != 0)
-          SYSCALL(ftruncate(fd, (off_t)file_size));
-        SYSCALL(close(fd));
+        if (plaid::io::Fallocate(fd, 0, 0, (off_t)file_size) != 0)
+          SYSCALL(plaid::io::Ftruncate(fd, (off_t)file_size));
+        SYSCALL(plaid::io::Close(fd));
       },
       /*granularity=*/1);
 
@@ -1418,9 +1419,9 @@ chunk_seq filter(const D& d, const std::string& result_prefix, Pred pred) {
       [&](size_t dr) {
         filenames[dr] = GetFileName(result_prefix, dr);
         int fd =
-            open(filenames[dr].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            plaid::io::Open(filenames[dr].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         SYSCALL(fd);
-        SYSCALL(close(fd));
+        SYSCALL(plaid::io::Close(fd));
       },
       1);
 

@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "ChunkSequence/Primitives/chunk_seq.h"
+#include "utils/io_backend.h"
 
 // template<typename T>
 // T plaid::LinearFind(chunk_seq& seq, size_t index){
@@ -33,10 +34,10 @@ T find(const chunk_seq& seq, size_t g) {
     if (g < cnt) {
       T* buf = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
       CHECK(buf != nullptr) << "allocation wrong";
-      int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+      int fd = plaid::io::Open(c.filename.c_str(), O_DIRECT | O_RDONLY);
       SYSCALL(fd);
-      SYSCALL(pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
-      close(fd);
+      SYSCALL(plaid::io::Pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
+      plaid::io::Close(fd);
       T val = buf[g];
       free(buf);
       return val;

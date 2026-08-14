@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "ChunkSequence/Primitives/chunk_seq.h"
+#include "utils/io_backend.h"
 
 // the goal of this method is to compute a scan over the number of elements
 // actually used in a sequence, which allows us to more efficiently search the
@@ -43,10 +44,10 @@ T scan_find(const chunk_seq& seq, const parlay::sequence<size_t>& pseq,
 
   char* buf = (char*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, read_len);
   CHECK(buf != nullptr) << "allocation wrong";
-  int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+  int fd = plaid::io::Open(c.filename.c_str(), O_DIRECT | O_RDONLY);
   SYSCALL(fd);
-  SYSCALL(pread(fd, buf, read_len, (off_t)aligned_off));
-  close(fd);
+  SYSCALL(plaid::io::Pread(fd, buf, read_len, (off_t)aligned_off));
+  plaid::io::Close(fd);
   T val;
   std::memcpy(&val, buf + delta, sizeof(T));
   free(buf);

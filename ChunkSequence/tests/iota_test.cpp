@@ -11,6 +11,7 @@
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 /**
  * Verify that iota(n) writes the identity sequence correctly.
@@ -80,7 +81,7 @@ int main(int argc, char* argv[]) {
           return;
         }
 
-        int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+        int fd = plaid::io::Open(c.filename.c_str(), O_DIRECT | O_RDONLY);
         if (fd < 0) {
           std::cerr << "FAIL chunk " << c.index << ": open(" << c.filename
                     << ") failed: " << strerror(errno) << "\n";
@@ -91,8 +92,8 @@ int main(int argc, char* argv[]) {
         T* buf = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, read_size);
         CHECK(buf != nullptr);
 
-        const ssize_t got = pread(fd, buf, read_size, (off_t)c.begin_addr);
-        close(fd);
+        const ssize_t got = plaid::io::Pread(fd, buf, read_size, (off_t)c.begin_addr);
+        plaid::io::Close(fd);
 
         if (got < 0 || (size_t)got < c.used) {
           std::cerr << "FAIL chunk " << c.index << ": pread returned " << got

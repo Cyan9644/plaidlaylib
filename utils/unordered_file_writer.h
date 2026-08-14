@@ -19,6 +19,7 @@
 
 #include "configs.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/logger.h"
 #include "utils/simple_queue.h"
 
@@ -199,11 +200,11 @@ class UnorderedFileWriter {
     size_t bytes_written = 0;
 
     explicit OpenedFile(const std::string& name) {
-      fd = open(name.c_str(), O_DIRECT | O_WRONLY | O_CREAT, 0644);
+      fd = plaid::io::Open(name.c_str(), O_DIRECT | O_WRONLY | O_CREAT, 0644);
       SYSCALL(fd);
     }
 
-    ~OpenedFile() { SYSCALL(close(fd)); }
+    ~OpenedFile() { SYSCALL(plaid::io::Close(fd)); }
   };
 
   enum Phase { NORMAL = 0, WAITING_FOR_COMPLETION = 1, ALL_DONE = 2 };
@@ -212,9 +213,16 @@ class UnorderedFileWriter {
                                   const std::vector<OpenedFile*> files,
                                   const size_t io_uring_size) {
     CHECK(!files.empty());
+    // Created lazily, on the first write that actually targets a real device.
+    // A fully heap-backed writer therefore never builds a ring at all.
     struct io_uring ring;
-    SYSCALL(
-        InitIoUringWithRetry(io_uring_size, &ring, IORING_SETUP_SINGLE_ISSUER));
+    bool ring_ready = false;
+    auto ensure_ring = [&]() {
+      if (ring_ready) return;
+      SYSCALL(InitIoUringWithRetry(io_uring_size, &ring,
+                                   IORING_SETUP_SINGLE_ISSUER));
+      ring_ready = true;
+    };
 
     size_t current_file = 0;
     size_t outstanding_request = 0;
@@ -262,17 +270,6 @@ class UnorderedFileWriter {
           phase = WAITING_FOR_COMPLETION;
           break;
         }
-        // submit this IO request to ring
-        struct io_uring_sqe* sqe;
-        while (true) {
-          sqe = io_uring_get_sqe(&ring);
-          if (sqe == nullptr) {
-            [[unlikely]];
-            sqe_unavailable_count++;
-          } else {
-            break;
-          }
-        }
         OpenedFile* file;
         if (request->file_index != (size_t)-1) {
           if (request->file_index >= writer->num_files) {
@@ -296,9 +293,35 @@ class UnorderedFileWriter {
         if (request->file_offset != (size_t)-1) {
           offset = request->file_offset;
         }
+        file->bytes_issued += num_bytes;
+
+        // Heap-backed target: copy it now.  There is no completion to reap, so
+        // the request (and with it the caller's buffer, whose shared_ptr
+        // deleter recycles it into the reader pool for partition/group_by)
+        // retires right here.
+        if (plaid::io::IsVirtual(file->fd)) {
+          SYSCALL(plaid::io::Pwrite(file->fd, request->data.get(), num_bytes,
+                                    (off_t)offset));
+          file->bytes_written += num_bytes;
+          delete request;
+          requests_in_queue++;
+          continue;
+        }
+
+        // submit this IO request to ring
+        ensure_ring();
+        struct io_uring_sqe* sqe;
+        while (true) {
+          sqe = io_uring_get_sqe(&ring);
+          if (sqe == nullptr) {
+            [[unlikely]];
+            sqe_unavailable_count++;
+          } else {
+            break;
+          }
+        }
         io_uring_prep_write(sqe, file->fd, request->data.get(), num_bytes,
                             offset);
-        file->bytes_issued += num_bytes;
         io_uring_sqe_set_data(sqe, request);
         submit_write = true;
         outstanding_request++;
@@ -315,7 +338,7 @@ class UnorderedFileWriter {
                    << sqe_unavailable_count << " times. "
                    << "Consider expanding the ring buffer.";
     }
-    io_uring_queue_exit(&ring);
+    if (ring_ready) io_uring_queue_exit(&ring);
   }
 };
 

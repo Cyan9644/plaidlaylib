@@ -50,6 +50,104 @@ Assumes `SSD_COUNT` (default 30) mount points named per `SSD_ROOT` (default
 On a dev box you can point all mounts at one tmpfs, but keep benchmark sizes
 small (the "SSDs" then share one RAM-backed device).
 
+## Storage backends — running with no `/mnt` at all  (`utils/io_backend.h`)
+
+Every "file" the library creates lives under a `GetSSDList()` root and is named
+by `GetFileName(prefix, drive)`.  `plaid::io` sits under all of it and can back
+such a file with a **heap arena** instead of a real O_DIRECT file, so the whole
+library and the full test suite run with no mount points:
+
+```bash
+make test-mem                     # whole suite, in memory, no /mnt needed
+make test-both                    # both backends; a divergence fails the build
+PLAID_IN_MEMORY=1 bin/reduceTest 1000000
+bin/reduceTest --in_memory=1 1000000
+```
+
+`chunk`'s `{filename, begin_addr, used, index}` metadata is **unchanged** —
+`filename` just resolves to an arena.  The switch is **runtime, not
+compile-time**, deliberately: one binary serves both backends, so any test can
+be A/B'd against itself, and (given the Makefile tracks no header deps) a `-D`
+flip would silently mix differently-compiled copies of the storage header.
+
+**Routing is per path, not per process.** A path is heap-backed iff it sits
+under an SSD root *and* its basename matches a registered prefix (longest match
+wins; the default backend covers everything else).  So a heap-backed and a
+disk-backed `chunk_seq` can coexist, and one `chunk_seq` may even hold chunks of
+both kinds — each routes by its own filename:
+
+```cpp
+{
+  plaid::io::MemoryBacked scope("iota");  // this sequence in RAM ...
+  s = plaid::iota(n);                     // ... everything else still on disk
+}
+auto tot = plaid::ChunkReduce<uint64_t>(s, SumMonoid{});  // still reads from RAM
+```
+
+Routing rules decide where **new** files are created; they never move existing
+ones.  A file already in the arena stays heap-backed regardless of what the
+rules later say, so the sequence above survives its scope ending — otherwise its
+reads would fall through to a path that does not exist on disk.  `flatten()` of
+a heap-backed and a disk-backed sequence works for the same reason: the result
+is one `chunk_seq` whose chunks each resolve on their own.
+
+Paths outside every SSD root always go to the real filesystem, which is what
+keeps the library/host boundary intact: `consolidate()`'s output,
+`from_file()`'s input and `chunk_csr::from_file` stay ordinary files.
+
+Structure:
+
+- **Loose syscalls** (`open/pread/pwrite/fallocate/unlink/…`, ~330 call sites
+  across the library, examples and tests) go through `plaid::io::Open/Pread/…`,
+  which mirror the libc signatures and return conventions.  Virtual fds come
+  from `kVirtualFdBase = 1<<28`, so anything below it is a zero-overhead
+  passthrough.
+- **The I/O engine classes** (`ChunkSequenceReader`, `PersistentChunkSequenceReader`,
+  `UnorderedFileWriter`, `BucketWriter`, `process_inplace`, and the two
+  `direct_*` gather pipelines) take an early branch instead: a heap-backed chunk
+  is copied inline, with no SQE and no completion to reap.  **Their io_uring
+  rings are created lazily**, on the first chunk that actually lives on a device,
+  so a fully heap-backed run builds no ring at all (ring setup is ~40 ms, and the
+  recursive sorts spin up a reader per subproblem).
+- `plaid::io::ListDir` replaces `std::filesystem::directory_iterator` for the SSD
+  roots.  This is load-bearing, not cosmetic: the `(dir, ec)` overload yields an
+  *empty range* on a missing `/mnt/ssdN`, so without it teardown silently frees
+  nothing and the arena leaks as an OOM instead of a test failure.
+
+**Arena layout — 64 KiB granules with zero elision.**  The writer pads every
+chunk to a full `CHUNK_SIZE` block (O_DIRECT wants aligned lengths), so a chunk
+holding three elements still writes 4 MiB.  On disk that padding is nearly free;
+in RAM, allocating `CHUNK_SIZE` per partial chunk makes the footprint track the
+*padded chunk count* rather than the live data — convex_hull's quickhull
+recursion emits one padded block per (worker, bucket) per level, which turned
+1.6 MB of points into >15 GiB.  So `MemFile` allocates 64 KiB granules and never
+allocates one that is written all-zero (unwritten granules already read as
+zeros), which brought that case under 1 GiB.  Segments are held behind a
+`shared_mutex` that guards **only the pointer vector**, so growth never moves
+bytes out from under a concurrent `memcpy` — many writer threads `pwrite`
+disjoint offsets of the same file at once.
+
+Knobs (all optional): `PLAID_IN_MEMORY`, `PLAID_MEM_LIMIT_BYTES` (default
+`min(4 GiB, RAM/2)`; exceeding it CHECK-fails with the largest files listed
+rather than inviting the OOM killer), `PLAID_MEM_STATS=1` (print the arena
+high-water mark at exit), `PLAID_MEM_STRICT_ALIGN` (default **on** — enforces
+O_DIRECT's alignment rules on heap writes too, so "passes in memory mode"
+implies "passes on `/mnt`"), `PLAID_MEM_OPEN_MISSING_FATAL` (default on).
+
+**Known gap**: `dc3Test` is excluded from `make test-mem` (`MEM_TEST_EXCLUDE` in
+the Makefile).  It is the slowest test by far, and under the in-memory backend it
+deadlocks — every thread parked on a futex at ~44 MB RSS, so a genuine hang, not
+the arena filling up.  Undiagnosed: `ptrace` is restricted on the dev box, so no
+backtrace was obtainable.  It runs and passes under `make test`.  The other 25
+tests pass under both backends.
+
+Caveats: memory mode cannot reproduce I/O-error paths (arena access never fails,
+and `SYSCALL` only logs).  It also runs the recursive primitives *wider* than
+disk mode ever does — nothing throttles the `par_do` frontier — so expect it to
+surface fan-out bugs first; that is a real difference, not a backend regression.
+`peter_samplesort/` is out of scope and stays on real files (its own
+`configs.h`/`file_utils.h` shadow ours on the include path).
+
 ## Layout
 
 ```
@@ -58,6 +156,9 @@ Makefile  shell.nix  .envrc
 utils/                        vendored shared I/O utilities
   logger.{h,cpp}  file_info.h  file_utils.{h,cpp}  simple_queue.h
   unordered_file_writer.h     UnorderedFileWriter<T> — the standardized writer
+  io_backend.{h,cpp}          plaid::io — storage backend under every syscall;
+                              routes a path to a real file or a heap arena
+                              (see "Storage backends" above)
   command_line.{h,cpp}        ParseGlobalArguments (used by the tests)
 ChunkSequence/
   Primitives/                 all eager primitives + their I/O substrate, flat

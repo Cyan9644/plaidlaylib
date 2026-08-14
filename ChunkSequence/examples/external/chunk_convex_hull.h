@@ -18,6 +18,7 @@
 #include "parlay/primitives.h"
 #include "parlay/sequence.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 // Out-of-core 2D upper convex hull via the quickhull divide-and-conquer.
 //
@@ -90,7 +91,7 @@ inline std::atomic<size_t>& prefix_counter() {
 inline void cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 // Max-by-(area, idx) reduction returning the winning point (identity loses via

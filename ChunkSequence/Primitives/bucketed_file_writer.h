@@ -29,6 +29,7 @@
 #include "absl/log/check.h"
 #include "configs.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/simple_queue.h"
 
 namespace plaid {
@@ -110,7 +111,7 @@ class BucketWriter {
         const size_t i = b * disk_span_ + s;
         Bucket& bk = buckets_[i];
         results_[i].filename = GetFileName(prefix, i);
-        bk.fd = open(results_[i].filename.c_str(),
+        bk.fd = plaid::io::Open(results_[i].filename.c_str(),
                      O_WRONLY | O_DIRECT | O_CREAT | O_TRUNC, 0644);
         SYSCALL(bk.fd);
         bk.cur = NewRequest(bk.fd, 0);
@@ -120,15 +121,23 @@ class BucketWriter {
 
   ~BucketWriter() {
     for (Bucket& bk : buckets_)
-      if (bk.fd >= 0) close(bk.fd);
+      if (bk.fd >= 0) plaid::io::Close(bk.fd);
   }
 
   // Drains `pending_` until it is closed.  Run on kWriterIoThreads parlay
   // workers alongside the scatter workers.
   void RunIoThread() {
+    // Created lazily on the first request that targets a real device.  A
+    // heap-backed run therefore builds no ring at all -- which matters here
+    // because RunIoThread runs as a parlay task, not a std::thread.
     struct io_uring ring;
-    SYSCALL(InitIoUringWithRetry(kWriterRingDepth, &ring,
-                                 IORING_SETUP_SINGLE_ISSUER));
+    bool ring_ready = false;
+    auto ensure_ring = [&]() {
+      if (ring_ready) return;
+      SYSCALL(InitIoUringWithRetry(kWriterRingDepth, &ring,
+                                   IORING_SETUP_SINGLE_ISSUER));
+      ring_ready = true;
+    };
     size_t in_ring = 0;
     bool more = true;
 
@@ -142,6 +151,24 @@ class BucketWriter {
           if (code == QueueCode::FINISH) more = false;
           break;
         }
+
+        // Heap-backed bucket file: perform the gather here.  Recycle() must
+        // still run on this (parlay) thread, since bucket_allocator's free
+        // lists are keyed by parlay::worker_id().
+        if (plaid::io::IsVirtual(r->fd)) {
+          off_t at = r->offset;
+          for (unsigned i = 0; i < r->n; i++) {
+            SYSCALL(plaid::io::Pwrite(r->fd, r->iov[i].iov_base,
+                                      r->iov[i].iov_len, at));
+            at += (off_t)r->iov[i].iov_len;
+          }
+          CHECK((size_t)(at - r->offset) == r->bytes)
+              << "BucketWriter: gather length mismatch";
+          Recycle(r);
+          continue;
+        }
+
+        ensure_ring();
         struct io_uring_sqe* sqe = io_uring_get_sqe(&ring);
         CHECK(sqe != nullptr) << "BucketWriter: writer ring out of sqes";
         io_uring_prep_writev(sqe, r->fd, r->iov, r->n, r->offset);
@@ -171,7 +198,7 @@ class BucketWriter {
         Recycle(r);
       }
     }
-    io_uring_queue_exit(&ring);
+    if (ring_ready) io_uring_queue_exit(&ring);
   }
 
   // Takes ownership of `buf` (a bucket_allocator block); `count` is its live
@@ -256,7 +283,7 @@ class BucketWriter {
   // Called after the I/O threads have joined: every write has landed.
   void CloseFiles() {
     for (Bucket& bk : buckets_) {
-      if (bk.fd >= 0) SYSCALL(close(bk.fd));
+      if (bk.fd >= 0) SYSCALL(plaid::io::Close(bk.fd));
       bk.fd = -1;
     }
   }

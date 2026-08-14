@@ -43,6 +43,7 @@
 #include <vector>
 
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 namespace bench_drives {
 
@@ -59,11 +60,16 @@ inline size_t settle_ms() {
 // block frees queued by removing a previous sort's files) and then left to
 // settle. Always call this outside a timed region.
 inline void settle_drives() {
+  // Nothing to sync and nothing to settle when the "drives" are heap arenas:
+  // there is no writeback and no delayed block-free to wait out.  Worth
+  // short-circuiting rather than tolerating -- the sleep alone costs ~2 s per
+  // call, and the sort tests call this several times each.
+  if (plaid::io::MemoryModeDefault()) return;
   for (const std::string& dir : GetSSDList()) {
-    int fd = open(dir.c_str(), O_RDONLY | O_DIRECTORY);
+    int fd = plaid::io::Open(dir.c_str(), O_RDONLY | O_DIRECTORY);
     if (fd < 0) continue;  // best effort: a mount we can't open
     syncfs(fd);
-    close(fd);
+    plaid::io::Close(fd);
   }
   std::this_thread::sleep_for(std::chrono::milliseconds(settle_ms()));
 }
@@ -75,13 +81,16 @@ inline void settle_drives() {
 // holding nothing but its own input — and, thanks to the settle, none of the
 // previous sort's unfinished teardown.
 inline void clear_drives(const std::vector<std::string>& prefixes) {
+  // plaid::io::ListDir rather than directory_iterator: it enumerates
+  // heap-backed files too, and its non-throwing behaviour on a missing mount is
+  // no longer a silent no-op that would leak the whole arena.
   for (const std::string& dir : GetSSDList()) {
-    std::error_code ec;
-    for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
-      const std::string name = e.path().filename().string();
+    for (const auto& e : plaid::io::ListDir(dir)) {
+      const std::string name =
+          std::filesystem::path(e.path).filename().string();
       for (const std::string& p : prefixes) {
         if (name.rfind(p, 0) == 0) {  // name starts with p
-          std::filesystem::remove(e.path(), ec);
+          plaid::io::Unlink(e.path.c_str());
           break;
         }
       }

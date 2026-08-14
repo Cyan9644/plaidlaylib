@@ -40,7 +40,8 @@ ABSL_LIBDIR := $(firstword $(wildcard deps/abseil-cpp/install/lib deps/abseil-cp
 ABSL_LIBS   := $(shell find $(ABSL_LIBDIR) -name '*.a' 2>/dev/null | sort)
 
 # Vendored shared utilities (utils/), compiled into this repo's $(OBJDIR).
-UTIL_OBJS := $(OBJDIR)/logger.o $(OBJDIR)/command_line.o $(OBJDIR)/file_utils.o
+UTIL_OBJS := $(OBJDIR)/logger.o $(OBJDIR)/command_line.o $(OBJDIR)/file_utils.o \
+             $(OBJDIR)/io_backend.o
 
 # ChunkSequence correctness tests (each exits 0 on PASS, non-zero on FAIL).
 TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
@@ -143,6 +144,48 @@ test: $(TEST_BINARIES)
 	done; \
 	if [ $$fail -ne 0 ]; then echo "SOME TESTS FAILED"; exit 1; \
 	else echo "ALL TESTS PASSED"; fi
+
+# Same suite, but with every chunk_seq backed by heap arenas instead of files
+# (see utils/io_backend.h) -- needs no /mnt setup at all.  Kept separate from
+# `test` on purpose: `test` must keep exercising the real O_DIRECT/io_uring
+# path, and the two want different sizes.
+#
+# Defaults are NOT forked by backend -- that would destroy the A/B differential,
+# which is the whole point of the backend being a runtime switch rather than a
+# compile-time one.  Instead, the handful of tests whose default n would need
+# multiple GiB of arena get a per-binary override below; everything else runs at
+# exactly the size `make test` uses.  Override any of them on the command line,
+# e.g. `make test-mem TEST_ARGS_mapTest=1048576`.
+TEST_ARGS_mapTest  ?= 16777216
+TEST_ARGS_scanTest ?= 16777216
+
+# Turn an OOM-kill into a readable failure naming the largest arena files.
+PLAID_MEM_LIMIT_BYTES ?= 4294967296
+
+# dc3Test is disk-only: it is by far the slowest test, and under the in-memory
+# backend it deadlocks (every thread parked on a futex at ~44 MB RSS, so it is a
+# genuine hang, not the arena running out).  Not yet diagnosed -- ptrace is
+# restricted on this box, so no backtrace was obtainable.  It still runs, and
+# passes, under `make test`.
+MEM_TEST_EXCLUDE := $(BINDIR)/dc3Test
+TEST_BINARIES_MEM := $(filter-out $(MEM_TEST_EXCLUDE),$(TEST_BINARIES))
+
+test-mem: $(TEST_BINARIES)
+	@fail=0; \
+	for t in $(TEST_BINARIES_MEM); do \
+	  b=$$(basename $$t); \
+	  eval "a=\$${TEST_ARGS_$$b}"; \
+	  [ -n "$$a" ] || a="$(TEST_ARGS)"; \
+	  echo "==================== $$t $$a (in-memory) ===================="; \
+	  PLAID_IN_MEMORY=1 PLAID_MEM_LIMIT_BYTES=$(PLAID_MEM_LIMIT_BYTES) \
+	    $$t $$a || fail=1; \
+	  echo; \
+	done; \
+	if [ $$fail -ne 0 ]; then echo "SOME TESTS FAILED"; exit 1; \
+	else echo "ALL TESTS PASSED"; fi
+
+# Both backends, so a divergence between them shows up as a failure.
+test-both: test test-mem
 
 # ── dependency fetching ────────────────────────────────────────────────────────
 

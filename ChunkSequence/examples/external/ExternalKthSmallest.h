@@ -18,6 +18,7 @@
 // header has no include guard, so do NOT include it a second time here.
 #include "ChunkSequence/Primitives/scan_find.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 // we are currently assuming that not all elemsents go into 1 bucket, for
 // obvious reasons.
@@ -130,7 +131,7 @@ inline std::atomic<size_t>& kth_smallest_prefix_counter() {
 inline void kth_smallest_cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 // randomized ~O(n) algorithm

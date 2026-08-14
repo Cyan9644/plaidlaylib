@@ -46,19 +46,17 @@
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 namespace {
 
 using vertex_utils = graph_utils<size_t>;
 
 void cleanup_prefix(const std::string& prefix) {
-  for (const std::string& dir : GetSSDList()) {
-    std::error_code ec;
-    for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
-      const std::string name = e.path().filename().string();
-      if (name.rfind(prefix, 0) == 0) std::filesystem::remove(e.path(), ec);
-    }
-  }
+  // plaid::io::UnlinkPrefix so this also sweeps heap-backed files; the raw
+  // directory_iterator yields an empty range when the root does not exist,
+  // which under the in-memory backend would silently free nothing.
+  plaid::io::UnlinkPrefix(prefix);
 }
 
 // Every chunk but the last must be full, and indices must be 0..k-1 in order:
@@ -181,9 +179,9 @@ bool run_case(size_t n_req, size_t avg_degree, const std::string& label) {
 
   // The generator must leave no intermediates behind: only the edge files.
   for (const std::string& dir : GetSSDList()) {
-    std::error_code ec;
-    for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
-      const std::string name = e.path().filename().string();
+    for (const auto& de : plaid::io::ListDir(dir)) {
+      const std::string name =
+          std::filesystem::path(de.path).filename().string();
       if (name.rfind(prefix + "_gen", 0) == 0 ||
           name.rfind(prefix + "_srt", 0) == 0) {
         std::cout << "  FAIL: generator left intermediate " << name << "\n";

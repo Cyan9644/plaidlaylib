@@ -19,6 +19,7 @@
 #include <random>
 
 #include "ChunkSequence/Primitives/external_engine.h"
+#include "utils/io_backend.h"
 
 #define NUM_SSDS 30
 #ifndef PRACTICAL_SSDS
@@ -73,10 +74,10 @@ inline void ensure_zero_chunks() {
     memset(buf, 0, CHUNK_SIZE);
     for (size_t d = 0; d < nd; d++) {
       const std::string fn = GetFileName(zero_chunk_prefix(), d);
-      int fd = open(fn.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0644);
+      int fd = plaid::io::Open(fn.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0644);
       SYSCALL(fd);
-      SYSCALL(pwrite(fd, buf, CHUNK_SIZE, (off_t)0));
-      close(fd);
+      SYSCALL(plaid::io::Pwrite(fd, buf, CHUNK_SIZE, (off_t)0));
+      plaid::io::Close(fd);
     }
     free(buf);
   });
@@ -156,7 +157,7 @@ chunk_seq sequential_cut_no_compression(const chunk_seq& seq,
   // we have now found the correct chunk for the start
   T* buff = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
   int fd1 =
-      open(seq.chunks[index_counter].filename.c_str(), O_RDONLY | O_DIRECT);
+      plaid::io::Open(seq.chunks[index_counter].filename.c_str(), O_RDONLY | O_DIRECT);
   // A failed open() (e.g. EMFILE under fd pressure) must not silently flow into
   // the pread below as fd == -1 -- SYSCALL only logs, it isn't fatal, so that
   // used to corrupt this chunk's size/offset bookkeeping instead of failing
@@ -168,7 +169,7 @@ chunk_seq sequential_cut_no_compression(const chunk_seq& seq,
   // in the block - the expected start position of the first index we want to
   // see, which means we need to read size of the difference between the two to
   // get all the data from start to end
-  SYSCALL(pread(fd1, buff, AlignUp(seq.chunks[index_counter].used),
+  SYSCALL(plaid::io::Pread(fd1, buff, AlignUp(seq.chunks[index_counter].used),
                 (off_t)seq.chunks[index_counter].begin_addr));
   memmove(buff, buff + tracker,
           (seq.chunks[index_counter].used / sizeof(T) - tracker) * sizeof(T));
@@ -179,7 +180,7 @@ chunk_seq sequential_cut_no_compression(const chunk_seq& seq,
   std::string start_cut = seq.chunks[index_counter].filename + "_cut_start";
 
   int fd1_filename1 =
-      open(start_cut.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
+      plaid::io::Open(start_cut.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
   // we know that the O_DIRECT alignment below us is already full of the
   // original data, so we're trying the one above
   //  SYSCALL(pwrite(fd1_filename,buff,
@@ -187,13 +188,13 @@ chunk_seq sequential_cut_no_compression(const chunk_seq& seq,
   //  (off_t)(AlignUp(seq.chunks[index_counter].begin_addr +
   //  tracker*sizeof(T)))));
   SYSCALL(
-      pwrite(fd1_filename1, buff,
+      plaid::io::Pwrite(fd1_filename1, buff,
              AlignUp((seq.chunks[index_counter].used / sizeof(T) - tracker) *
                      sizeof(T)),
              (off_t)0));
 
-  close(fd1);
-  close(fd1_filename1);
+  plaid::io::Close(fd1);
+  plaid::io::Close(fd1_filename1);
   chunk start_chunk;
   // start_chunk.filename = seq.chunks[index_counter].filename;
   // start_chunk.begin_addr =(AlignUp(seq.chunks[index_counter].begin_addr +
@@ -225,7 +226,7 @@ chunk_seq sequential_cut_no_compression(const chunk_seq& seq,
   // chunks things to be in a parallel do
   T* buf = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
   int fd =
-      open(seq.chunks[index_counter].filename.c_str(), O_RDONLY | O_DIRECT);
+      plaid::io::Open(seq.chunks[index_counter].filename.c_str(), O_RDONLY | O_DIRECT);
   CHECK(fd >= 0) << "sequential_cut_no_compression: open failed for "
                  << seq.chunks[index_counter].filename << ": "
                  << std::strerror(errno);
@@ -236,18 +237,18 @@ chunk_seq sequential_cut_no_compression(const chunk_seq& seq,
   // AlignUp(seq.chunks[index_counter].used/sizeof(T) - tracker) * sizeof(T),
   // (off_t) AlignDown((seq.chunks[index_counter].begin_addr +
   // tracker*sizeof(T)))));
-  SYSCALL(pread(fd, buf, AlignUp(tracker * sizeof(T)),
+  SYSCALL(plaid::io::Pread(fd, buf, AlignUp(tracker * sizeof(T)),
                 (off_t)seq.chunks[index_counter].begin_addr));
 
   std::string end_cut = seq.chunks[index_counter].filename + "_cut_end";
-  int fd_filename = open(end_cut.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
+  int fd_filename = plaid::io::Open(end_cut.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
   // SYSCALL(pwrite(fd_filename,buf,
   // (seq.chunks[index_counter].used/sizeof(T)-tracker) * sizeof(T),
   // (off_t)(AlignUp(seq.chunks[index_counter].begin_addr +
   // tracker*sizeof(T)))));
-  SYSCALL(pwrite(fd_filename, buf, AlignUp(tracker * sizeof(T)), (off_t)0));
-  close(fd);
-  close(fd_filename);
+  SYSCALL(plaid::io::Pwrite(fd_filename, buf, AlignUp(tracker * sizeof(T)), (off_t)0));
+  plaid::io::Close(fd);
+  plaid::io::Close(fd_filename);
   chunk end_chunk;
   end_chunk.filename = end_cut;
   end_chunk.begin_addr = 0;

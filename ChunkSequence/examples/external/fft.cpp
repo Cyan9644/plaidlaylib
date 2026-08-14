@@ -58,6 +58,7 @@
 #include "parlaylib-examples/fast_fourier_transform.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/trace_marker.h"
 
 using ChunkFFT::cd;
@@ -73,7 +74,7 @@ static double to_gb(size_t bytes) {
 static void cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 // Deterministic logical input value at logical index m: pseudo-random complex

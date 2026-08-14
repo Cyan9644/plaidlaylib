@@ -37,6 +37,7 @@
 #include "parlaylib-examples/quickhull.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 using plaid::area;
 using plaid::hpoint;
@@ -44,7 +45,7 @@ using plaid::hpoint;
 static void cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 // Independent geometric validation of an upper hull over the point set `pts`.

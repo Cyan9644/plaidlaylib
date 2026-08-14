@@ -61,6 +61,7 @@
 #include "absl/log/check.h"
 #include "configs.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 namespace plaid {
 namespace direct_rs {
@@ -285,8 +286,15 @@ chunk_seq direct_random_shuffle(const chunk_seq& seq, size_t seed = 0,
 
         struct io_uring read_ring, write_ring;
         const size_t ring_depth = std::max(dr::kGatherRingDepth, disk_span);
-        SYSCALL(InitIoUringWithRetry(ring_depth, &read_ring, IORING_SETUP_SINGLE_ISSUER));
-        SYSCALL(InitIoUringWithRetry(ring_depth, &write_ring, IORING_SETUP_SINGLE_ISSUER));
+        // Built lazily on the first shard that lives on a real device; a
+        // heap-backed run builds neither ring.
+        bool rings_ready = false;
+        auto ensure_rings = [&]() {
+            if (rings_ready) return;
+            SYSCALL(InitIoUringWithRetry(ring_depth, &read_ring, IORING_SETUP_SINGLE_ISSUER));
+            SYSCALL(InitIoUringWithRetry(ring_depth, &write_ring, IORING_SETUP_SINGLE_ISSUER));
+            rings_ready = true;
+        };
 
         struct Local {
             size_t id = (size_t)-1;        // logical bucket index
@@ -294,6 +302,9 @@ chunk_seq direct_random_shuffle(const chunk_seq& seq, size_t seed = 0,
             std::vector<T*>  read_bufs;    // disk_span aligned shard buffers
             std::vector<int> write_fds;    // disk_span output shard fds (-1 = no shard)
             std::vector<T*>  write_bufs;   // disk_span aligned, padded output buffers
+            // How many shards actually went to a ring; heap-backed shards are
+            // copied inline and have no completion to reap.
+            size_t read_ring_n = 0, write_ring_n = 0;
         };
         Local previous, current, next;
         bool reap_read = false, submit_read = true, process = false,
@@ -306,15 +317,13 @@ chunk_seq direct_random_shuffle(const chunk_seq& seq, size_t seed = 0,
             // reap the reads submitted last round (they filled `current`)
             if (reap_read) {
                 auto t0 = std::chrono::steady_clock::now();
-                size_t pending = 0;
-                for (int fd : current.read_fds) if (fd >= 0) pending++;
-                for (size_t i = 0; i < pending; i++) {
+                for (size_t i = 0; i < current.read_ring_n; i++) {
                     struct io_uring_cqe* cqe;
                     SYSCALL(io_uring_wait_cqe(&read_ring, &cqe));
                     SYSCALL(cqe->res);
                     io_uring_cqe_seen(&read_ring, cqe);
                 }
-                for (int fd : current.read_fds) if (fd >= 0) SYSCALL(close(fd));
+                for (int fd : current.read_fds) if (fd >= 0) SYSCALL(plaid::io::Close(fd));
                 tick(t_read, t0);
                 process = true;
             } else {
@@ -331,21 +340,29 @@ chunk_seq direct_random_shuffle(const chunk_seq& seq, size_t seed = 0,
                     next.id = ids[k];
                     next.read_fds.assign(disk_span, -1);
                     next.read_bufs.assign(disk_span, nullptr);
+                    next.read_ring_n = 0;
                     for (size_t s = 0; s < disk_span; s++) {
                         const auto& r = buckets[next.id * disk_span + s];
                         if (r.file_bytes == 0) continue;   // this shard is empty
-                        next.read_fds[s] = open(r.filename.c_str(), O_RDONLY | O_DIRECT);
+                        next.read_fds[s] = plaid::io::Open(r.filename.c_str(), O_RDONLY | O_DIRECT);
                         SYSCALL(next.read_fds[s]);
                         next.read_bufs[s] =
                             (T*)std::aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, r.file_bytes);
                         CHECK(next.read_bufs[s] != nullptr)
                             << "direct_random_shuffle: bucket shard alloc failed (" << r.file_bytes
                             << " bytes)";
+                        if (plaid::io::IsVirtual(next.read_fds[s])) {
+                            SYSCALL(plaid::io::Pread(next.read_fds[s], next.read_bufs[s],
+                                                     r.file_bytes, 0));
+                            continue;
+                        }
+                        ensure_rings();
                         struct io_uring_sqe* sqe = io_uring_get_sqe(&read_ring);
                         CHECK(sqe != nullptr) << "direct_random_shuffle: gather read ring out of sqes";
                         io_uring_prep_read(sqe, next.read_fds[s], next.read_bufs[s], r.file_bytes, 0);
+                        next.read_ring_n++;
                     }
-                    SYSCALL(io_uring_submit(&read_ring));
+                    if (next.read_ring_n > 0) SYSCALL(io_uring_submit(&read_ring));
                     tick(t_alloc, t0);
                 }
             }
@@ -358,6 +375,7 @@ chunk_seq direct_random_shuffle(const chunk_seq& seq, size_t seed = 0,
                 const size_t b = current.id;
                 current.write_fds.assign(disk_span, -1);
                 current.write_bufs.assign(disk_span, nullptr);
+                current.write_ring_n = 0;
 
                 if (disk_span == 1) {
                     // No merge/split needed: shuffle the single shard's buffer
@@ -374,7 +392,7 @@ chunk_seq direct_random_shuffle(const chunk_seq& seq, size_t seed = 0,
                     out.file_bytes = r.file_bytes;
                     current.write_bufs[0] = buffer;
                     current.write_fds[0] =
-                        open(out.filename.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
+                        plaid::io::Open(out.filename.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
                     SYSCALL(current.write_fds[0]);
                 } else {
                     size_t bucket_true_bytes = 0;
@@ -419,7 +437,7 @@ chunk_seq direct_random_shuffle(const chunk_seq& seq, size_t seed = 0,
                         if (file_b > true_b)
                             memset((char*)current.write_bufs[s] + true_b, 0, file_b - true_b);
                         current.write_fds[s] =
-                            open(out.filename.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
+                            plaid::io::Open(out.filename.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
                         SYSCALL(current.write_fds[s]);
                         consumed += cnt;
                     }
@@ -435,9 +453,7 @@ chunk_seq direct_random_shuffle(const chunk_seq& seq, size_t seed = 0,
             // reap the writes submitted last round (they drained `previous`)
             if (reap_write) {
                 auto t0 = std::chrono::steady_clock::now();
-                size_t pending = 0;
-                for (int fd : previous.write_fds) if (fd >= 0) pending++;
-                for (size_t i = 0; i < pending; i++) {
+                for (size_t i = 0; i < previous.write_ring_n; i++) {
                     struct io_uring_cqe* cqe;
                     SYSCALL(io_uring_wait_cqe(&write_ring, &cqe));
                     SYSCALL(cqe->res);
@@ -445,7 +461,7 @@ chunk_seq direct_random_shuffle(const chunk_seq& seq, size_t seed = 0,
                 }
                 for (size_t s = 0; s < previous.write_fds.size(); s++) {
                     if (previous.write_fds[s] < 0) continue;
-                    SYSCALL(close(previous.write_fds[s]));
+                    SYSCALL(plaid::io::Close(previous.write_fds[s]));
                     std::free(previous.write_bufs[s]);
                 }
                 tick(t_write, t0);
@@ -455,18 +471,27 @@ chunk_seq direct_random_shuffle(const chunk_seq& seq, size_t seed = 0,
             if (submit_write) {
                 for (size_t s = 0; s < disk_span; s++) {
                     if (current.write_fds[s] < 0) continue;
+                    const size_t wb = out_files[current.id * disk_span + s].file_bytes;
+                    if (plaid::io::IsVirtual(current.write_fds[s])) {
+                        SYSCALL(plaid::io::Pwrite(current.write_fds[s],
+                                                  current.write_bufs[s], wb, 0));
+                        continue;
+                    }
+                    ensure_rings();
                     struct io_uring_sqe* sqe = io_uring_get_sqe(&write_ring);
                     CHECK(sqe != nullptr) << "direct_random_shuffle: gather write ring out of sqes";
-                    io_uring_prep_write(sqe, current.write_fds[s], current.write_bufs[s],
-                                        out_files[current.id * disk_span + s].file_bytes, 0);
+                    io_uring_prep_write(sqe, current.write_fds[s], current.write_bufs[s], wb, 0);
+                    current.write_ring_n++;
                 }
-                SYSCALL(io_uring_submit(&write_ring));
+                if (current.write_ring_n > 0) SYSCALL(io_uring_submit(&write_ring));
             }
             reap_write = submit_write;
         }
 
-        io_uring_queue_exit(&read_ring);
-        io_uring_queue_exit(&write_ring);
+        if (rings_ready) {
+            io_uring_queue_exit(&read_ring);
+            io_uring_queue_exit(&write_ring);
+        }
     }, /*granularity=*/1);
     if (dr::PhaseTiming())
         fprintf(stderr, "  [direct_random_shuffle] gather sums (s): read %.3f  shuffle %.3f  "

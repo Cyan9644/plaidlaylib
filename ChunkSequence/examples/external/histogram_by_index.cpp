@@ -33,6 +33,7 @@
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/trace_marker.h"
 
 static constexpr size_t NUM_BUCKETS = 4096;
@@ -53,7 +54,7 @@ static void quiesce_drives() {
 static void cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 static uint64_t id_at(size_t i) { return parlay::hash64(i) % NUM_BUCKETS; }

@@ -118,6 +118,7 @@
 #include "absl/log/check.h"
 #include "configs.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/simple_queue.h"
 
 namespace plaid {
@@ -183,7 +184,7 @@ parlay::sequence<T> RandomBatchRead(const chunk_seq& seq,
   std::map<std::string, int> fds;
   for (const chunk& c : seq.chunks)
     if (fds.find(c.filename) == fds.end()) {
-      int fd = open(c.filename.c_str(), O_RDONLY | O_DIRECT);
+      int fd = plaid::io::Open(c.filename.c_str(), O_RDONLY | O_DIRECT);
       SYSCALL(fd);
       fds[c.filename] = fd;
     }
@@ -216,16 +217,21 @@ parlay::sequence<T> RandomBatchRead(const chunk_seq& seq,
         parlay::sequence<T> results;
         results.reserve(end - start);
 
+        // Built lazily on the first real-device probe; heap-backed input
+        // needs no ring.
         struct io_uring ring;
-        SYSCALL(InitIoUringWithRetry(kSampleRingDepth, &ring,
-                                     IORING_SETUP_SINGLE_ISSUER));
+        bool ring_ready = false;
+        auto ensure_ring = [&]() {
+          if (ring_ready) return;
+          SYSCALL(InitIoUringWithRetry(kSampleRingDepth, &ring,
+                                       IORING_SETUP_SINGLE_ISSUER));
+          ring_ready = true;
+        };
         size_t i = start, in_ring = 0;
         while (i < end || in_ring > 0) {
           bool submitted = false;
           while (i < end && !free_buffers.empty() &&
                  in_ring < kSampleRingDepth) {
-            struct io_uring_sqe* sqe = io_uring_get_sqe(&ring);
-            if (sqe == nullptr) break;
             // Locate the element's chunk: the last one whose prefix is <= it.
             const size_t idx = requests[i];
             const size_t ci =
@@ -236,11 +242,33 @@ parlay::sequence<T> RandomBatchRead(const chunk_seq& seq,
             const size_t byte = c.begin_addr + (idx - prefix[ci]) * sizeof(T);
             const size_t block = AlignDown(byte);
 
+            const int fd = fds.at(c.filename);
             const size_t bi = free_buffers.back();
             free_buffers.pop_back();
             buffers[bi].offset = byte - block;
-            io_uring_prep_read(sqe, fds.at(c.filename), buffers[bi].buffer,
-                               O_DIRECT_MULTIPLE, block);
+
+            // Heap-backed: read it straight into the buffer and harvest the
+            // value now -- no SQE, nothing to reap.
+            if (plaid::io::IsVirtual(fd)) {
+              SYSCALL(plaid::io::Pread(fd, buffers[bi].buffer,
+                                       O_DIRECT_MULTIPLE, (off_t)block));
+              T value;
+              memcpy(&value, buffers[bi].buffer + buffers[bi].offset,
+                     sizeof(T));
+              results.push_back(value);
+              free_buffers.push_back(bi);
+              i++;
+              continue;
+            }
+
+            ensure_ring();
+            struct io_uring_sqe* sqe = io_uring_get_sqe(&ring);
+            if (sqe == nullptr) {
+              free_buffers.push_back(bi);
+              break;
+            }
+            io_uring_prep_read(sqe, fd, buffers[bi].buffer, O_DIRECT_MULTIPLE,
+                               block);
             io_uring_sqe_set_data(sqe, (void*)bi);
             i++;
             in_ring++;
@@ -267,13 +295,13 @@ parlay::sequence<T> RandomBatchRead(const chunk_seq& seq,
             free_buffers.push_back(bi);
           }
         }
-        io_uring_queue_exit(&ring);
+        if (ring_ready) io_uring_queue_exit(&ring);
         std::free(buffers);
         return results;
       },
       /*granularity=*/1));
 
-  for (auto& [name, fd] : fds) SYSCALL(close(fd));
+  for (auto& [name, fd] : fds) SYSCALL(plaid::io::Close(fd));
   return out;
 }
 
@@ -567,8 +595,15 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
         struct io_uring read_ring, write_ring;
         // A pipeline round submits up to disk_span sqes at once on each ring.
         const size_t ring_depth = std::max(ds::kGatherRingDepth, disk_span);
-        SYSCALL(InitIoUringWithRetry(ring_depth, &read_ring, IORING_SETUP_SINGLE_ISSUER));
-        SYSCALL(InitIoUringWithRetry(ring_depth, &write_ring, IORING_SETUP_SINGLE_ISSUER));
+        // Built lazily on the first shard that lives on a real device; a
+        // heap-backed run builds neither ring.
+        bool rings_ready = false;
+        auto ensure_rings = [&]() {
+            if (rings_ready) return;
+            SYSCALL(InitIoUringWithRetry(ring_depth, &read_ring, IORING_SETUP_SINGLE_ISSUER));
+            SYSCALL(InitIoUringWithRetry(ring_depth, &write_ring, IORING_SETUP_SINGLE_ISSUER));
+            rings_ready = true;
+        };
 
         struct Local {
             size_t id = (size_t)-1;        // logical bucket index
@@ -576,6 +611,9 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
             std::vector<T*>  read_bufs;    // disk_span aligned shard buffers
             std::vector<int> write_fds;    // disk_span output shard fds (-1 = no shard)
             std::vector<T*>  write_bufs;   // disk_span aligned, padded output buffers
+            // How many shards actually went to a ring; heap-backed shards are
+            // copied inline and have no completion to reap.
+            size_t read_ring_n = 0, write_ring_n = 0;
         };
         Local previous, current, next;
         bool reap_read = false, submit_read = true, process = false,
@@ -588,15 +626,13 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
             // reap the reads submitted last round (they filled `current`)
             if (reap_read) {
                 auto t0 = std::chrono::steady_clock::now();
-                size_t pending = 0;
-                for (int fd : current.read_fds) if (fd >= 0) pending++;
-                for (size_t i = 0; i < pending; i++) {
+                for (size_t i = 0; i < current.read_ring_n; i++) {
                     struct io_uring_cqe* cqe;
                     SYSCALL(io_uring_wait_cqe(&read_ring, &cqe));
                     SYSCALL(cqe->res);
                     io_uring_cqe_seen(&read_ring, cqe);
                 }
-                for (int fd : current.read_fds) if (fd >= 0) SYSCALL(close(fd));
+                for (int fd : current.read_fds) if (fd >= 0) SYSCALL(plaid::io::Close(fd));
                 tick(t_read, t0);
                 process = true;
             } else {
@@ -613,21 +649,29 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
                     next.id = ids[k];
                     next.read_fds.assign(disk_span, -1);
                     next.read_bufs.assign(disk_span, nullptr);
+                    next.read_ring_n = 0;
                     for (size_t s = 0; s < disk_span; s++) {
                         const auto& r = buckets[next.id * disk_span + s];
                         if (r.file_bytes == 0) continue;   // this shard is empty
-                        next.read_fds[s] = open(r.filename.c_str(), O_RDONLY | O_DIRECT);
+                        next.read_fds[s] = plaid::io::Open(r.filename.c_str(), O_RDONLY | O_DIRECT);
                         SYSCALL(next.read_fds[s]);
                         next.read_bufs[s] =
                             (T*)std::aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, r.file_bytes);
                         CHECK(next.read_bufs[s] != nullptr)
                             << "direct_sample_sort: bucket shard alloc failed (" << r.file_bytes
                             << " bytes)";
+                        if (plaid::io::IsVirtual(next.read_fds[s])) {
+                            SYSCALL(plaid::io::Pread(next.read_fds[s], next.read_bufs[s],
+                                                     r.file_bytes, 0));
+                            continue;
+                        }
+                        ensure_rings();
                         struct io_uring_sqe* sqe = io_uring_get_sqe(&read_ring);
                         CHECK(sqe != nullptr) << "direct_sample_sort: gather read ring out of sqes";
                         io_uring_prep_read(sqe, next.read_fds[s], next.read_bufs[s], r.file_bytes, 0);
+                        next.read_ring_n++;
                     }
-                    SYSCALL(io_uring_submit(&read_ring));
+                    if (next.read_ring_n > 0) SYSCALL(io_uring_submit(&read_ring));
                     tick(t_alloc, t0);
                 }
             }
@@ -640,6 +684,7 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
                 const size_t b = current.id;
                 current.write_fds.assign(disk_span, -1);
                 current.write_bufs.assign(disk_span, nullptr);
+                current.write_ring_n = 0;
 
                 if (disk_span == 1) {
                     // No merge/split needed: sort the single shard's buffer in
@@ -655,7 +700,7 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
                     out.file_bytes = r.file_bytes;
                     current.write_bufs[0] = buffer;
                     current.write_fds[0] =
-                        open(out.filename.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
+                        plaid::io::Open(out.filename.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
                     SYSCALL(current.write_fds[0]);
                 } else {
                     size_t bucket_true_bytes = 0;
@@ -698,7 +743,7 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
                         if (file_b > true_b)
                             memset((char*)current.write_bufs[s] + true_b, 0, file_b - true_b);
                         current.write_fds[s] =
-                            open(out.filename.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
+                            plaid::io::Open(out.filename.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
                         SYSCALL(current.write_fds[s]);
                         consumed += cnt;
                     }
@@ -714,9 +759,7 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
             // reap the writes submitted last round (they drained `previous`)
             if (reap_write) {
                 auto t0 = std::chrono::steady_clock::now();
-                size_t pending = 0;
-                for (int fd : previous.write_fds) if (fd >= 0) pending++;
-                for (size_t i = 0; i < pending; i++) {
+                for (size_t i = 0; i < previous.write_ring_n; i++) {
                     struct io_uring_cqe* cqe;
                     SYSCALL(io_uring_wait_cqe(&write_ring, &cqe));
                     SYSCALL(cqe->res);
@@ -724,7 +767,7 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
                 }
                 for (size_t s = 0; s < previous.write_fds.size(); s++) {
                     if (previous.write_fds[s] < 0) continue;
-                    SYSCALL(close(previous.write_fds[s]));
+                    SYSCALL(plaid::io::Close(previous.write_fds[s]));
                     std::free(previous.write_bufs[s]);
                 }
                 tick(t_write, t0);
@@ -734,18 +777,27 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
             if (submit_write) {
                 for (size_t s = 0; s < disk_span; s++) {
                     if (current.write_fds[s] < 0) continue;
+                    const size_t wb = out_files[current.id * disk_span + s].file_bytes;
+                    if (plaid::io::IsVirtual(current.write_fds[s])) {
+                        SYSCALL(plaid::io::Pwrite(current.write_fds[s],
+                                                  current.write_bufs[s], wb, 0));
+                        continue;
+                    }
+                    ensure_rings();
                     struct io_uring_sqe* sqe = io_uring_get_sqe(&write_ring);
                     CHECK(sqe != nullptr) << "direct_sample_sort: gather write ring out of sqes";
-                    io_uring_prep_write(sqe, current.write_fds[s], current.write_bufs[s],
-                                        out_files[current.id * disk_span + s].file_bytes, 0);
+                    io_uring_prep_write(sqe, current.write_fds[s], current.write_bufs[s], wb, 0);
+                    current.write_ring_n++;
                 }
-                SYSCALL(io_uring_submit(&write_ring));
+                if (current.write_ring_n > 0) SYSCALL(io_uring_submit(&write_ring));
             }
             reap_write = submit_write;
         }
 
-        io_uring_queue_exit(&read_ring);
-        io_uring_queue_exit(&write_ring);
+        if (rings_ready) {
+            io_uring_queue_exit(&read_ring);
+            io_uring_queue_exit(&write_ring);
+        }
     }, /*granularity=*/1);
     if (ds::PhaseTiming())
         fprintf(stderr, "  [direct_sample_sort] gather sums (s): read %.3f  sort %.3f  "

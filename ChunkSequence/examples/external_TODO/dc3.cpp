@@ -52,6 +52,7 @@
 #include "parlaylib-examples/suffix_array.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 using Clock = std::chrono::steady_clock;
 static double elapsed(Clock::time_point t0) {
@@ -64,7 +65,7 @@ static double to_gb(size_t bytes) {
 static void cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 // Deterministic 4-letter text: char i, computable anywhere (non-zero chars).
@@ -86,10 +87,10 @@ static bool contents_equal(const chunk_seq& seq,
   bool ok = true;
   for (const chunk* c : ordered) {
     if (c->used == 0) continue;
-    int fd = open(c->filename.c_str(), O_RDONLY | O_DIRECT);
+    int fd = plaid::io::Open(c->filename.c_str(), O_RDONLY | O_DIRECT);
     SYSCALL(fd);
-    SYSCALL(pread(fd, buf, AlignUp(c->used), (off_t)c->begin_addr));
-    close(fd);
+    SYSCALL(plaid::io::Pread(fd, buf, AlignUp(c->used), (off_t)c->begin_addr));
+    plaid::io::Close(fd);
     const auto* elems = (const uint32_t*)buf;
     const size_t cnt = c->used / sizeof(uint32_t);
     for (size_t i = 0; i < cnt && ok; i++, j++)

@@ -14,6 +14,7 @@
 #include "absl/log/check.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 struct SumMonoid {
   uint64_t identity = 0;
@@ -25,7 +26,7 @@ struct SumMonoid {
 static void cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 // Builds iota(n), applies ChunkFilter, consolidates the survivor stream in
@@ -65,7 +66,7 @@ static bool run_order_test(const std::string& name, size_t n,
   // and compare each element to the expected in-order value.
   filtered.consolidate(consolidated);
 
-  int fd = open(consolidated.c_str(), O_RDONLY);
+  int fd = plaid::io::Open(consolidated.c_str(), O_RDONLY);
   if (fd < 0) {
     std::cout << "    FAIL open(" << consolidated << "): " << strerror(errno)
               << "\n";
@@ -76,7 +77,7 @@ static bool run_order_test(const std::string& name, size_t n,
     size_t j = 0;
     bool order_ok = true;
     while (order_ok) {
-      const ssize_t got = read(fd, buf.data(), BUF_ELEMS * sizeof(uint64_t));
+      const ssize_t got = plaid::io::Read(fd, buf.data(), BUF_ELEMS * sizeof(uint64_t));
       if (got < 0) {
         std::cout << "    FAIL read: " << strerror(errno) << "\n";
         pass = order_ok = false;
@@ -94,7 +95,7 @@ static bool run_order_test(const std::string& name, size_t n,
         }
       }
     }
-    close(fd);
+    plaid::io::Close(fd);
     if (order_ok && j != expected_count) {
       std::cout << "    FAIL order: read " << j << " elements, expected "
                 << expected_count << "\n";
@@ -108,7 +109,7 @@ static bool run_order_test(const std::string& name, size_t n,
 
   cleanup_prefix("iota");
   cleanup_prefix(out_prefix);
-  unlink(consolidated.c_str());
+  plaid::io::Unlink(consolidated.c_str());
 
   return pass;
 }

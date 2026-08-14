@@ -17,11 +17,12 @@
 #include "parlay/sequence.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 static void cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 // ── shared helpers ──────────────────────────────────────────────────────────
@@ -63,7 +64,7 @@ static bool check_order(const chunk_seq& seq,
                         const std::vector<uint64_t>& expected,
                         const std::string& tmp_path) {
   seq.consolidate(tmp_path);
-  int fd = open(tmp_path.c_str(), O_RDONLY);
+  int fd = plaid::io::Open(tmp_path.c_str(), O_RDONLY);
   if (fd < 0) {
     std::cout << "    FAIL open(" << tmp_path << "): " << strerror(errno)
               << "\n";
@@ -74,7 +75,7 @@ static bool check_order(const chunk_seq& seq,
   size_t j = 0;
   bool ok = true;
   while (ok) {
-    ssize_t got = read(fd, buf.data(), BUF_ELEMS * sizeof(uint64_t));
+    ssize_t got = plaid::io::Read(fd, buf.data(), BUF_ELEMS * sizeof(uint64_t));
     if (got < 0) {
       std::cout << "    FAIL read: " << strerror(errno) << "\n";
       ok = false;
@@ -90,8 +91,8 @@ static bool check_order(const chunk_seq& seq,
       }
     }
   }
-  close(fd);
-  unlink(tmp_path.c_str());
+  plaid::io::Close(fd);
+  plaid::io::Unlink(tmp_path.c_str());
   if (ok && j != expected.size()) {
     std::cout << "    FAIL order: read " << j << " elements, expected "
               << expected.size() << "\n";
@@ -349,20 +350,20 @@ static bool test_chunk_boundary() {
   const std::string consolidated = "ft_boundary_consol";
   result.consolidate(consolidated);
 
-  int fd = open(consolidated.c_str(), O_RDONLY);
+  int fd = plaid::io::Open(consolidated.c_str(), O_RDONLY);
   CHECK(fd >= 0) << "could not open consolidated file";
 
   constexpr size_t BUF_ELEMS = 1 << 20;
   std::vector<uint64_t> buf(BUF_ELEMS);
   std::set<uint64_t> found;
   while (true) {
-    ssize_t got = read(fd, buf.data(), BUF_ELEMS * sizeof(uint64_t));
+    ssize_t got = plaid::io::Read(fd, buf.data(), BUF_ELEMS * sizeof(uint64_t));
     if (got <= 0) break;
     size_t cnt = (size_t)got / sizeof(uint64_t);
     for (size_t i = 0; i < cnt; i++) found.insert(buf[i]);
   }
-  close(fd);
-  unlink(consolidated.c_str());
+  plaid::io::Close(fd);
+  plaid::io::Unlink(consolidated.c_str());
 
   // 524287 = 2^19 - 1 is a Mersenne prime — must be present.
   if (found.count(524287) == 0) {
@@ -422,7 +423,7 @@ static bool test_consolidate_output() {
   // Verify file size: must be exactly ref.size() * 8 bytes, no padding or
   // header.
   struct stat st;
-  if (stat(out_path.c_str(), &st) != 0) {
+  if (plaid::io::Stat(out_path.c_str(), &st) != 0) {
     std::cout << "  FAIL: could not stat " << out_path << "\n";
     pass = false;
   } else {
@@ -437,14 +438,14 @@ static bool test_consolidate_output() {
   }
 
   // Read back and compare element-by-element.
-  int fd = open(out_path.c_str(), O_RDONLY);
+  int fd = plaid::io::Open(out_path.c_str(), O_RDONLY);
   if (fd < 0) {
     std::cout << "  FAIL open: " << strerror(errno) << "\n";
     pass = false;
   } else {
     std::vector<uint64_t> got_vals(ref.size());
-    ssize_t bytes = read(fd, got_vals.data(), ref.size() * sizeof(uint64_t));
-    close(fd);
+    ssize_t bytes = plaid::io::Read(fd, got_vals.data(), ref.size() * sizeof(uint64_t));
+    plaid::io::Close(fd);
     if (bytes != (ssize_t)(ref.size() * sizeof(uint64_t))) {
       std::cout << "  FAIL short read: got=" << bytes << "\n";
       pass = false;
@@ -462,7 +463,7 @@ static bool test_consolidate_output() {
   }
 
   std::cout << "  => " << (pass ? "PASS" : "FAIL") << "\n\n";
-  unlink(out_path.c_str());
+  plaid::io::Unlink(out_path.c_str());
   cleanup_prefix(prefix);
   return pass;
 }

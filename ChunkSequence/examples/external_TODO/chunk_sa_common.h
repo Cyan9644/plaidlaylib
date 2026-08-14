@@ -28,6 +28,7 @@
 #include "absl/log/check.h"
 #include "configs.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 
 namespace plaid {
 namespace sa_detail {
@@ -55,13 +56,10 @@ inline std::vector<size_t> elem_prefix(const chunk_seq& seq, size_t esz) {
 // Remove every file on every drive whose name begins with `prefix` (sort leaves
 // tag-suffixed intermediates a GetFileName enumeration would miss).
 inline void sweep(const std::string& prefix) {
-  for (const std::string& dir : GetSSDList()) {
-    std::error_code ec;
-    for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
-      const std::string name = e.path().filename().string();
-      if (name.rfind(prefix, 0) == 0) std::filesystem::remove(e.path(), ec);
-    }
-  }
+  // plaid::io::UnlinkPrefix so this also sweeps heap-backed files; the raw
+  // directory_iterator yields an empty range when the root does not exist,
+  // which under the in-memory backend would silently free nothing.
+  plaid::io::UnlinkPrefix(prefix);
 }
 
 struct RankResult {

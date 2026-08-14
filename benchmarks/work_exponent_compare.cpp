@@ -62,6 +62,7 @@
 #include "parlay/primitives.h"
 #include "utils/command_line.h"
 #include "utils/file_utils.h"
+#include "utils/io_backend.h"
 #include "utils/trace_marker.h"
 
 // Data-dependent mixing loop: each iteration depends on the previous (no
@@ -98,7 +99,7 @@ static double to_gb(size_t bytes) {
 static void cleanup_prefix(const std::string& prefix) {
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+    plaid::io::Unlink(GetFileName(prefix, d).c_str());
 }
 
 // k(n, mode) for the elemwork axis (also reused as R(n, mode) for rounds).
@@ -122,7 +123,7 @@ static bool verify_chunk0(const chunk_seq& out, uint64_t k) {
   const size_t count = c.used / sizeof(uint64_t);
   if (count == 0) return true;
 
-  int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+  int fd = plaid::io::Open(c.filename.c_str(), O_DIRECT | O_RDONLY);
   if (fd < 0) {
     std::cerr << "  FAIL chunk 0: open(" << c.filename
               << "): " << strerror(errno) << "\n";
@@ -132,8 +133,8 @@ static bool verify_chunk0(const chunk_seq& out, uint64_t k) {
   uint64_t* buf =
       (uint64_t*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, read_size);
   CHECK(buf != nullptr);
-  const ssize_t got = pread(fd, buf, read_size, (off_t)c.begin_addr);
-  close(fd);
+  const ssize_t got = plaid::io::Pread(fd, buf, read_size, (off_t)c.begin_addr);
+  plaid::io::Close(fd);
   if (got < 0 || (size_t)got < c.used) {
     std::cerr << "  FAIL chunk 0: pread got " << got << " expected at least "
               << c.used << "\n";
