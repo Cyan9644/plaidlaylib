@@ -19,14 +19,19 @@
 #include <utility>
 #include <vector>
 
-#include "ChunkSequence/Primitives/filter.h"  // FILTER_BATCH_SIZE
 #include "ChunkSequence/Primitives/chunk_seq.h"
-#include "ChunkSequence/Primitives/chunk_seq_reader.h"
 #include "absl/log/check.h"
 #include "configs.h"
 #include "parlay/primitives.h"
 #include "utils/file_utils.h"
-#include "utils/unordered_file_writer.h"
+
+namespace plaid {
+// Retained name for the input-chunk batch size (== the DensePack batch size).
+// Defined here rather than alongside ChunkFilter so that delayed.h depends on
+// nothing but the substrate: primitives.h includes THIS header (materialize
+// runs over delayed sources), so a dependency the other way would be a cycle.
+static constexpr size_t FILTER_BATCH_SIZE = DENSE_PACK_BATCH_SIZE;
+}  // namespace plaid
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Block-delayed sequences over chunk_seq  (recursive read-plan model).

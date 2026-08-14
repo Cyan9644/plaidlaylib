@@ -32,10 +32,8 @@
 
 // Upstream in-DRAM baseline (global point/area/quickhull/upper_hull, no guard).
 #include "ChunkSequence/Primitives/chunk_seq.h"
-#include "ChunkSequence/examples/external/chunk_convex_hull.h"
-#include "ChunkSequence/examples/external_TODO/chunk_convex_hull_lazy_filter.h"
+#include "ChunkSequence/examples/chunk_convex_hull.h"
 #include "parlaylib-examples/quickhull.h"
-#include "utils/command_line.h"
 #include "utils/file_utils.h"
 
 using plaid::area;
@@ -104,8 +102,7 @@ static bool geometry_ok(const std::vector<hpoint>& pts,
 }
 
 // Differential (vs upstream) + independent geometry + out-of-core-recursion
-// checks for one algorithm's hull, shared by both UpperHull and
-// UpperHullLazyFilter below.
+// checks for UpperHull's result.
 static bool check_hull(const std::string& label, const std::vector<hpoint>& pts,
                        const std::vector<uint64_t>& hull,
                        const intseq& hull_mem, size_t splits,
@@ -160,12 +157,8 @@ static bool run_case(const std::string& name, size_t n,
 
   // Tiny DRAM budget (128 points) so both recursions are forced out-of-core.
   const size_t budget = 128 * sizeof(hpoint);
-  std::vector<uint64_t> hull =
-      plaid::UpperHull(points, budget, "cht_s");
+  std::vector<uint64_t> hull = plaid::UpperHull(points, budget, "cht_s");
   const size_t splits = plaid::last_ext_splits();
-  std::vector<uint64_t> hull_lazy =
-      plaid::UpperHullLazyFilter(points, budget, "cht_lazy");
-  const size_t splits_lazy = plaid::last_ext_splits();
 
   // Independent in-DRAM baseline on the same points.
   std::vector<hpoint> pts(n);
@@ -176,9 +169,6 @@ static bool run_case(const std::string& name, size_t n,
 
   bool pass = check_hull("ChunkPartition", pts, hull, hull_mem, splits,
                          expect_ext_recursion);
-  pass = check_hull("lazy_filter", pts, hull_lazy, hull_mem, splits_lazy,
-                    expect_ext_recursion) &&
-         pass;
 
   cleanup_prefix(in_prefix);
   return pass;

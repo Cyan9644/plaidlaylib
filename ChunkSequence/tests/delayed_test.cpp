@@ -9,6 +9,8 @@
 // (> FILTER_BATCH_SIZE chunks) is checked with closed-form scalars to avoid a
 // multi-GiB reference vector.  Exit code 0 on all-pass, 1 otherwise.
 
+#include "ChunkSequence/Primitives/delayed.h"
+
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -23,12 +25,10 @@
 #include <utility>
 #include <vector>
 
-#include "ChunkSequence/Primitives/materialize.h"
-#include "ChunkSequence/Primitives/delayed.h"
 #include "ChunkSequence/Primitives/chunk_seq.h"
+#include "ChunkSequence/Primitives/secondary_primitives.h"
 #include "absl/log/check.h"
 #include "parlay/primitives.h"
-#include "utils/command_line.h"
 #include "utils/file_utils.h"
 
 namespace cd = plaid::delayed;
@@ -561,10 +561,10 @@ static void run_bigint_add() {
   }
   const uint8_t ref_cout = (uint8_t)carry;
 
-  chunk_seq A = plaid::tabulate<uint64_t>(
-      na, "biA", [](size_t i) { return bi_a(i); });
-  chunk_seq B = plaid::tabulate<uint64_t>(
-      nb, "biB", [](size_t i) { return bi_b(i); });
+  chunk_seq A =
+      plaid::tabulate<uint64_t>(na, "biA", [](size_t i) { return bi_a(i); });
+  chunk_seq B =
+      plaid::tabulate<uint64_t>(nb, "biB", [](size_t i) { return bi_b(i); });
   auto [C, cout] = cd::scan(
       cd::map(cd::zip(cd::delay(A), cd::delay(B), (uint64_t)0), carry_status),
       CarryMonoid{});  // carry-in per limb
@@ -580,10 +580,10 @@ static void run_bigint_add() {
   // full carry chain across chunks: all-ones + 1 -> all-zero digits, carry-out
   // 1
   const size_t m = ELEMS_PER_CHUNK + 3;
-  chunk_seq A2 = plaid::tabulate<uint64_t>(
-      m, "biA", [](size_t) { return ~(uint64_t)0; });
-  chunk_seq B2 = plaid::tabulate<uint64_t>(
-      1, "biB", [](size_t) { return (uint64_t)1; });
+  chunk_seq A2 =
+      plaid::tabulate<uint64_t>(m, "biA", [](size_t) { return ~(uint64_t)0; });
+  chunk_seq B2 =
+      plaid::tabulate<uint64_t>(1, "biB", [](size_t) { return (uint64_t)1; });
   auto [C2, cout2] = cd::scan(
       cd::map(cd::zip(cd::delay(A2), cd::delay(B2), (uint64_t)0), carry_status),
       CarryMonoid{});

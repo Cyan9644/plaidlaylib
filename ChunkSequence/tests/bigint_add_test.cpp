@@ -29,10 +29,9 @@
 #include <vector>
 
 #include "ChunkSequence/Primitives/chunk_seq.h"
-#include "ChunkSequence/examples/external/chunk_bigint_add.h"
+#include "ChunkSequence/examples/chunk_bigint_add.h"
 #include "absl/log/check.h"
 #include "parlay/primitives.h"
-#include "utils/command_line.h"
 #include "utils/file_utils.h"
 
 using digit = plaid::bigint_detail::digit;
@@ -82,7 +81,7 @@ static chunk_seq make_seq(const std::vector<digit>& v,
                           const std::string& prefix) {
   if (v.empty()) return {};
   return plaid::tabulate<digit>(v.size(), prefix,
-                                           [&v](size_t i) { return v[i]; });
+                                [&v](size_t i) { return v[i]; });
 }
 
 // Independent, trivially-correct two's-complement schoolbook adder.  Mirrors
@@ -129,8 +128,7 @@ static void check(const std::string& name, const std::vector<digit>& a,
   cleanup_prefix("bta_out");
 
   // out-of-core, un-fused (eager) — same result, materialized intermediates.
-  chunk_seq SE =
-      plaid::ChunkBigIntAddEager(A, B, "bta_eager", extra_one);
+  chunk_seq SE = plaid::ChunkBigIntAddEager(A, B, "bta_eager", extra_one);
   const std::vector<digit> gote = materialize(SE);
   report(name + " [out-of-core eager]", gote == expected,
          "got " + vec_head(gote) + " want " + vec_head(expected));

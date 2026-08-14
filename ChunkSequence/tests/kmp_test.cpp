@@ -9,9 +9,8 @@
 #include <vector>
 
 #include "ChunkSequence/Primitives/chunk_seq.h"
-#include "ChunkSequence/examples/external/chunk_kmp.h"
+#include "ChunkSequence/examples/chunk_kmp.h"
 #include "parlay/primitives.h"
-#include "utils/command_line.h"
 #include "utils/file_utils.h"
 
 // One chunk of char text holds CHUNK_SIZE elements.
@@ -209,9 +208,7 @@ int main(int argc, char* argv[]) {
     n = std::max(n, 2 * CHARS_PER_CHUNK);
     const std::string pat = "seamseam";
     const size_t seam_chunk =
-        std::min<size_t>(plaid::DENSE_PACK_BATCH_SIZE,
-                         n / CHARS_PER_CHUNK) -
-        1;
+        std::min<size_t>(plaid::DENSE_PACK_BATCH_SIZE, n / CHARS_PER_CHUNK) - 1;
     const size_t plant = (seam_chunk + 1) * CHARS_PER_CHUNK - pat.size() / 2;
     auto f = [&](size_t i) -> char {
       if (i >= plant && i < plant + pat.size()) return pat[i - plant];
