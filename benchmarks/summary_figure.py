@@ -141,13 +141,20 @@ def run_once(entry, n, extra_argv, extra_ssd_args):
     return fields, problem
 
 
-def run_summary(bellman_ford_n, extra_ssd_args, clear_glob, clear_enabled, warnings):
+def run_summary(bellman_ford_n, extra_ssd_args, clear_glob, clear_enabled, warnings,
+                n_override=None):
     """Run every SUMMARY_ENTRIES point once; return a list of result rows.
 
     Each row: {label, name, n, time_s, inmem_time_s, ratio}. An entry whose
     baseline never fits within MAX_ATTEMPTS retries is omitted (and warned
     about), not fabricated.
+
+    n_override, if given, replaces the per-entry DRAM-cliff prediction with
+    one fixed n for every entry and disables the shrink-retry loop (one
+    attempt only) -- the user asked for an exact n, so silently resizing it
+    away would defeat the point.
     """
+    max_attempts = 1 if n_override is not None else MAX_ATTEMPTS
     rows = []
     for label, name in SUMMARY_ENTRIES:
         entry = REGISTRY[name]
@@ -157,8 +164,10 @@ def run_summary(bellman_ford_n, extra_ssd_args, clear_glob, clear_enabled, warni
 
         scale = 1.0
         got_row = None
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            if name == "bellman_ford_sparse" and bellman_ford_n is not None:
+        for attempt in range(1, max_attempts + 1):
+            if n_override is not None:
+                n = n_override
+            elif name == "bellman_ford_sparse" and bellman_ford_n is not None:
                 n = bellman_ford_n
             elif name == "bellman_ford_sparse":
                 n = predict_n_bellman_ford_sparse(scale)
@@ -180,10 +189,11 @@ def run_summary(bellman_ford_n, extra_ssd_args, clear_glob, clear_enabled, warni
             row = dict(zip(entry["cols"], fields))
             rb.clear_bench_data(clear_glob, clear_enabled)
             if not row.get(inmem_col, "").strip():
+                retry_note = "not retrying, --n was explicit" if n_override is not None else "retrying smaller"
                 w = (f"summary {label} ({name}): in-mem baseline skipped at "
-                     f"n={n} (predicted cliff overshot); retrying smaller")
+                     f"n={n} ({retry_note})")
                 print(f"  !!! {w}", flush=True)
-                if attempt < MAX_ATTEMPTS:
+                if attempt < max_attempts:
                     warnings.append(w)
                 scale *= SHRINK
                 continue
@@ -193,7 +203,7 @@ def run_summary(bellman_ford_n, extra_ssd_args, clear_glob, clear_enabled, warni
             break
 
         if got_row is None:
-            w = f"summary {label} ({name}): gave up after {MAX_ATTEMPTS} attempts, no bar"
+            w = f"summary {label} ({name}): gave up after {max_attempts} attempt(s), no bar"
             print(f"  !!! {w}", flush=True)
             warnings.append(w)
             continue
@@ -267,6 +277,14 @@ def main():
     ap.add_argument("--bellman-ford-n", type=int, default=None,
                     help="bypass the RAM-cliff predictor for bellman_ford and use "
                          "this n directly (see the file-level docstring)")
+    ap.add_argument("--n", default=None,
+                    help="run every entry at exactly this element count instead of "
+                         "predicting a per-entry DRAM-cliff n (e.g. '2^20' or "
+                         "'1048576', same format as run_benches.py's --n-values). "
+                         "With this set, each entry runs once, no shrink-retries: if "
+                         "the in-mem baseline doesn't fit at this n, that entry is "
+                         "dropped with a warning rather than silently resized. "
+                         "Omit to keep the default largest-n-that-fits-DRAM behavior.")
     ap.add_argument("--ssd-args", default=os.environ.get("BENCH_SSD_ARGS", ""),
                     help="extra global flags passed to each binary (e.g. '--num_ssd=4')")
     ap.add_argument("--fstrim-glob", default=os.environ.get("BENCH_FSTRIM_GLOB", rb.DEFAULT_FSTRIM_GLOB),
@@ -296,9 +314,11 @@ def main():
     rb.clear_bench_data(args.fstrim_glob, clear_enabled)
     fstrim_note = rb.fstrim_mounts(args.fstrim_glob, fstrim_enabled)
 
+    n_override = rb.parse_count(args.n) if args.n else None
+
     warnings = []
     rows = run_summary(args.bellman_ford_n, extra_ssd_args, args.fstrim_glob,
-                       clear_enabled, warnings)
+                       clear_enabled, warnings, n_override=n_override)
 
     write_csv(os.path.join(outdir, "summary_figure.csv"), rows)
     if rows:
