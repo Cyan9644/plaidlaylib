@@ -238,6 +238,14 @@ $(BINDIR)/%Example: ChunkSequence/examples/%.cpp $(UTIL_OBJS) | deps/parlaylib-e
 $(BINDIR)/delayedCompare: benchmarks/delayed_compare.cpp $(UTIL_OBJS)
 	$(LINKD)
 
+# zip_depth_compare: one binary that self-sweeps the delayed zip chain depth
+# k = 1,2,4,8,... internally (depth is a compile-time template recursion, not a
+# runtime parameter) and prints one CSV line per depth.  Exploratory: NOT part of
+# TEST_BINARIES/EXAMPLE_BINARIES or the bench/bench-full recipes -- drive it with
+# benchmarks/zip_depth_bench.py, or build and run it by hand.
+$(BINDIR)/zipDepthCompare: benchmarks/zip_depth_compare.cpp $(UTIL_OBJS)
+	$(LINKD)
+
 # chunk_size_compare: compiled once per CHUNK_SIZE via -DCHUNK_SIZE_BYTES=<stem>.
 # e.g. `make bin/chunkSizeCompare_2097152` bakes in a 2 MiB chunk size.
 $(BINDIR)/chunkSizeCompare_%: benchmarks/chunk_size_compare.cpp $(UTIL_OBJS)
@@ -298,7 +306,7 @@ trace:
 
 clean:
 	rm -f $(UTIL_OBJS) $(OBJDIR)/*.d $(TEST_BINARIES) $(EXAMPLE_BINARIES) \
-	      $(BINDIR)/delayedCompare $(BINDIR)/chunkSizeCompare_*
+	      $(BINDIR)/delayedCompare $(BINDIR)/zipDepthCompare $(BINDIR)/chunkSizeCompare_*
 
 distclean: clean
 	rm -rf deps $(BINDIR) $(OBJDIR)

@@ -8,8 +8,10 @@ The primary goal of the project/library is to demonstrate that multi-SSD program
 The library is deliberately small: **five headers**, six test binaries, eight
 example binaries.  It reached that size through a whitelist cleanup that dropped
 the accumulated experimental surface (parked research, superseded alternates,
-head-to-head comparison drivers); `CLEANUP.md` records what was kept, what was
-dropped and why, and where every surviving piece moved to.
+head-to-head comparison drivers).  Everything dropped is intact in git at commit
+`9c96e4a`, the state immediately before the cleanup's first deletion — recover a
+file with `git show 9c96e4a:<path>`, or a whole subtree with
+`git checkout 9c96e4a -- <dir>`.
 
 ## Building
 
@@ -56,7 +58,7 @@ bucket files *regardless of n*, so it cannot run on a small tmpfs at any size.
 
 ```
 configs.h                     machine knobs (SSD_COUNT, SSD_ROOT, O_DIRECT_MULTIPLE, …)
-Makefile  shell.nix  .envrc  CLAUDE.md  CLEANUP.md
+Makefile  shell.nix  .envrc  README.md  CLAUDE.md
 utils/                        non-chunk-aware plumbing
   file_utils.{h,cpp}            paths, O_DIRECT alignment, fd/memlock limits,
                                 SYSCALL/ASSERT + InitLogger, ParseGlobalArguments
@@ -101,7 +103,9 @@ ChunkSequence/
 benchmarks/                   perf benchmarks + Python runner/plotter
   delayed_compare.cpp           in-mem delayed vs chunk-eager vs chunk-delayed
   chunk_size_compare.cpp        eager vs delayed across CHUNK_SIZE
+  zip_depth_compare.cpp         delayed zip-chain depth scaling (exploratory)
   run_benches.py  summary_figure.py  io_trace.py  plot_style.py  clean_bench_data.py
+  zip_depth_bench.py            standalone sweep/plot driver for zip_depth_compare
 benchresults/                 figure sources + historical plot output (kept in full)
 deps/                         fetched by `make deps`; gitignored
 results/                      timestamped benchmark output; gitignored
@@ -236,6 +240,18 @@ mismatch aborts `make bench` non-zero — it doubles as a differential test.
   One binary is compiled per size via the `chunkSizeCompare_%` pattern rule,
   which passes `-DCHUNK_SIZE_BYTES=$*` (the stem = size in bytes).
 
+A third binary, **`bin/zipDepthCompare`** (`benchmarks/zip_depth_compare.cpp`), is
+deliberately *outside* `make bench`: it measures how a many-way delayed zip chain
+scales as the number of zipped sequences grows.  Because the chain's depth is a
+compile-time template recursion (`build_chain<K>`, matching `delayed.h`'s
+no-`std::function` design), depth cannot be a runtime parameter — so unlike the
+other benchmarks it self-sweeps `k = 1,2,4,8,…` inside one process and prints one
+`CSV,` line per depth.  All `K` sources are independently generated so `zip`'s
+Planner never dedups them, making this genuine K-way read scaling rather than the
+shared-source dedup fast path.  Drive it with
+`python3 benchmarks/zip_depth_bench.py` (`--n`, `--max-k`), which builds, runs
+once, and plots every depth from that run.
+
 `make bench` defaults are sized for a small dev box; override via env or the
 driver's flags, e.g. `make bench BENCH_CHUNK_SIZES="2097152 8388608"`.  The driver
 deletes the benchmarks' data files between every sweep point and after the run so
@@ -331,8 +347,7 @@ Primitive mapping:
 (`ChunkSegmentedReduce` was also exposed per-vertex on CSR graphs, as
 `chunk_csr::segmented_reduce_over_edges` using `degree_scan` for the segment
 bounds — one streaming pass reducing every vertex's in-edge range at once.  The
-CSR/graph family was dropped in the cleanup; see `CLEANUP.md` for the commit it
-is recoverable from.)
+CSR/graph family was dropped in the cleanup; it is recoverable from `9c96e4a`.)
 
 `Primitives/sort.h` holds the out-of-core sort/shuffle substrate the
 sample sort is built on.  It carries **only what is reachable** from
@@ -340,8 +355,8 @@ sample sort is built on.  It carries **only what is reachable** from
 and `Permutation` — the experimental variants that accumulated around it
 (`count_sort_serial`, the `(seq, ids)` `count_sort` overload,
 `group_by_index_partition_small`, `primitive_quicksort`, and a ~165-line
-commented-out parallel `count_sort`) were removed in the cleanup; see
-`CLEANUP.md`.  `count_sort` distributes elements
+commented-out parallel `count_sort`) were removed in the cleanup, and are
+recoverable from `9c96e4a`.  `count_sort` distributes elements
 into per-bucket external sequences through the `BucketWriter` scatter
 (per-worker staging → sequential `writev`); a bucket
 list is then finished by `process_inplace` (on-disk
