@@ -136,7 +136,8 @@ def predict_n_bellman_ford_sparse(scale):
 def run_once(entry, n, extra_argv, extra_ssd_args):
     rb.make(entry["target"])
     binary = os.path.join(rb.BINDIR, os.path.basename(entry["target"]))
-    argv = [n] + entry.get("extra_argv", []) + list(extra_argv) + list(extra_ssd_args)
+    argv = (entry.get("pre_argv", []) + [n] + entry.get("extra_argv", [])
+            + list(extra_argv) + list(extra_ssd_args))
     fields, problem = rb.run_binary(binary, argv, fatal=False)
     return fields, problem
 
