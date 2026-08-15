@@ -34,14 +34,12 @@
 #include <sstream>
 #include <string>
 
-#include "ChunkSequence/Primitives/delayed.h"
-#include "ChunkSequence/Primitives/map.h"
-#include "ChunkSequence/Primitives/reduce.h"
 #include "ChunkSequence/Primitives/chunk_seq.h"
+#include "ChunkSequence/Primitives/delayed.h"
+#include "ChunkSequence/Primitives/primitives.h"
 #include "parlay/delayed.h"
 #include "parlay/monoid.h"
 #include "parlay/primitives.h"
-#include "utils/command_line.h"
 #include "utils/file_utils.h"
 
 namespace cd = plaid::delayed;
@@ -149,8 +147,7 @@ int main(int argc, char* argv[]) {
     auto t0 = Clock::now();
     e_mr = 0;
     uint64_t r = plaid::ChunkReduce<uint64_t>(
-        plaid::ChunkMap<uint64_t>(cseq, "bw_dl_m", add1),
-        SumMonoid{});
+        plaid::ChunkMap<uint64_t>(cseq, "bw_dl_m", add1), SumMonoid{});
     e_mr = elapsed(t0);
     cleanup_prefix("bw_dl_m");
     uint64_t mr_e = r;
@@ -179,8 +176,8 @@ int main(int argc, char* argv[]) {
     auto t0 = Clock::now();
     mmr_e = plaid::ChunkReduce<uint64_t>(
         plaid::ChunkMap<uint64_t>(
-            plaid::ChunkMap<uint64_t>(cseq, "bw_dl_m1", add1),
-            "bw_dl_m2", mul2),
+            plaid::ChunkMap<uint64_t>(cseq, "bw_dl_m1", add1), "bw_dl_m2",
+            mul2),
         SumMonoid{});
     e_mmr = elapsed(t0);
     cleanup_prefix("bw_dl_m1");
@@ -213,8 +210,8 @@ int main(int argc, char* argv[]) {
     chunk_seq m1 = plaid::ChunkMap<uint64_t>(cseq, "bw_dl_g1", add1);
     chunk_seq m2 = plaid::ChunkMap<uint64_t>(m1, "bw_dl_g2", mul2);
     e_f = elapsed(t0);
-    uint64_t f_e = plaid::ChunkReduce<uint64_t>(
-        m2, SumMonoid{});  // verify (untimed)
+    uint64_t f_e =
+        plaid::ChunkReduce<uint64_t>(m2, SumMonoid{});  // verify (untimed)
     cleanup_prefix("bw_dl_g1");
     cleanup_prefix("bw_dl_g2");
     print_row("chunk-eager", in_bytes, e_f);

@@ -1,21 +1,108 @@
+// file_utils.h -- the non-chunk-aware plumbing shared by the whole library:
+// drive/path naming, O_DIRECT alignment, fd- and memlock-limit handling, the
+// SYSCALL/ASSERT logging macros, and the tests' command-line parsing.
+//
+// Anything that knows about chunks lives in
+// ChunkSequence/Primitives/chunk_seq.h instead; this header is deliberately
+// ignorant of the data model.
+
+#ifndef PLAID_FILE_UTILS_H
+#define PLAID_FILE_UTILS_H
+
+#include <liburing.h>
+#include <sys/resource.h>
+#include <unistd.h>
+
+#include <cerrno>
+#include <chrono>
+#include <cstring>
+#include <functional>
+#include <map>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
+
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "configs.h"
+
+// ============================================================================
+// FileInfo
+//
+// (was utils/file_info.h)
+// ============================================================================
+
+//
+// Created by peter on 3/21/24.
+//
+
+struct FileInfo {
+  std::string file_name;
+  size_t file_index = 0;
+  size_t true_size = 0;
+  size_t file_size = 0;
+  // sum of the size of the files before this file (if this file is a part of a
+  // sequence of files)
+  size_t before_size = 0;
+
+  FileInfo() = default;
+
+  FileInfo(std::string file_name, const FileInfo& original)
+      : file_name(std::move(file_name)),
+        file_index(original.file_index),
+        true_size(original.true_size),
+        file_size(original.file_size) {};
+
+  FileInfo(std::string file_name, size_t file_index, size_t true_size,
+           size_t file_size)
+      : file_name(std::move(file_name)),
+        file_index(file_index),
+        true_size(true_size),
+        file_size(file_size) {};
+};
+
+// ============================================================================
+// SYSCALL / ASSERT / InitLogger
+//
+// (was utils/logger.h)
+// ============================================================================
+
 //
 // Created by peter on 3/2/24.
 //
 
-#ifndef SORTING_FILE_UTILS_H
-#define SORTING_FILE_UTILS_H
+/**
+ * Macro for error checking after doing a system call. If an error is produced,
+ * print the resulting (negative) number and print errno.
+ */
+#define SYSCALL(expr)                                                    \
+  do {                                                                   \
+    long long __result = (expr);                                         \
+    if (__builtin_expect(__result < 0, 0))                               \
+      LOG(ERROR) << "System call returned " << __result << " ("          \
+                 << std::strerror(-__result) << ") with errno " << errno \
+                 << " (" << std::strerror(errno) << ").";                \
+  } while (0)
 
-#include <liburing.h>
-#include <sys/resource.h>
+#define ASSERT(expr, msg)                                \
+  do {                                                   \
+    if (__builtin_expect(!(expr), 0)) LOG(ERROR) << msg; \
+  } while (0)
 
-#include <cerrno>
-#include <chrono>
-#include <string>
-#include <thread>
-#include <vector>
+void InitLogger();
 
-#include "configs.h"
-#include "utils/file_info.h"
+inline size_t GetFileOffset(int fd) { return lseek(fd, 0, SEEK_CUR); }
+
+// ============================================================================
+// Paths, alignment, drive list, raw read/write
+//
+// (was utils/file_utils.h)
+// ============================================================================
+
+//
+// Created by peter on 3/2/24.
+//
 
 // Raise the process's soft open-file limit (RLIMIT_NOFILE) up to its hard
 // limit.
@@ -127,4 +214,24 @@ void MakeFileEndMarker(unsigned char* buffer, size_t size, size_t real_size);
 double GetThroughput(size_t size, double time);
 double GetThroughput(const std::vector<FileInfo>& files, double time);
 
-#endif  // SORTING_FILE_UTILS_H
+// ============================================================================
+// Command-line parsing
+//
+// (was utils/command_line.h)
+// ============================================================================
+
+//
+// Created by peter on 7/18/24.
+//
+
+void ParseGlobalArguments(int& argc, char** argv);
+
+long ParseLong(char* string);
+
+double ParseDouble(char* string);
+
+int ProgramEntry(
+    int argc, char** argv,
+    std::map<std::string, std::function<void(int, char**)>>& commands);
+
+#endif  // PLAID_FILE_UTILS_H

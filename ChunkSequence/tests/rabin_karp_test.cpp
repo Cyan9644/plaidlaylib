@@ -9,9 +9,8 @@
 #include <vector>
 
 #include "ChunkSequence/Primitives/chunk_seq.h"
-#include "ChunkSequence/examples/external/chunk_rabin_karp.h"
+#include "ChunkSequence/examples/chunk_rabin_karp.h"
 #include "parlay/primitives.h"
-#include "utils/command_line.h"
 #include "utils/file_utils.h"
 
 // One chunk of char text holds CHUNK_SIZE elements.
@@ -64,8 +63,7 @@ static bool run_rk_test(const std::string& name, size_t n,
   const std::string consolidated = "rk_test_consolidated";
 
   chunk_seq text = plaid::tabulate<char>(n, text_prefix, f);
-  chunk_seq matches =
-      plaid::ChunkRabinKarp<char>(text, out_prefix, pat);
+  chunk_seq matches = plaid::ChunkRabinKarp<char>(text, out_prefix, pat);
 
   const std::vector<uint64_t> expected = reference_search(n, f, pat);
   bool pass = true;
@@ -209,9 +207,7 @@ int main(int argc, char* argv[]) {
     n = std::max(n, 2 * CHARS_PER_CHUNK);
     const std::string pat = "seamseam";
     const size_t seam_chunk =
-        std::min<size_t>(plaid::DENSE_PACK_BATCH_SIZE,
-                         n / CHARS_PER_CHUNK) -
-        1;
+        std::min<size_t>(plaid::DENSE_PACK_BATCH_SIZE, n / CHARS_PER_CHUNK) - 1;
     const size_t plant = (seam_chunk + 1) * CHARS_PER_CHUNK - pat.size() / 2;
     auto f = [&](size_t i) -> char {
       if (i >= plant && i < plant + pat.size()) return pat[i - plant];

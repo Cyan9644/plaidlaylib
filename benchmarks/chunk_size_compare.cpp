@@ -29,12 +29,10 @@
 #include <sstream>
 #include <string>
 
-#include "ChunkSequence/Primitives/delayed.h"
-#include "ChunkSequence/Primitives/map.h"
-#include "ChunkSequence/Primitives/reduce.h"
 #include "ChunkSequence/Primitives/chunk_seq.h"
+#include "ChunkSequence/Primitives/delayed.h"
+#include "ChunkSequence/Primitives/primitives.h"
 #include "parlay/primitives.h"
-#include "utils/command_line.h"
 #include "utils/file_utils.h"
 
 namespace cd = plaid::delayed;
@@ -100,8 +98,7 @@ int main(int argc, char* argv[]) {
   std::cout << "--- raw read: ChunkReduce(sum) ---\n";
   {
     auto t0 = Clock::now();
-    volatile uint64_t r =
-        plaid::ChunkReduce<uint64_t>(cseq, SumMonoid{});
+    volatile uint64_t r = plaid::ChunkReduce<uint64_t>(cseq, SumMonoid{});
     raw_s = elapsed(t0);
     (void)r;
     print_row("raw read", in_bytes, raw_s);
@@ -112,8 +109,7 @@ int main(int argc, char* argv[]) {
   {
     auto t0 = Clock::now();
     uint64_t mr_e = plaid::ChunkReduce<uint64_t>(
-        plaid::ChunkMap<uint64_t>(cseq, "bw_cs_m", add1),
-        SumMonoid{});
+        plaid::ChunkMap<uint64_t>(cseq, "bw_cs_m", add1), SumMonoid{});
     e_mr = elapsed(t0);
     cleanup_prefix("bw_cs_m");
     print_row("chunk-eager", in_bytes, e_mr);
@@ -132,8 +128,8 @@ int main(int argc, char* argv[]) {
     auto t0 = Clock::now();
     uint64_t mmr_e = plaid::ChunkReduce<uint64_t>(
         plaid::ChunkMap<uint64_t>(
-            plaid::ChunkMap<uint64_t>(cseq, "bw_cs_m1", add1),
-            "bw_cs_m2", mul2),
+            plaid::ChunkMap<uint64_t>(cseq, "bw_cs_m1", add1), "bw_cs_m2",
+            mul2),
         SumMonoid{});
     e_mmr = elapsed(t0);
     cleanup_prefix("bw_cs_m1");

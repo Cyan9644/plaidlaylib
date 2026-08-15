@@ -136,17 +136,7 @@ EXAMPLES = [
      "xlabel": "input size",
      "title": "Prime sieve: out-of-core (ChunkFlatTabulate) vs in-mem parlaylib",
      "data_globs": ["primes[0-9]*"]},
-    # word_countExample sweeps n (char text); the plotted time is the count pass
-    # only (text build excluded).  One streaming read, no sort -- throughput
-    # tracks aggregate read bandwidth.
-    {"name": "word_count", "target": "bin/word_countExample",
-     "cols": ["n", "build_s", "count_s", "inmem_count_s", "distinct_words",
-              "throughput_gb_s"],
-     "time_col": "count_s", "inmem_col": "inmem_count_s",
-     "elem_bytes": 1, "input_seqs": 1,
-     "xlabel": "input size",
-     "title": "Word count: out-of-core (streaming hash-fold) vs in-mem parlaylib",
-     "data_globs": ["wc_text*"]},
+
     # kmpExample sweeps n with the pattern length m at its constant built-in
     # default; the plotted time is the search pass only (text build excluded).
     {"name": "kmp", "target": "bin/kmpExample",
@@ -158,6 +148,7 @@ EXAMPLES = [
      "xlabel": "input size",
      "title": "KMP search: out-of-core (ChunkKmp) vs in-mem parlaylib",
      "data_globs": ["kmp_*"]},
+
     # rabin_karpExample: same driver shape as kmp (constant m, sweep n),
     # rolling-hash search instead of the KMP automaton.
     {"name": "rabin_karp", "target": "bin/rabin_karpExample",
@@ -169,6 +160,7 @@ EXAMPLES = [
      "xlabel": "input size",
      "title": "Rabin-Karp search: out-of-core (ChunkRabinKarp) vs in-mem parlaylib",
      "data_globs": ["rk_*"]},
+
     # convex_hullExample sweeps n (32-byte points); the plotted time is the hull
     # pass only (point-cloud build excluded).  Its recursion leaves ch_scratch*
     # split intermediates in addition to the ch_in input.
@@ -180,340 +172,6 @@ EXAMPLES = [
      "xlabel": "input size",
      "title": "Upper convex hull: out-of-core (quickhull) vs in-mem parlaylib",
      "data_globs": ["ch_in*", "ch_scratch*"]},
-    # convex_hull_lazy_filterExample: a SEPARATE, opt-in benchmark (deliberately
-    # NOT in the Makefile's bench-examples rules, same convention as
-    # bigint_add_eager) that adds a third line -- the same hull computed with
-    # UpperHullLazyFilter (ChunkSequence/examples/external_TODO/chunk_convex_hull_lazy_filter.h,
-    # every ChunkPartition call replaced by delayed::lazy_filter +
-    # materialize_wide) -- alongside the existing ChunkPartition-based hull and
-    # the in-mem baseline. Run it explicitly:
-    # `run_benches.py --example convex_hull_lazy_filter`.
-    {"name": "convex_hull_lazy_filter", "target": "bin/convex_hull_lazy_filterExample",
-     "cols": ["n", "build_s", "hull_s", "lazyfilter_hull_s", "inmem_hull_s",
-              "count", "throughput_gb_s"],
-     "time_col": "hull_s", "inmem_col": "inmem_hull_s",
-     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core (ChunkPartition)"),
-     "extra_series": [("lazyfilter_hull_s", "out-of-core (delayed lazy_filter)", "^-")],
-     "elem_bytes": 32, "input_seqs": 1,
-     "xlabel": "input size",
-     "title": "Upper convex hull: ChunkPartition vs delayed lazy_filter vs in-mem parlaylib",
-     "data_globs": ["ch_in*", "ch_scratch*", "ch_lazy*"]},
-    # suffix_arrayExample sweeps n; the plotted time is the construction (text
-    # build excluded).  Prefix-doubling does ~2 external sorts per round over
-    # ~log2(n) rounds, so its I/O (and peak disk residency) is many times the
-    # input -- run it standalone at SMALL --example-sizes (e.g. "8MiB 16MiB
-    # 32MiB"); it is deliberately NOT in the aggregate bench-examples list, whose
-    # 128MiB+ sizes would exceed a dev tmpfs.  All intermediates live under the
-    # sa_out prefix and are swept by the algorithm; sa_text/sa_out are the driver's.
-    {"name": "suffix_array", "target": "bin/suffix_arrayExample",
-     "cols": ["n", "build_s", "sa_s", "inmem_sa_s", "count", "throughput_gb_s"],
-     "time_col": "sa_s", "inmem_col": "inmem_sa_s",
-     "elem_bytes": 1, "input_seqs": 1,
-     "xlabel": "input size",
-     "title": "Suffix array: out-of-core (prefix doubling) vs in-mem parlaylib",
-     "data_globs": ["sa_text*", "sa_out*"]},
-    # dc3Example sweeps n; the plotted time is the DC3 construction (text build
-    # excluded).  DC3 recurses on a 2/3-shrinking problem, so its total I/O is a
-    # constant multiple of the input (not the O(log n) multiple prefix doubling
-    # pays) -- the direct head-to-head against suffix_array on identical text.
-    # Still several sorts per level, so like suffix_array it is kept OUT of the
-    # aggregate bench-examples list; run standalone at SMALL --example-sizes.  All
-    # intermediates live under the dc3_out prefix and are swept by the algorithm;
-    # dc3_text/dc3_out are the driver's.
-    {"name": "dc3", "target": "bin/dc3Example",
-     "cols": ["n", "build_s", "sa_s", "inmem_sa_s", "count", "throughput_gb_s"],
-     "time_col": "sa_s", "inmem_col": "inmem_sa_s",
-     "elem_bytes": 1, "input_seqs": 1,
-     "xlabel": "input size",
-     "title": "Suffix array: out-of-core (DC3 / skew) vs in-mem parlaylib",
-     "data_globs": ["dc3_text*", "dc3_out*"]},
-    # fftExample sweeps N (16-byte complex<double>); the plotted time is total_s
-    # (streaming length-A pass + random length-B pass; input build excluded).  Its
-    # value is the streaming-vs-random I/O contrast (trace it with io_trace.py, and
-    # the two stages are separately timed in the CSV).  The in-mem baseline is the
-    # SAME transpose-free four-step FFT run in DRAM (same kernel), so the comparison
-    # isolates I/O cost; it is kept OUT of the aggregate bench-examples list -- run
-    # standalone via `--example fft`.  Input lives under fft_in, stage-1 out fft_s1.
-    {"name": "fft", "target": "bin/fftExample",
-     "cols": ["n", "build_s", "stage1_s", "stage2_s", "total_s", "inmem_s",
-              "count", "throughput_gb_s"],
-     "time_col": "total_s", "inmem_col": "inmem_s",
-     "elem_bytes": 16, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 16,
-     "xlabel": "input size",
-     "title": "FFT: out-of-core vs in-mem (same transpose-free four-step)",
-     "data_globs": ["fft_in*", "fft_s1*"]},
-    # fft_transposeExample: the counterpart that DOES the on-disk transpose (all
-    # streaming: stage1 + transpose + stage2T = 6N) instead of the random length-B
-    # pass -- the classic external-memory tradeoff to compare against `fft` (4N with
-    # random I/O).  Same in-mem four-step baseline.  Kept OUT of the aggregate list;
-    # run via `--example fft_transpose`.  Leaves fft_in/fft_s1/fft_t/fft_t2 files.
-    {"name": "fft_transpose", "target": "bin/fft_transposeExample",
-     "cols": ["n", "build_s", "stage1_s", "transpose_s", "stage2t_s", "total_s",
-              "inmem_s", "count", "throughput_gb_s"],
-     "time_col": "total_s", "inmem_col": "inmem_s",
-     "elem_bytes": 16, "input_seqs": 1,
-     "xlabel": "input size",
-     "title": "FFT: out-of-core transpose (streaming 6N) vs in-mem four-step",
-     "data_globs": ["fft_in*", "fft_s1*", "fft_t*", "fft_t2*"]},
-    # kth_smallestExample sweeps n with k at the median (n/2); the plotted time
-    # is the selection pass only (input build excluded).  Its recursion leaves
-    # id_/flags_/next_ intermediates in addition to the kth_in input.
-    {"name": "kth_smallest", "target": "bin/kth_smallestExample",
-     "cols": ["n", "k", "build_s", "select_s", "inmem_select_s", "result",
-              "throughput_gb_s"],
-     "time_col": "select_s", "inmem_col": "inmem_select_s",
-     "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys", "budget_mult": 16,
-     "xlabel": "input size",
-     "title": "kth-smallest: out-of-core (plaid) vs in-mem parlaylib",
-     "data_globs": ["kth_in*", "id_*", "flags_*", "next_*"]},
-    # kth_smallest_delayedExample: head-to-head comparison, same precedent as
-    # samplesort_three_way -- ChunkPartition (kth_smallest_fast, writes all 32
-    # buckets every level) vs. delayed::lazy_filter (kth_smallest_delayed,
-    # writes only the ONE surviving bucket, or nothing at all once it already
-    # fits the DRAM budget) vs. in-mem parlaylib, all on the same keys.  This
-    # is the positive counterpart to convex_hull_lazy_filter's quickhull
-    # rewrite: quickhull's 2-way split keeps both branches (lazy_filter adds a
-    # pass with no offsetting savings there), while kth-smallest's 32-way
-    # split discards 31 of 32 branches every level, so skipping their writes
-    # is a real saving. eager_write_bytes/delayed_write_bytes (raw byte
-    # counts, not a rate) quantify that saving directly; each contestant
-    # builds and times its own input, same fairness discipline as
-    # samplesort_three_way (bench_drives.h settle/clear between them).
-    {"name": "kth_smallest_delayed", "target": "bin/kth_smallest_delayedExample",
-     "cols": ["n", "k", "fast_build_s", "fast_select_s", "delayed_build_s",
-              "delayed_select_s", "inmem_select_s", "result",
-              "eager_write_bytes", "delayed_write_bytes", "throughput_gb_s"],
-     "time_col": "delayed_select_s", "inmem_col": "inmem_select_s",
-     "series_labels": ("in-mem parlaylib kth_smallest (DRAM)",
-                       "delayed::lazy_filter (kth_smallest_delayed)"),
-     "extra_series": [("fast_select_s", "ChunkPartition (kth_smallest_fast)", "^-")],
-     "elem_bytes": 8, "input_seqs": 1,
-     "xlabel": "input size",
-     "title": "kth-smallest: ChunkPartition vs delayed lazy_filter vs in-mem parlaylib",
-     "data_globs": ["kthd_fast_in*", "kth_next_*", "kthd_delayed_in*", "kdl_next_*"]},
-    # external_samplesortExample sweeps n; the plotted time is the sort pass only
-    # (input build excluded).  Its recursion leaves ss_id_/ss_bucket_/ss_base_/
-    # ss_deg_ intermediates plus the per-bucket base sorter's qs_base_ output
-    # (the sorted result the driver returns *is* the qs_base_ files, via flatten)
-    # in addition to the ss_in input.
-    {"name": "external_samplesort", "target": "bin/external_samplesortExample",
-     "cols": ["n", "build_s", "sort_s", "inmem_sort_s", "throughput_gb_s"],
-     "time_col": "sort_s", "inmem_col": "inmem_sort_s",
-     "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 24,
-     "xlabel": "input size",
-     "title": "sample sort: out-of-core (plaid) vs in-mem parlaylib",
-     "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*",
-                    "qs_base_*"]},
-
-    # external_samplesort_vs_peterExample sweeps n and times BOTH out-of-core
-    # sorts on the identical key multiset: ours (plaid::sample_sort)
-    # and Peter's (peter_samplesort/, via peter_shim).  Unlike the other
-    # examples the "baseline" series is not in-memory — both series are disk
-    # sorts and plot across the whole sweep (no RAM cliff).  Intermediates: our
-    # ss_* recursion files plus Peter's pss_in/pss_out inputs+outputs and his
-    # hard-coded spfx_ intermediate buckets.
-    {"name": "external_samplesort_vs_peter",
-     "target": "bin/external_samplesort_vs_peterExample",
-     "cols": ["n", "ext_build_s", "ext_sort_s", "peter_build_s", "peter_sort_s",
-              "ext_gb_s", "peter_gb_s"],
-     "time_col": "ext_sort_s", "inmem_col": "peter_sort_s",
-     "series_labels": ("Peter's sort (out-of-core)", "our sort (out-of-core)"),
-     "no_ram_cliff": True,
-     "elem_bytes": 8, "input_seqs": 1,
-     "xlabel": "input size",
-     "title": "sample sort: ours (plaid) vs Peter's — both out-of-core",
-     "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*",
-                    "qs_base_*", "pss_in*", "pss_out*", "spfx_*"]},
-
-    # direct_samplesort_vs_peterExample: the same head-to-head as above, but our
-    # contestant is direct_samplesort.h (plaid::direct_sample_sort —
-    # the same algorithm written straight against io_uring/O_DIRECT, in Peter's
-    # scatter-gather shape, chunk_seq in/out) rather than the sort built on the
-    # primitives.  Run both sweeps to separate the algorithm from the substrate:
-    # this one is what the chunk_seq model costs when it is NOT paying for the
-    # primitives' generality.  Same CSV columns, so it plots identically.
-    # Intermediates: our dss_in input + the dss<tag>_<b> bucket files (which ARE
-    # the sorted output), plus Peter's pss_in/pss_out and his spfx_ buckets.
-    {"name": "direct_samplesort_vs_peter",
-     "target": "bin/direct_samplesort_vs_peterExample",
-     "cols": ["n", "ext_build_s", "ext_sort_s", "peter_build_s", "peter_sort_s",
-              "ext_gb_s", "peter_gb_s"],
-     "time_col": "ext_sort_s", "inmem_col": "peter_sort_s",
-     "series_labels": ("Peter's sort (out-of-core)", "our direct-I/O sort (out-of-core)"),
-     "no_ram_cliff": True,
-     "elem_bytes": 8, "input_seqs": 1,
-     "xlabel": "input size",
-     "title": "sample sort: our direct-I/O sort vs Peter's — both out-of-core",
-     "data_globs": ["dss_in*", "dss*", "pss_in*", "pss_out*", "spfx_*"]},
-
-    # samplesort_three_wayExample: all THREE out-of-core sorts on the same keys in
-    # one run — Peter's (peter_samplesort/, via peter_shim), ours written straight
-    # against io_uring (direct_samplesort.h) and ours built on the primitives
-    # (external_samplesort.h) — plus in-memory parlay::sort as a fourth series.
-    # The two pairwise sweeps above measure one gap each against a separately timed
-    # Peter run; this one puts everything side by side, so "Peter's vs our direct"
-    # reads as the cost of the chunk_seq *substrate*, "our direct vs our
-    # primitives" as the cost of the *primitives*, and the DRAM line as what all of
-    # them are chasing.  The in-mem series stops at the RAM cliff (~24n, gated by
-    # EXAMPLE_INMEM_BUDGET_BYTES); the three disk series continue past it, which is
-    # the point of the project.
-    #
-    # Each sort runs ONCE per point (one input build + one sort each — no repeats:
-    # these are consumer SSDs and every extra round is real write endurance).  What
-    # makes the three comparable despite sharing the drives is the teardown between
-    # them: the previous sort's files are removed and then every mount is synced and
-    # left to settle (SS3_SETTLE_MS, default 2000 ms), because unlink() returns long
-    # before ext4 has freed the blocks and a sort started on top of that background
-    # work runs 15-25% slow.  SS3_FIRST=0|1|2 rotates which sort goes first; it is a
-    # check knob (the times must not move), not a measurement one.
-    #
-    # Below ~512 MiB of input the pivot count drops to <= 3 and Peter's GetPivots
-    # underflows (it takes a garbage pivot, unbalancing his buckets), so his series
-    # is only meaningful from 512 MiB up — read the dev-box sizes with that in
-    # mind, or sweep this example from 512MiB.
-    {"name": "samplesort_three_way",
-     "target": "bin/samplesort_three_wayExample",
-     "cols": ["n", "peter_sort_s", "direct_sort_s", "prim_sort_s", "inmem_sort_s",
-              "peter_build_s", "direct_build_s", "prim_build_s", "peter_gb_s",
-              "direct_gb_s", "prim_gb_s"],
-     "time_col": "direct_sort_s", "inmem_col": "inmem_sort_s",
-     "series_labels": ("parlay::sort (DRAM)",
-                       "Ours, Direct Port"),
-     "extra_series": [("peter_sort_s", "Li et al. 2025", "d-"),
-                      ("prim_sort_s", "Ours, Composed External", "^-")],
-     "elem_bytes": 8, "input_seqs": 1,
-     "xlabel": "Input Size",
-     "title": "Sample Sort: External vs Native ParlayLib",
-     "data_globs": ["dss_in*", "dss*", "ss_in*", "ss_id_*", "ss_bucket_*",
-                    "ss_base_*", "ss_deg_*", "qs_base_*",
-                    "pss_in*", "pss_out*", "spfx_*"]},
-
-    # apply_sort_vs_samplesortExample: plaid::apply<ChunkOperation::Sort>
-    # (whole-sequence, DRAM-budgeted, no bucketing -- process_inplace_budgeted's
-    # own CHECK caps how large an input it can take) vs sample_sort (recursive
-    # out-of-core, external_samplesort.h), which itself uses apply<Sort> as its
-    # per-bucket base case.  apply_sort_s/apply_build_s/apply_gb_s are left BLANK
-    # by the driver once n exceeds apply<Sort>'s own DRAM budget (mirrors how
-    # inmem_sort_s goes blank past the RAM cliff), so the extra_series line stops
-    # at that cliff instead of dropping to zero.
-    {"name": "apply_sort_vs_samplesort",
-     "target": "bin/apply_sort_vs_samplesortExample",
-     "cols": ["n", "apply_sort_s", "samplesort_sort_s", "inmem_sort_s",
-              "apply_build_s", "samplesort_build_s", "apply_gb_s",
-              "samplesort_gb_s"],
-     "time_col": "samplesort_sort_s", "inmem_col": "inmem_sort_s",
-     "extra_series": [("apply_sort_s",
-                       "apply<Sort> (whole-sequence, DRAM-budgeted)", "^-")],
-     "elem_bytes": 8, "input_seqs": 1,
-     "xlabel": "input size",
-     "title": "sort: recursive external_samplesort vs whole-sequence apply<Sort>",
-     "data_globs": ["as_in*", "ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*",
-                    "ss_deg_*", "qs_base_*"]},
-
-    # samplesort_vs_samplesort_randomExample: plaid::sample_sort
-    # (pivot sampling via the shared sample<T> helper, ExternalPrimitives/
-    # chunk_sample.h) vs sample_sort_random (the pre-refactor sibling kept in
-    # external_samplesort.h for comparison -- same count_sort/apply<Sort>/
-    # flatten pipeline, only the pivot-sampling bookkeeping differs). Both
-    # always run (neither has a DRAM-budget CHECK like apply<Sort>'s), so no
-    # column ever goes blank except inmem_sort_s past the RAM cliff.
-    {"name": "samplesort_vs_samplesort_random",
-     "target": "bin/samplesort_vs_samplesort_randomExample",
-     "cols": ["n", "sample_sort_s", "sample_sort_random_s", "inmem_sort_s",
-              "sample_sort_build_s", "sample_sort_random_build_s",
-              "sample_sort_gb_s", "sample_sort_random_gb_s"],
-     "time_col": "sample_sort_s", "inmem_col": "inmem_sort_s",
-     "extra_series": [("sample_sort_random_s",
-                       "sample_sort_random (pre-refactor pair sampling)", "^-")],
-     "elem_bytes": 8, "input_seqs": 1,
-     "xlabel": "input size",
-     "title": "sample_sort: shared sample<T> helper vs pre-refactor pair sampling",
-     "data_globs": ["sspv_in*", "ssrd_in*", "ss_bucket_*", "ss_base_*",
-                    "ss_deg_*", "qs_base_*"]},
-
-    # external_random_shuffleExample sweeps n and times THREE shuffles of the same
-    # keys: random_shuffle_method (the bucketing shuffle on the high-level
-    # abstractions), plaid::Permutation (the same algorithm on the
-    # low-level reader/writer, rewriting each bucket in place), and the in-mem
-    # parlay::random_shuffle baseline (stops at the RAM cliff).  The plotted times
-    # are the shuffle passes only (the shared input build is excluded).  Each
-    # method's result *is* its bucket files (rs_out_/perm), so those prefixes are
-    # swept too; the driver additionally snapshot-diffs the drives and fails if
-    # anything at all is left behind.
-    {"name": "external_random_shuffle",
-     "target": "bin/external_random_shuffleExample",
-     "cols": ["n", "build_s", "shuffle_s", "perm_s", "inmem_shuffle_s",
-              "shuffle_gb_s", "perm_gb_s"],
-     "time_col": "shuffle_s", "inmem_col": "inmem_shuffle_s",
-     "series_labels": ("in-mem parlay::random_shuffle (DRAM)",
-                       "random_shuffle_method (out-of-core)"),
-     "extra_series": [("perm_s", "Permutation (out-of-core)", "^-")],
-     "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys", "budget_mult": 32,
-     "xlabel": "input size",
-     "title": "random shuffle: two out-of-core methods vs in-mem parlaylib",
-     "data_globs": ["rs_in*", "rs_bucket_*", "rs_out_*", "rs_base_*", "perm*"]},
-
-    # random_shuffle_three_wayExample: the shuffle counterpart to
-    # samplesort_three_way -- our primitives-based shuffle
-    # (external_random_shuffle.h) vs our direct-I/O shuffle
-    # (direct_random_shuffle.h) vs in-mem parlay::random_shuffle, all on the
-    # same keys in one run. No vendored reference shuffle exists (unlike
-    # sample sort's Peter's leg), so this is two out-of-core contestants
-    # instead of three. Correctness is a permutation check (the keys are
-    # distinct), not element-wise equality. inmem_shuffle_s is left BLANK
-    # past the RAM budget, so the plotted DRAM line stops at the cliff.
-    {"name": "random_shuffle_three_way",
-     "target": "bin/random_shuffle_three_wayExample",
-     "cols": ["n", "prim_shuffle_s", "direct_shuffle_s", "inmem_shuffle_s",
-              "prim_build_s", "direct_build_s", "prim_gb_s", "direct_gb_s"],
-     "time_col": "direct_shuffle_s", "inmem_col": "inmem_shuffle_s",
-     "series_labels": ("parlay::random_shuffle (DRAM)", "Ours, Direct Port"),
-     "extra_series": [("prim_shuffle_s", "Ours, Composed External", "^-")],
-     "elem_bytes": 8, "input_seqs": 1,
-     "xlabel": "input size",
-     "title": "Random Shuffle: Direct I/O vs Composed Primitives vs In-Memory",
-     "data_globs": ["rs3_in*", "ss_bucket_*", "drs3_in*", "drs3*"]},
-
-    # fitmem_kth_smallestExample: same driver shape as kth_smallest, but the
-    # single-level "fitmem" variant (one bucketing round, then select the winning
-    # bucket in DRAM).  Its intermediates are fk_id_/fk_next_ alongside fk_in.
-    {"name": "fitmem_kth_smallest", "target": "bin/fitmem_kth_smallestExample",
-     "cols": ["n", "k", "build_s", "select_s", "inmem_select_s", "result",
-              "throughput_gb_s"],
-     "time_col": "select_s", "inmem_col": "inmem_select_s",
-     "elem_bytes": 8, "input_seqs": 1,
-     "xlabel": "input size",
-     "title": "fitmem kth-smallest: out-of-core (plaid) vs in-mem parlaylib",
-     "data_globs": ["fk_in*", "fk_id_*", "fk_next_*"]},
-
-    # fitmem_sortExample: same driver shape as external_samplesort, but the
-    # single-level "fitmem" variant (one bucketing round, then each bucket is
-    # sorted directly in DRAM).  Its intermediates are fs_id_/fs_bucket_/fs_base_/
-    # fs_sorted_ (the sorted output references the fs_sorted_ files) alongside fs_in.
-    {"name": "fitmem_sort", "target": "bin/fitmem_sortExample",
-     "cols": ["n", "build_s", "sort_s", "inmem_sort_s", "throughput_gb_s"],
-     "time_col": "sort_s", "inmem_col": "inmem_sort_s",
-     "elem_bytes": 8, "input_seqs": 1,
-     "xlabel": "input size",
-     "title": "fitmem sample sort: out-of-core (plaid) vs in-mem parlaylib",
-     "data_globs": ["fs_in*", "fs_id_*", "fs_bucket_*", "fs_base_*", "fs_sorted_*"]},
-
-    # external_linefitExample sweeps n; the plotted time is the fit itself
-    # (input build excluded).  Both passes are fully delayed, so the fit leaves
-    # no intermediates beyond the lf_x/lf_y inputs.
-    {"name": "external_linefit", "target": "bin/external_linefitExample",
-     "cols": ["n", "build_s", "fit_s", "inmem_fit_s", "offset", "slope",
-              "throughput_gb_s"],
-     "time_col": "fit_s", "inmem_col": "inmem_fit_s",
-     "elem_bytes": 8, "input_seqs": 2,
-     "budget_base": "phys/2", "budget_mult": 16,
-     "xlabel": "input size",
-     "title": "line fit: out-of-core (plaid) vs in-mem parlaylib",
-     "data_globs": ["lf_x*", "lf_y*"]},
 
     # bigint_addExample sweeps n (limb count); the plotted time is the add pass
     # only (operand build excluded).  Baseline is our own parlaylib reference.
@@ -527,34 +185,114 @@ EXAMPLES = [
      "title": "big-integer add: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["bi_a*", "bi_b*", "bi_sum*"]},
 
-    # bigint_mulExample sweeps n (limb count); the plotted time is the multiply
-    # pass only.  Baseline is our own verified in-memory Karatsuba (upstream
-    # parlaylib karatsuba is broken).  Set BIGINT_MUL_DRAM_BUDGET_BYTES small to
-    # exercise the out-of-core recursion at modest n on a dev box.
-    {"name": "bigint_mul", "target": "bin/bigint_mulExample",
-     "cols": ["n", "build_s", "mul_s", "inmem_mul_s", "result_limbs",
+    # external_linefitExample sweeps n; the plotted time is the fit itself
+    # (input build excluded).  Both passes are fully delayed, so the fit leaves
+    # no intermediates beyond the lf_x/lf_y inputs.
+    {"name": "linefit", "target": "bin/linefitExample",
+     "cols": ["n", "build_s", "fit_s", "inmem_fit_s", "offset", "slope",
               "throughput_gb_s"],
-     "time_col": "mul_s", "inmem_col": "inmem_mul_s",
+     "time_col": "fit_s", "inmem_col": "inmem_fit_s",
      "elem_bytes": 8, "input_seqs": 2,
+     "budget_base": "phys/2", "budget_mult": 16,
      "xlabel": "input size",
-     "title": "big-integer mul: out-of-core Karatsuba (plaid) vs in-mem",
-     "data_globs": ["bm_a*", "bm_b*", "bm_prod*", "bimul_zero*"]},
+     "title": "line fit: out-of-core (plaid) vs in-mem parlaylib",
+     "data_globs": ["lf_x*", "lf_y*"]},
 
-    # bigint_add_eagerExample: a SEPARATE, opt-in benchmark (deliberately NOT in
-    # the Makefile's bench-examples rules) that adds a third line — the same add
-    # done WITHOUT delayed fusion (intermediate classify/scan materialized to
-    # disk) — alongside the fused out-of-core add and the in-mem baseline.  Run
-    # it explicitly: `run_benches.py --example bigint_add_eager`.
-    {"name": "bigint_add_eager", "target": "bin/bigint_add_eagerExample",
-     "cols": ["n", "build_s", "add_s", "eager_add_s", "inmem_add_s",
-              "result_limbs", "throughput_gb_s"],
-     "time_col": "add_s", "inmem_col": "inmem_add_s",
-     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core delayed (fused)"),
-     "extra_series": [("eager_add_s", "out-of-core eager (no fusion)", "^-")],
-     "elem_bytes": 8, "input_seqs": 2,
+    # external_samplesortExample sweeps n; the plotted time is the sort pass only
+    # (input build excluded).  Its recursion leaves ss_id_/ss_bucket_/ss_base_/
+    # ss_deg_ intermediates plus the per-bucket base sorter's qs_base_ output
+    # (the sorted result the driver returns *is* the qs_base_ files, via flatten)
+    # in addition to the ss_in input.
+    {"name": "samplesort", "target": "bin/samplesortExample",
+     "cols": ["n", "build_s", "sort_s", "inmem_sort_s", "throughput_gb_s"],
+     "time_col": "sort_s", "inmem_col": "inmem_sort_s",
+     "elem_bytes": 8, "input_seqs": 1,
+     "budget_base": "phys/2", "budget_mult": 24,
      "xlabel": "input size",
-     "title": "big-integer add: fused vs eager out-of-core vs in-mem parlaylib",
-     "data_globs": ["bie_a*", "bie_b*", "bie_sum*", "bie_eager*"]},
+     "title": "sample sort: out-of-core (plaid) vs in-mem parlaylib",
+     "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*",
+                    "qs_base_*"]},
+
+    {"name": "map", "target": "bin/primitive_demosExample", "pre_argv": ["map"],
+     "cols": ["n", "build_s", "map_s", "inmem_map_s", "throughput_gb_s"],
+     "time_col": "map_s", "inmem_col": "inmem_map_s",
+     "elem_bytes": 8, "input_seqs": 1,
+     "budget_base": "phys/2", "budget_mult": 24,
+     "xlabel": "input size",
+     "title": "map: out-of-core (ChunkMap) vs in-mem parlay::tabulate",
+     "data_globs": ["map_in*", "map_out*"]},
+
+    {"name": "reduce", "target": "bin/primitive_demosExample", "pre_argv": ["reduce"],
+     "cols": ["n", "build_s", "reduce_s", "inmem_reduce_s", "result", "throughput_gb_s"],
+     "time_col": "reduce_s", "inmem_col": "inmem_reduce_s",
+     "elem_bytes": 8, "input_seqs": 1,
+     "budget_base": "phys/2", "budget_mult": 16,
+     "xlabel": "input size",
+     "title": "reduce: out-of-core (ChunkReduce) vs in-mem parlaylib",
+     "data_globs": ["red_in*"]},
+
+    {"name": "scan", "target": "bin/primitive_demosExample", "pre_argv": ["scan"],
+     "cols": ["n", "build_s", "scan_s", "inmem_scan_s", "total", "throughput_gb_s"],
+     "time_col": "scan_s", "inmem_col": "inmem_scan_s",
+     "elem_bytes": 8, "input_seqs": 1,
+     "budget_base": "phys/2", "budget_mult": 24,
+     "xlabel": "input size",
+     "title": "scan: out-of-core (ChunkScan) vs in-mem parlaylib",
+     "data_globs": ["scn_in*", "scn_out*"]},
+
+    {"name": "tabulate", "target": "bin/primitive_demosExample", "pre_argv": ["tabulate"],
+     "cols": ["n", "tabulate_s", "inmem_tabulate_s", "throughput_gb_s"],
+     "time_col": "tabulate_s", "inmem_col": "inmem_tabulate_s",
+     "elem_bytes": 8, "input_seqs": 1,
+     "budget_base": "phys/2", "budget_mult": 16,
+     "xlabel": "input size",
+     "title": "tabulate: out-of-core (ChunkFlatTabulate) vs in-mem parlaylib",
+     "data_globs": ["tab_out*"]},
+
+    {"name": "zip", "target": "bin/primitive_demosExample", "pre_argv": ["zip"],
+     "cols": ["n", "build_s", "zip_s", "inmem_zip_s", "result", "throughput_gb_s"],
+     "time_col": "zip_s", "inmem_col": "inmem_zip_s",
+     "elem_bytes": 8, "input_seqs": 2,
+     "budget_base": "phys/2", "budget_mult": 40,
+     "xlabel": "input size",
+     "title": "zip+reduce: out-of-core delayed (plaid) vs in-mem parlay::zip",
+     "data_globs": ["zip_a*", "zip_b*"]},
+
+    {"name": "filter", "target": "bin/primitive_demosExample", "pre_argv": ["filter"],
+     "cols": ["n", "build_s", "filter_s", "inmem_filter_s", "count", "throughput_gb_s"],
+     "time_col": "filter_s", "inmem_col": "inmem_filter_s",
+     "elem_bytes": 8, "input_seqs": 1,
+     "budget_base": "phys/2", "budget_mult": 24,
+     "xlabel": "input size",
+     "title": "filter: out-of-core (ChunkFilter) vs in-mem parlaylib",
+     "data_globs": ["flt_in*", "flt_out*"]},
+
+    {"name": "pack", "target": "bin/primitive_demosExample", "pre_argv": ["pack"],
+     "cols": ["n", "build_s", "pack_s", "inmem_pack_s", "out_elems", "throughput_gb_s"],
+     "time_col": "pack_s", "inmem_col": "inmem_pack_s",
+     "elem_bytes": 8, "input_seqs": 1,
+     "budget_base": "phys/2", "budget_mult": 32,
+     "xlabel": "input size",
+     "title": "pack: out-of-core (plaid) vs in-mem parlaylib",
+     "data_globs": ["pck_in*", "pck_out*"]},
+
+    {"name": "count_sort", "target": "bin/primitive_demosExample", "pre_argv": ["count_sort"],
+     "cols": ["n", "build_s", "sort_s", "inmem_sort_s", "throughput_gb_s"],
+     "time_col": "sort_s", "inmem_col": "inmem_sort_s",
+     "elem_bytes": 8, "input_seqs": 1,
+     "budget_base": "phys/2", "budget_mult": 24,
+     "xlabel": "input size",
+     "title": "counting sort: out-of-core (plaid) vs in-mem parlaylib",
+     "data_globs": ["csrt_in*", "csrt_bucket*"]},
+
+    {"name": "histogram_by_index", "target": "bin/primitive_demosExample", "pre_argv": ["histogram_by_index"],
+     "cols": ["n", "build_s", "hist_s", "inmem_hist_s", "num_buckets", "throughput_gb_s"],
+     "time_col": "hist_s", "inmem_col": "inmem_hist_s",
+     "elem_bytes": 8, "input_seqs": 1,
+     "budget_base": "phys/2", "budget_mult": 16,
+     "xlabel": "input size",
+     "title": "histogram by index: out-of-core (plaid) vs in-mem parlaylib",
+     "data_globs": ["hist_in*"]},
 
     # chunk_cutExample sweeps n; the plotted time is the cut itself (input build
     # excluded).  It cuts the middle ~half (k = n/2) with both endpoints in the
@@ -567,7 +305,7 @@ EXAMPLES = [
     # file sets: the "cut_in<d>" input,
     # "cut_in<d>_cut" seam scratch (matched by "cut_in*"), and the materialized
     # "cut_out<d>" output.
-    {"name": "chunk_cut", "target": "bin/chunk_cutExample",
+    {"name": "cut", "target": "bin/primitive_demosExample", "pre_argv": ["cut"],
      "cols": ["n", "start", "end", "build_s", "cut_s", "inmem_cut_s",
               "out_elems", "throughput_gb_s"],
      "time_col": "cut_s", "inmem_col": "inmem_cut_s",
@@ -577,245 +315,28 @@ EXAMPLES = [
      "title": "cut / slice: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["cut_in*", "cut_out*"]},
 
-    # bellman_fordExample: three registry entries, one per RMAT graph-density
-    # case (sparse/balanced/dense avg_degree) that bellman_ford.cpp already
-    # builds and cross-checks. The binary normally runs and prints a CSV line
-    # for ALL THREE cases per invocation; `extra_argv`'s trailing case name
-    # selects bellman_ford.cpp's argv[3] case filter so each entry's run does
-    # and prints exactly ONE case -- required because run_binary/io_trace.py
-    # keep only the last "CSV," line, so without the filter every entry would
-    # silently report the dense case's numbers.  The leading "8" in each
-    # extra_argv is a placeholder occupying argv[2] (balanced_avg_degree)'s
-    # position so argv[3] lands correctly; sparse/dense ignore it (their
-    # avg_degree is fixed independent of that arg).
-    #
-    # Each compares THREE implementations, like samplesort_three_way /
-    # external_random_shuffle: external_bellman_ford (per-vertex, O(rounds*n)
-    # reader setups -- op_s), external_bellman_ford_fast (one streaming
-    # ChunkSegmentedReduce pass per round -- fast_op_s), and in-memory
-    # parlaylib bellman_ford (inmem_op_s).
-    #
-    # NOT in the make bench-examples/-mid/-full target lists (opt-in via
-    # --example only, same precedent as samplesort_three_way /
-    # external_random_shuffle / kth_smallest): external_bellman_ford is
-    # documented as dramatically slower than the in-memory baseline even at
-    # small n, so it doesn't belong in the default dev-box sweep.
-    {"name": "bellman_ford_sparse", "target": "bin/bellman_fordExample",
-     "cols": ["case", "n", "m", "build_s", "op_s", "inmem_op_s", "reachable",
-              "throughput_gb_s", "fast_op_s", "fast_reachable", "fast_throughput_gb_s"],
-     "time_col": "op_s", "inmem_col": "inmem_op_s",
-     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core, per-vertex"),
-     "extra_series": [("fast_op_s", "out-of-core, streaming (fast)", "^-")],
-     "extra_argv": ["8", "sparse"],
-     "elem_bytes": 2 * 32, "input_seqs": 1,   # avg_degree(2) * sizeof(weighted_edge)
-     "xlabel": "input size (edge bytes)",
-     "title": "Bellman-Ford (sparse, avg_degree=2): out-of-core vs in-mem",
-     "data_globs": ["bf_edges_sparse*"]},
-
-    {"name": "bellman_ford_balanced", "target": "bin/bellman_fordExample",
-     "cols": ["case", "n", "m", "build_s", "op_s", "inmem_op_s", "reachable",
-              "throughput_gb_s", "fast_op_s", "fast_reachable", "fast_throughput_gb_s"],
-     "time_col": "op_s", "inmem_col": "inmem_op_s",
-     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core, per-vertex"),
-     "extra_series": [("fast_op_s", "out-of-core, streaming (fast)", "^-")],
-     "extra_argv": ["8", "balanced"],
-     "elem_bytes": 8 * 32, "input_seqs": 1,   # avg_degree(8) * sizeof(weighted_edge)
-     "xlabel": "input size (edge bytes)",
-     "title": "Bellman-Ford (balanced, avg_degree=8): out-of-core vs in-mem",
-     "data_globs": ["bf_edges_balanced*"]},
-
-    # dense: avg_degree = n/2 (bellman_ford.cpp), so edge bytes ~= (n^2/2) *
-    # sizeof(weighted_edge) = 16*n^2 -- quadratic in n, not linear, so this
-    # entry overrides size_to_n's default formula via n_from_size
-    # (_bellman_ford_dense_n, defined above the registry). elem_bytes/
-    # input_seqs below are unused whenever n_from_size is present (see
-    # size_to_n) -- kept only as documentation of the on-disk element size.
-    {"name": "bellman_ford_dense", "target": "bin/bellman_fordExample",
-     "cols": ["case", "n", "m", "build_s", "op_s", "inmem_op_s", "reachable",
-              "throughput_gb_s", "fast_op_s", "fast_reachable", "fast_throughput_gb_s"],
-     "time_col": "op_s", "inmem_col": "inmem_op_s",
-     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core, per-vertex"),
-     "extra_series": [("fast_op_s", "out-of-core, streaming (fast)", "^-")],
-     "extra_argv": ["8", "dense"],
-     "n_from_size": _bellman_ford_dense_n,
-     "elem_bytes": 32, "input_seqs": 1,
-     "xlabel": "input size (edge bytes)",
-     "title": "Bellman-Ford (dense, avg_degree=n/2): out-of-core vs in-mem",
-     "data_globs": ["bf_edges_dense*"]},
-
-    # bfsExample: same three-case (sparse/balanced/dense) RMAT sweep as
-    # bellman_ford, same extra_argv placeholder/case-filter reasoning and same
-    # THREE series (in-mem, per-vertex, fast streaming): external_bfs.h's
-    # external_bfs is the streaming counterpart to BFS_simple's per-vertex
-    # pread implementation, same slow-vs-fast split as
-    # external_bellman_ford/external_bellman_ford_fast.
-    #
-    # NOT in the make bench-examples/-mid/-full target lists (opt-in via
-    # --example only, same precedent as bellman_ford_*): BFS_simple's
-    # per-vertex reader-setup cost is documented as dramatically slower than
-    # the in-memory baseline even at small n, so it doesn't belong in the
-    # default dev-box sweep.
-    {"name": "bfs_sparse", "target": "bin/bfsExample",
-     "cols": ["case", "n", "m", "build_s", "op_s", "inmem_op_s", "levels",
-              "reachable", "throughput_gb_s", "fast_op_s", "fast_levels",
-              "fast_reachable", "fast_throughput_gb_s"],
-     "time_col": "op_s", "inmem_col": "inmem_op_s",
-     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core, per-vertex (BFS_simple)"),
-     "extra_series": [("fast_op_s", "out-of-core, streaming (fast)", "^-")],
-     "extra_argv": ["8", "sparse"],
-     "elem_bytes": 2 * 32, "input_seqs": 1,   # avg_degree(2) * sizeof(weighted_edge)
-     "xlabel": "input size (edge bytes)",
-     "title": "BFS (sparse, avg_degree=2): out-of-core vs in-mem",
-     "data_globs": ["bfs_edges_sparse*", "bfs_frontier*"]},
-
-    {"name": "bfs_balanced", "target": "bin/bfsExample",
-     "cols": ["case", "n", "m", "build_s", "op_s", "inmem_op_s", "levels",
-              "reachable", "throughput_gb_s", "fast_op_s", "fast_levels",
-              "fast_reachable", "fast_throughput_gb_s"],
-     "time_col": "op_s", "inmem_col": "inmem_op_s",
-     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core, per-vertex (BFS_simple)"),
-     "extra_series": [("fast_op_s", "out-of-core, streaming (fast)", "^-")],
-     "extra_argv": ["8", "balanced"],
-     "elem_bytes": 8 * 32, "input_seqs": 1,   # avg_degree(8) * sizeof(weighted_edge)
-     "xlabel": "input size (edge bytes)",
-     "title": "BFS (balanced, avg_degree=8): out-of-core vs in-mem",
-     "data_globs": ["bfs_edges_balanced*", "bfs_frontier*"]},
-
-    # dense: avg_degree = n/2 (bfs.cpp), so edge bytes ~= 16*n^2, quadratic in
-    # n -- see _bfs_dense_n above (an alias of bellman_ford's own inverse,
-    # since both build the same chunk_csr shape). elem_bytes/input_seqs below
-    # are unused whenever n_from_size is present (see size_to_n) -- kept only
-    # as documentation of the on-disk element size.
-    {"name": "bfs_dense", "target": "bin/bfsExample",
-     "cols": ["case", "n", "m", "build_s", "op_s", "inmem_op_s", "levels",
-              "reachable", "throughput_gb_s", "fast_op_s", "fast_levels",
-              "fast_reachable", "fast_throughput_gb_s"],
-     "time_col": "op_s", "inmem_col": "inmem_op_s",
-     "series_labels": ("in-mem parlaylib (DRAM)", "out-of-core, per-vertex (BFS_simple)"),
-     "extra_series": [("fast_op_s", "out-of-core, streaming (fast)", "^-")],
-     "extra_argv": ["8", "dense"],
-     "n_from_size": _bfs_dense_n,
-     "elem_bytes": 32, "input_seqs": 1,
-     "xlabel": "input size (edge bytes)",
-     "title": "BFS (dense, avg_degree=n/2): out-of-core vs in-mem",
-     "data_globs": ["bfs_edges_dense*", "bfs_frontier*"]},
-
-    # even_squaresExample: the four external_even_squares.h implementations of
-    # "sum of squares of the even elements" head-to-head on one shared
-    # input -- out-of-core eager (ChunkFilter, then a fused delayed map+reduce)
-    # vs out-of-core fully-fused delayed (lazy_filter -> map -> reduce, one
-    # read pass, zero writes) vs the two in-memory parlay baselines (eager,
-    # delayed). All four are cross-checked for exact equality (an integer
-    # sum, so no tolerance compare); the in-mem pair stops at the ~24n DRAM
-    # cliff (EXAMPLE_INMEM_BUDGET_BYTES), same convention as samplesort's
-    # in-mem series.
-    #
-    # NOT in the make bench-examples/-mid/-full target lists (opt-in via
-    # --example only, same precedent as samplesort_three_way/bellman_ford_*/
-    # bfs_*): a comparison-focused example, not part of the default dev-box
-    # sweep.
-    {"name": "even_squares", "target": "bin/even_squaresExample",
-     "cols": ["n", "build_s", "eager_op_s", "delay_op_s", "inmem_eager_op_s",
-              "inmem_delay_op_s", "result", "eager_gb_s", "delay_gb_s"],
-     "time_col": "delay_op_s", "inmem_col": "inmem_delay_op_s",
-     "series_labels": ("in-mem parlaylib delayed (DRAM)", "out-of-core, fused delayed"),
-     "extra_series": [("eager_op_s", "out-of-core, eager (ChunkFilter)", "^-"),
-                      ("inmem_eager_op_s", "in-mem parlaylib eager (DRAM)", "d-")],
+    # external_random_shuffleExample sweeps n and times THREE shuffles of the same
+    # keys: random_shuffle_method (the bucketing shuffle on the high-level
+    # abstractions), plaid::Permutation (the same algorithm on the
+    # low-level reader/writer, rewriting each bucket in place), and the in-mem
+    # parlay::random_shuffle baseline (stops at the RAM cliff).  The plotted times
+    # are the shuffle passes only (the shared input build is excluded).  Each
+    # method's result *is* its bucket files (rs_out_/perm), so those prefixes are
+    # swept too; the driver additionally snapshot-diffs the drives and fails if
+    # anything at all is left behind.
+    {"name": "random_shuffle",
+     "target": "bin/primitive_demosExample", "pre_argv": ["random_shuffle"],
+     "cols": ["n", "build_s", "shuffle_s", "perm_s", "inmem_shuffle_s",
+              "shuffle_gb_s", "perm_gb_s"],
+     "time_col": "shuffle_s", "inmem_col": "inmem_shuffle_s",
+     "series_labels": ("in-mem parlay::random_shuffle (DRAM)",
+                       "random_shuffle_method (out-of-core)"),
+     "extra_series": [("perm_s", "Permutation (out-of-core)", "^-")],
      "elem_bytes": 8, "input_seqs": 1,
+     "budget_base": "phys", "budget_mult": 32,
      "xlabel": "input size",
-     "title": "Sum of even squares: fused-delayed vs eager, out-of-core vs in-mem",
-     "data_globs": ["es_in*", "even_squares_tmp*"]},
-
-    # ── single-primitive microbenchmarks (added for the combined summary
-    # figure, benchmarks/summary_figure.py) ────────────────────────────────
-    # Each of these is a NEW, previously-unbenchmarked primitive: dual-purpose
-    # driver (CSV,<cols> line), single out-of-core method vs one in-memory
-    # parlaylib baseline, RAM-budget-gated exactly like every other example.
-    # budget_base/budget_mult are read only by summary_figure.py's n
-    # predictor (verified against each driver's own gate, not derived from
-    # this table) -- run_benches.py's own sweep logic ignores them.
-
-    {"name": "count_sort", "target": "bin/count_sortExample",
-     "cols": ["n", "build_s", "sort_s", "inmem_sort_s", "throughput_gb_s"],
-     "time_col": "sort_s", "inmem_col": "inmem_sort_s",
-     "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 24,
-     "xlabel": "input size",
-     "title": "counting sort: out-of-core (plaid) vs in-mem parlaylib",
-     "data_globs": ["csrt_in*", "csrt_bucket_*"]},
-
-    {"name": "filter", "target": "bin/filterExample",
-     "cols": ["n", "build_s", "filter_s", "inmem_filter_s", "count", "throughput_gb_s"],
-     "time_col": "filter_s", "inmem_col": "inmem_filter_s",
-     "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 24,
-     "xlabel": "input size",
-     "title": "filter: out-of-core (ChunkFilter) vs in-mem parlaylib",
-     "data_globs": ["flt_in*", "flt_out*"]},
-
-    {"name": "histogram_by_index", "target": "bin/histogram_by_indexExample",
-     "cols": ["n", "build_s", "hist_s", "inmem_hist_s", "num_buckets", "throughput_gb_s"],
-     "time_col": "hist_s", "inmem_col": "inmem_hist_s",
-     "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 16,
-     "xlabel": "input size",
-     "title": "histogram by index: out-of-core (plaid) vs in-mem parlaylib",
-     "data_globs": ["hist_in*"]},
-
-    {"name": "map", "target": "bin/mapExample",
-     "cols": ["n", "build_s", "map_s", "inmem_map_s", "throughput_gb_s"],
-     "time_col": "map_s", "inmem_col": "inmem_map_s",
-     "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 24,
-     "xlabel": "input size",
-     "title": "map: out-of-core (ChunkMap) vs in-mem parlay::tabulate",
-     "data_globs": ["map_in*", "map_out*"]},
-
-    {"name": "pack", "target": "bin/packExample",
-     "cols": ["n", "build_s", "pack_s", "inmem_pack_s", "out_elems", "throughput_gb_s"],
-     "time_col": "pack_s", "inmem_col": "inmem_pack_s",
-     "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 32,
-     "xlabel": "input size",
-     "title": "pack: out-of-core (plaid) vs in-mem parlaylib",
-     "data_globs": ["pck_in*", "pck_out*"]},
-
-    {"name": "reduce", "target": "bin/reduceExample",
-     "cols": ["n", "build_s", "reduce_s", "inmem_reduce_s", "result", "throughput_gb_s"],
-     "time_col": "reduce_s", "inmem_col": "inmem_reduce_s",
-     "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 16,
-     "xlabel": "input size",
-     "title": "reduce: out-of-core (ChunkReduce) vs in-mem parlaylib",
-     "data_globs": ["red_in*"]},
-
-    {"name": "scan", "target": "bin/scanExample",
-     "cols": ["n", "build_s", "scan_s", "inmem_scan_s", "total", "throughput_gb_s"],
-     "time_col": "scan_s", "inmem_col": "inmem_scan_s",
-     "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 24,
-     "xlabel": "input size",
-     "title": "scan: out-of-core (ChunkScan) vs in-mem parlaylib",
-     "data_globs": ["scn_in*", "scn_out*"]},
-
-    {"name": "tabulate", "target": "bin/tabulateExample",
-     "cols": ["n", "tabulate_s", "inmem_tabulate_s", "throughput_gb_s"],
-     "time_col": "tabulate_s", "inmem_col": "inmem_tabulate_s",
-     "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 16,
-     "xlabel": "input size",
-     "title": "tabulate: out-of-core (ChunkFlatTabulate) vs in-mem parlaylib",
-     "data_globs": ["tab_out*"]},
-
-    {"name": "zip", "target": "bin/zipExample",
-     "cols": ["n", "build_s", "zip_s", "inmem_zip_s", "result", "throughput_gb_s"],
-     "time_col": "zip_s", "inmem_col": "inmem_zip_s",
-     "elem_bytes": 8, "input_seqs": 2,
-     "budget_base": "phys/2", "budget_mult": 40,
-     "xlabel": "input size",
-     "title": "zip+reduce: out-of-core delayed (plaid) vs in-mem parlay::zip",
-     "data_globs": ["zip_a*", "zip_b*"]},
-
+     "title": "random shuffle: two out-of-core methods vs in-mem parlaylib",
+     "data_globs": ["rs_in*", "rs_bucket_*", "rs_out_*", "rs_base_*", "perm*"]},
 ]
 
 
@@ -1089,7 +610,8 @@ def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings,
     for n, size in points:
         print(f"\n=== example {entry['name']}: size={_bytes_fmt(size, None)} "
               f"(n={n}) ===", flush=True)
-        fields, problem = run_binary(binary, [n] + entry.get("extra_argv", []) + extra_args,
+        fields, problem = run_binary(binary, entry.get("pre_argv", []) + [n]
+                                     + entry.get("extra_argv", []) + extra_args,
                                      fatal=False)
         if problem:
             w = (f"example {entry['name']} at size={_bytes_fmt(size, None)} (n={n}): "

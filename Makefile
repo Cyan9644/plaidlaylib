@@ -40,69 +40,24 @@ ABSL_LIBDIR := $(firstword $(wildcard deps/abseil-cpp/install/lib deps/abseil-cp
 ABSL_LIBS   := $(shell find $(ABSL_LIBDIR) -name '*.a' 2>/dev/null | sort)
 
 # Vendored shared utilities (utils/), compiled into this repo's $(OBJDIR).
-UTIL_OBJS := $(OBJDIR)/logger.o $(OBJDIR)/command_line.o $(OBJDIR)/file_utils.o
+UTIL_OBJS := $(OBJDIR)/file_utils.o
 
 # ChunkSequence correctness tests (each exits 0 on PASS, non-zero on FAIL).
-TEST_BINARIES := $(BINDIR)/iotaTest $(BINDIR)/mapTest $(BINDIR)/reduceTest \
-                 $(BINDIR)/filterTest $(BINDIR)/scanTest $(BINDIR)/combinedTest \
-                 $(BINDIR)/delayedTest $(BINDIR)/flatTabulateTest \
-                 $(BINDIR)/flatMapTest $(BINDIR)/findIfTest \
-                 $(BINDIR)/histogramTest $(BINDIR)/kmpTest $(BINDIR)/rabinKarpTest \
-                 $(BINDIR)/scalarTest $(BINDIR)/bigintAddTest $(BINDIR)/convexHullTest \
-                 $(BINDIR)/partitionTest $(BINDIR)/segmentedReduceTest \
-                 $(BINDIR)/dc3Test \
-                 $(BINDIR)/bigintMulTest \
-                 $(BINDIR)/samplesortStripedTest \
-                 $(BINDIR)/directSamplesortStripedTest \
-                 $(BINDIR)/externalRmatTest \
-                 $(BINDIR)/chunkOperationTest \
-                 $(BINDIR)/directRandomShuffleTest \
-                 $(BINDIR)/wordCountTest
+# primitivesTest covers everything in Primitives/{chunk_seq,primitives,sort}.h;
+# delayedTest covers Primitives/delayed.h; the rest are the four examples that
+# carry a correctness test.
+TEST_BINARIES := $(BINDIR)/primitivesTest $(BINDIR)/delayedTest \
+                 $(BINDIR)/kmpTest $(BINDIR)/rabinKarpTest \
+                 $(BINDIR)/bigintAddTest $(BINDIR)/convexHullTest
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
+# primitive_demos is one binary holding every per-primitive demo, dispatched on
+# argv[1] (see ChunkSequence/examples/primitive_demos.cpp).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
-                    $(BINDIR)/rabin_karpExample $(BINDIR)/kth_smallestExample \
-                    $(BINDIR)/kth_smallest_delayedExample \
-                    $(BINDIR)/external_samplesortExample $(BINDIR)/external_linefitExample \
-                    $(BINDIR)/fitmem_sortExample $(BINDIR)/fitmem_kth_smallestExample \
-                    $(BINDIR)/bigint_addExample $(BINDIR)/bigint_add_eagerExample \
-                    $(BINDIR)/bigint_mulExample \
-                    $(BINDIR)/chunk_cutExample \
-                    $(BINDIR)/external_samplesort_vs_peterExample \
-                    $(BINDIR)/direct_samplesort_vs_peterExample \
-                    $(BINDIR)/samplesort_three_wayExample \
-                    $(BINDIR)/apply_sort_vs_samplesortExample \
-                    $(BINDIR)/samplesort_vs_samplesort_randomExample \
-                    $(BINDIR)/external_random_shuffleExample \
-                    $(BINDIR)/random_shuffle_three_wayExample \
-                    $(BINDIR)/convex_hullExample \
-                    $(BINDIR)/convex_hull_lazy_filterExample \
-                    $(BINDIR)/fftExample \
-                    $(BINDIR)/fft_transposeExample \
-                    $(BINDIR)/bellman_fordExample \
-                    $(BINDIR)/bfsExample \
-                    $(BINDIR)/even_squaresExample \
-                    $(BINDIR)/word_countExample \
-                    $(BINDIR)/count_sortExample \
-                    $(BINDIR)/filterExample \
-                    $(BINDIR)/histogram_by_indexExample \
-                    $(BINDIR)/mapExample \
-                    $(BINDIR)/packExample \
-                    $(BINDIR)/reduceExample \
-                    $(BINDIR)/scanExample \
-                    $(BINDIR)/tabulateExample \
-                    $(BINDIR)/zipExample \
+                    $(BINDIR)/rabin_karpExample $(BINDIR)/bigint_addExample \
+                    $(BINDIR)/linefitExample $(BINDIR)/convex_hullExample \
+                    $(BINDIR)/samplesortExample $(BINDIR)/primitive_demosExample
 
-# Peter's external sample sort (the second contestant in the
-# external_samplesort_vs_peter comparison) ships its own configs.h /
-# utils/file_utils.h that clash by include guard with the main repo's, so it is
-# isolated in one shim TU compiled with its own directory first on the include
-# path.  Its shared utils (file_utils.cpp/logger/...) are byte-identical to the
-# main repo's, so it links against $(UTIL_OBJS) — do NOT also compile Peter's
-# utils/*.cpp (that would duplicate FindFiles/GetFileName/... symbols).
-PETER_DIR := ChunkSequence/examples/external_TODO/peter_samplesort
-
-LINK = $(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
 
 .PHONY: all clean distclean deps test examples bench bench-full bench-examples bench-examples-full bench-summary trace clean-bench-data format format-check
 
@@ -217,283 +172,77 @@ deps/abseil-cpp/install:
 # ── compilation rules ──────────────────────────────────────────────────────────
 
 # Vendored utilities -> this repo's $(OBJDIR).
+# -MMD -MP emits a .d sidecar per object listing the headers it pulled in; the
+# -include below feeds those back so a header edit rebuilds what depends on it.
+# This matters more than it used to: the whole library is four headers now, so
+# without it essentially every edit would need a manual `rm -f bin/<target>`.
 $(OBJDIR)/%.o: utils/%.cpp
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+	$(CXX) $(CXXFLAGS) -MMD -MP $(INCLUDES) -c $< -o $@
+
+# Header dependencies for the binaries: each link rule below also writes
+# $(OBJDIR)/<target>.d via -MMD, so editing a header relinks its dependents.
+DEPFLAGS = -MMD -MP -MF $(OBJDIR)/$(@F).d
+# $< $(UTIL_OBJS), NOT $^: the -include below adds every header in the .d as a
+# prerequisite of the binary, and $^ would then hand those headers to g++ as
+# source inputs (which fails outright on e.g. liburing's barrier.h).  $< is the
+# .cpp; the util objects are named explicitly.
+LINKD = $(CXX) $(CXXFLAGS) $(DEPFLAGS) $(INCLUDES) $< $(UTIL_OBJS) -o $@ $(LDFLAGS) \
+        -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
+
+-include $(wildcard $(OBJDIR)/*.d)
 
 # ── test binaries ──────────────────────────────────────────────────────────────
 
-$(BINDIR)/iotaTest: ChunkSequence/tests/iota_test.cpp $(UTIL_OBJS)
-	$(LINK)
-
-$(BINDIR)/mapTest: ChunkSequence/tests/map_test.cpp $(UTIL_OBJS)
-	$(LINK)
-
-$(BINDIR)/reduceTest: ChunkSequence/tests/reduce_test.cpp $(UTIL_OBJS)
-	$(LINK)
-
-$(BINDIR)/filterTest: ChunkSequence/tests/filter_test.cpp $(UTIL_OBJS)
-	$(LINK)
-
-$(BINDIR)/scanTest: ChunkSequence/tests/scan_test.cpp $(UTIL_OBJS)
-	$(LINK)
-
-$(BINDIR)/combinedTest: ChunkSequence/tests/combined_test.cpp $(UTIL_OBJS)
-	$(LINK)
+# primitivesTest: every case for chunk_seq.h / primitives.h / sort.h in one
+# binary (iota, map, reduce, scan, segmented_reduce, find_if, histogram,
+# scalar, filter, flat_tabulate, flat_map, partition, group_by,
+# chunk_operation, combined, samplesort).
+$(BINDIR)/primitivesTest: ChunkSequence/tests/primitives_test.cpp $(UTIL_OBJS)
+	$(LINKD)
 
 $(BINDIR)/delayedTest: ChunkSequence/tests/delayed_test.cpp $(UTIL_OBJS)
-	$(LINK)
-
-$(BINDIR)/flatTabulateTest: ChunkSequence/tests/flat_tabulate_test.cpp $(UTIL_OBJS)
-	$(LINK)
-
-$(BINDIR)/flatMapTest: ChunkSequence/tests/flat_map_test.cpp $(UTIL_OBJS)
-	$(LINK)
-
-$(BINDIR)/findIfTest: ChunkSequence/tests/find_if_test.cpp $(UTIL_OBJS)
-	$(LINK)
-
-$(BINDIR)/histogramTest: ChunkSequence/tests/histogram_test.cpp $(UTIL_OBJS)
-	$(LINK)
+	$(LINKD)
 
 $(BINDIR)/kmpTest: ChunkSequence/tests/kmp_test.cpp $(UTIL_OBJS)
-	$(LINK)
+	$(LINKD)
 
 $(BINDIR)/rabinKarpTest: ChunkSequence/tests/rabin_karp_test.cpp $(UTIL_OBJS)
-	$(LINK)
+	$(LINKD)
 
-$(BINDIR)/scalarTest: ChunkSequence/tests/scalar_test.cpp $(UTIL_OBJS)
-	$(LINK)
-
-# bigintAddTest includes an example header (examples/external/chunk_bigint_add.h); no
+# bigintAddTest includes an example header (examples/chunk_bigint_add.h); no
 # order-only deps/parlaylib-examples prereq is needed (no upstream baseline).
 $(BINDIR)/bigintAddTest: ChunkSequence/tests/bigint_add_test.cpp $(UTIL_OBJS)
-	$(LINK)
-
-# bigintMulTest includes an example header (examples/external_TODO/chunk_bigint_mul.h; own
-# in-memory reference, no upstream baseline).  Built with a small CHUNK_SIZE so
-# modest operands span several chunks and actually recurse through the
-# out-of-core cut/shift/add path, while the schoolbook oracle stays fast.  The
-# util objects have no CHUNK_SIZE-dependent ABI (cf. the chunkSizeCompare rule),
-# so linking the default-built UTIL_OBJS is fine.
-$(BINDIR)/bigintMulTest: ChunkSequence/tests/bigint_mul_test.cpp $(UTIL_OBJS)
-	$(CXX) $(CXXFLAGS) -DCHUNK_SIZE_BYTES=16384 $(INCLUDES) $^ -o $@ $(LDFLAGS) \
-	    -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
-
-$(BINDIR)/partitionTest: ChunkSequence/tests/partition_test.cpp $(UTIL_OBJS)
-	$(LINK)
-
-$(BINDIR)/segmentedReduceTest: ChunkSequence/tests/segmented_reduce_test.cpp $(UTIL_OBJS)
-	$(LINK)
-
-# dc3Test: out-of-core DC3 suffix array vs brute force + a streaming-vs-DRAM
-# differential.  Header-only algorithm (examples/external_TODO/chunk_dc3.h), no upstream baseline.
-$(BINDIR)/dc3Test: ChunkSequence/tests/dc3_test.cpp $(UTIL_OBJS)
-	$(LINK)
+	$(LINKD)
 
 # convexHullTest includes upstream quickhull.h (its in-DRAM differential
 # baseline), so it needs the order-only deps/parlaylib-examples prereq.
 $(BINDIR)/convexHullTest: ChunkSequence/tests/convex_hull_test.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(LINK)
-
-$(BINDIR)/tempMain: ChunkSequence/examples/in_memory/temp_main.cpp $(UTIL_OBJS)
-	$(LINK)
-
-# samplesortStripedTest / directSamplesortStripedTest: correctness +
-# drive-placement checks for the drive-striped sample sorts (sample_sort's and
-# direct_sample_sort's disk_span parameter, respectively). Pull in the
-# samplesort example headers directly (header-only algorithms, no upstream
-# baseline needed), so no extra deps prerequisite.
-$(BINDIR)/samplesortStripedTest: ChunkSequence/tests/samplesort_striped_test.cpp $(UTIL_OBJS)
-	$(LINK)
-
-$(BINDIR)/directSamplesortStripedTest: ChunkSequence/tests/direct_samplesort_striped_test.cpp $(UTIL_OBJS)
-	$(LINK)
-
-# directRandomShuffleTest: correctness + drive-placement checks for
-# direct_random_shuffle (benchmarks/benchmark_files/direct_random_shuffle.h), the
-# shuffle counterpart to directSamplesortStripedTest. Header-only algorithm,
-# no upstream baseline needed, so no extra deps prerequisite.
-$(BINDIR)/directRandomShuffleTest: ChunkSequence/tests/direct_random_shuffle_test.cpp $(UTIL_OBJS)
-	$(LINK)
-
-# externalRmatTest: the out-of-core RMAT generator (external_rmat.h) against the
-# in-memory graph_utils reference it claims to reproduce.  Its in-DRAM baseline
-# is the LOCAL examples/in_memory/graph/graph_utils/graph_utils.h, not an
-# upstream header, so no deps/parlaylib-examples prerequisite is needed.
-$(BINDIR)/externalRmatTest: ChunkSequence/tests/external_rmat_test.cpp $(UTIL_OBJS)
-	$(LINK)
-
-# chunkOperationTest: correctness test for the ChunkOperation dispatch front
-# door (Primitives/operation.h) and the DRAM-budget-checked,
-# wave-batched process_inplace_budgeted engine it's built on
-# (Primitives/small_sequence_ops.h) -- exercises Sort and Shuffle
-# under both a default (single-wave) and an artificially small (forced
-# multi-wave) DRAM budget.  Header-only, no upstream baseline needed, so no
-# extra deps prerequisite.
-$(BINDIR)/chunkOperationTest: ChunkSequence/tests/chunk_operation_test.cpp $(UTIL_OBJS)
-	$(LINK)
-
-# wordCountTest: out-of-core WordCount (examples/external/chunk_word_count.h) against a
-# self-contained sequential DRAM reference (no upstream baseline), covering
-# words that straddle chunk boundaries.  Header-only algorithm, no deps prereq.
-$(BINDIR)/wordCountTest: ChunkSequence/tests/word_count_test.cpp $(UTIL_OBJS)
-	$(LINK)
+	$(LINKD)
 
 # ── examples ───────────────────────────────────────────────────────────────────
 
-# Build every example.  Each example lives in ChunkSequence/examples/external/<name>.cpp
-# and builds to bin/<name>Example via the generic pattern rule below.
+# Build every example.  Each lives in ChunkSequence/examples/<name>.cpp and
+# builds to bin/<name>Example via the generic pattern rule below -- there are no
+# per-binary override rules any more.
 examples: $(EXAMPLE_BINARIES)
 
 # Order-only prereq: examples include upstream parlaylib example headers
 # ("parlaylib-examples/…") as their in-memory baselines, and run_benches.py
 # builds these targets directly (not via `make all`, which runs `deps` first).
-# Most examples now live in examples/external/ (merged sort/graph/delayed
-# family); anything elsewhere (examples/external_TODO/, benchmarks/benchmark_files/,
-# the peter-shim comparisons) gets an explicit override rule below.
-$(BINDIR)/%Example: ChunkSequence/examples/external/%.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(LINK)
-
-# kth_smallest_delayed: head-to-head comparison driver (ChunkPartition vs.
-# delayed::lazy_filter vs. in-mem), now lives with the other "vs" comparison
-# drivers under benchmarks/benchmark_files/.
-$(BINDIR)/kth_smallest_delayedExample: benchmarks/benchmark_files/kth_smallest_delayed.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(LINK)
-
-# random_shuffle_three_way: our primitives-based shuffle (external_random_shuffle.h)
-# vs our direct-I/O shuffle (direct_random_shuffle.h) vs in-mem
-# parlay::random_shuffle, all on the same keys in one run -- the shuffle
-# counterpart to samplesort_three_way, minus the vendored-reference leg (no
-# Peter shuffle exists). Both contestants are ours, so no peter_shim needed --
-# plain recipe like external_samplesortExample.  Lives under
-# benchmarks/benchmark_files/ alongside its sample-sort siblings.
-$(BINDIR)/random_shuffle_three_wayExample: benchmarks/benchmark_files/random_shuffle_three_way.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(LINK)
-
-# fitmem variants: single-level (buckets fit in DRAM) sample sort / kth-smallest,
-# now live under benchmarks/benchmark_files/ with the other comparison drivers.
-$(BINDIR)/fitmem_sortExample: benchmarks/benchmark_files/fitmem_sort.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(LINK)
-
-$(BINDIR)/fitmem_kth_smallestExample: benchmarks/benchmark_files/fitmem_kth_smallest.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(LINK)
-
-$(BINDIR)/chunk_cutExample: ChunkSequence/examples/external_TODO/chunk_cut.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(LINK)
-
-# bigint_mul / convex_hull_lazy_filter: moved out of examples/external/ into
-# examples/external_TODO/, so they need explicit rules now (previously caught
-# by the generic %Example pattern rule).
-$(BINDIR)/bigint_mulExample: ChunkSequence/examples/external_TODO/bigint_mul.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(LINK)
-
-$(BINDIR)/convex_hull_lazy_filterExample: ChunkSequence/examples/external_TODO/convex_hull_lazy_filter.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(LINK)
-
-# bellman_ford: out-of-core external_bellman_ford vs the in-memory reference
-# (examples/in_memory/graph/), same examples/external/ location as its
-# siblings. Unlike them it needs an extra -I: bellman_ford.h's own
-# `#include "helper/ligra_light.h"` is unprefixed (copied verbatim from
-# deps/parlaylib-examples/bellman_ford.h, which resolves it via quoted-include
-# fallback to its own containing directory), so compiling the local copy
-# directly needs deps/parlaylib-examples on the search path explicitly.
-$(BINDIR)/bellman_fordExample: ChunkSequence/examples/external/bellman_ford.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(CXX) $(CXXFLAGS) -Ideps/parlaylib-examples $(INCLUDES) $^ -o $@ \
-	    $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
-
-# bfs: out-of-core BFS_simple vs the in-memory reference (examples/in_memory/
-# graph/), same recipe as bellman_ford but living in examples/external_TODO/.
-# Doesn't need bellman_ford's extra -Ideps/parlaylib-examples: examples/in_memory/
-# graph/bfs.h's BFS() has no unprefixed helper/*-style include (unlike
-# bellman_ford.h's `#include "helper/ligra_light.h"`), so the plain include
-# path suffices.
-$(BINDIR)/bfsExample: ChunkSequence/examples/external_TODO/bfs.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(LINK)
-
-# even_squares: the four external_even_squares.h implementations (out-of-core
-# eager/delayed, in-memory parlay eager/delayed) head-to-head on one input,
-# same examples/external_TODO/ location/recipe as bfs/chunk_cut.
-$(BINDIR)/even_squaresExample: ChunkSequence/examples/external_TODO/even_squares.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(LINK)
-
-# external_samplesort_vs_peter: our sample sort vs Peter's, head-to-head.  The
-# driver TU uses the main includes; Peter's sort is linked in via peter_shim.o,
-# compiled separately below with $(PETER_DIR) first so its own configs.h/utils
-# resolve (never the main repo's).
-$(OBJDIR)/peter_shim.o: $(PETER_DIR)/peter_shim.cpp | deps/parlaylib deps/abseil-cpp/install
-	$(CXX) $(CXXFLAGS) -I$(PETER_DIR) $(INCLUDES) -c $< -o $@
-
-$(BINDIR)/external_samplesort_vs_peterExample: ChunkSequence/examples/external_TODO/external_samplesort_vs_peter.cpp $(UTIL_OBJS) $(OBJDIR)/peter_shim.o | deps/parlaylib-examples
-	$(LINK)
-
-# direct_samplesort_vs_peter: same head-to-head, but our contestant is the
-# direct-I/O sort (direct_samplesort.h) rather than the primitives-based one, so
-# the pair of sweeps isolates the substrate from the algorithm.  Same shim.
-$(BINDIR)/direct_samplesort_vs_peterExample: ChunkSequence/examples/external_TODO/direct_samplesort_vs_peter.cpp $(UTIL_OBJS) $(OBJDIR)/peter_shim.o | deps/parlaylib-examples
-	$(LINK)
-
-# samplesort_three_way: all three out-of-core sorts (Peter's, our direct-I/O one,
-# our primitives one) in one run on the same keys, with the run order rotated
-# across rounds so no sort is always the one paying for the previous one's
-# deleted files.  Same shim as the pairwise drivers.
-$(BINDIR)/samplesort_three_wayExample: benchmarks/benchmark_files/samplesort_three_way.cpp $(UTIL_OBJS) $(OBJDIR)/peter_shim.o | deps/parlaylib-examples
-	$(LINK)
-
-# apply_sort_vs_samplesort: plaid::apply<ChunkOperation::Sort> (whole-
-# sequence, DRAM-budgeted, no bucketing) vs sample_sort (recursive out-of-core).
-# Both are ours, no Peter contestant, so no peter_shim needed -- plain recipe
-# like external_samplesortExample.
-$(BINDIR)/apply_sort_vs_samplesortExample: benchmarks/benchmark_files/apply_sort_vs_samplesort.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(LINK)
-
-# samplesort_vs_samplesort_random: plaid::sample_sort (pivot sampling
-# via the shared sample<T> helper, chunk_sample.h) vs sample_sort_random (the
-# pre-refactor inline index+value pair sampling kept in external_samplesort.h
-# for comparison). Both are ours, no Peter contestant, so no peter_shim needed
-# -- plain recipe like apply_sort_vs_samplesortExample.
-$(BINDIR)/samplesort_vs_samplesort_randomExample: benchmarks/benchmark_files/samplesort_vs_samplesort_random.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(LINK)
-
-# suffix_array: out-of-core prefix-doubling suffix array (built on the direct-I/O
-# sample sort) vs upstream parlaylib suffix_array in DRAM.  Lives in
-# examples/external_TODO/; the upstream baseline header resolves via -Ideps
-# (in $(INCLUDES)).
-$(BINDIR)/suffix_arrayExample: ChunkSequence/examples/external_TODO/suffix_array.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(LINK)
-
-# dc3: out-of-core DC3 / skew suffix array (streaming Kärkkäinen–Sanders on the
-# direct-I/O sample sort) vs upstream parlaylib suffix_array in DRAM.  Same
-# examples/external_TODO/ location and plain recipe as suffix_arrayExample.
-$(BINDIR)/dc3Example: ChunkSequence/examples/external_TODO/dc3.cpp $(UTIL_OBJS) | deps/parlaylib-examples
-	$(LINK)
+$(BINDIR)/%Example: ChunkSequence/examples/%.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(LINKD)
 
 # ── benchmarks ─────────────────────────────────────────────────────────────────
 
 # delayed_compare: one binary, swept over n at runtime.
 $(BINDIR)/delayedCompare: benchmarks/delayed_compare.cpp $(UTIL_OBJS)
-	$(LINK)
+	$(LINKD)
 
 # chunk_size_compare: compiled once per CHUNK_SIZE via -DCHUNK_SIZE_BYTES=<stem>.
 # e.g. `make bin/chunkSizeCompare_2097152` bakes in a 2 MiB chunk size.
 $(BINDIR)/chunkSizeCompare_%: benchmarks/chunk_size_compare.cpp $(UTIL_OBJS)
-	$(CXX) $(CXXFLAGS) -DCHUNK_SIZE_BYTES=$* $(INCLUDES) $^ -o $@ \
+	$(CXX) $(CXXFLAGS) -DCHUNK_SIZE_BYTES=$* $(INCLUDES) $< $(UTIL_OBJS) -o $@ \
 	    $(LDFLAGS) -Wl,--start-group $(ABSL_LIBS) -Wl,--end-group
-
-# One-off exploratory benchmarks (old vs new delayed-filter windowing; zip
-# chain depth scaling; synthetic work-per-element scaling). Deliberately NOT
-# part of TEST_BINARIES/EXAMPLE_BINARIES or the bench/bench-full recipes —
-# build and run manually, same as bin/tempMain.
-$(BINDIR)/filterCompare: benchmarks/filter_compare.cpp $(UTIL_OBJS)
-	$(LINK)
-
-$(BINDIR)/zipDepthCompare: benchmarks/zip_depth_compare.cpp $(UTIL_OBJS)
-	$(LINK)
-
-# work_exponent_compare: dialable per-element/per-round synthetic "busy work"
-# knob (see benchmarks/work_exponent_bench.py), isolating work-per-element as
-# a free variable independent of any specific algorithm's semantics.
-$(BINDIR)/workExponentCompare: benchmarks/work_exponent_compare.cpp $(UTIL_OBJS)
-	$(LINK)
 
 # Run both benchmark sweeps and write timestamped images + CSVs under results/.
 # The Python driver builds each binary via make, runs the sweep, and plots.
@@ -517,20 +266,20 @@ bench-full:
 # (examples are heterogeneous and some are expensive).  `bench-examples` uses
 # small dev-box (tmpfs) defaults (128MiB .. 1GiB).
 bench-examples:
-	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add,convex_hull" --outdir results
+	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add,linefit,convex_hull,samplesort" --outdir results
 
 # Mid-scale examples sweep: input sizes up to 256 GiB.
 bench-examples-mid:
-	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add,convex_hull" --outdir results \
+	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add,linefit,convex_hull,samplesort" --outdir results \
 	    --example-sizes "1GiB 4GiB 16GiB 64GiB 256GiB"
 
 # Full-scale examples sweep tuned for the benchmark machine (500 GiB RAM, 30x 1TB
 # SSDs): input sizes up to 1 TiB.  Multi-TB of I/O — not for a tmpfs dev box.
 bench-examples-full:
-	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add,convex_hull" --outdir results \
+	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add,linefit,convex_hull,samplesort" --outdir results \
 	    --example-sizes "1GiB 4GiB 16GiB 64GiB 256GiB 1TiB"
 
-# Combined bar chart: 21 primitives/examples, each run ONCE at the largest n
+# Combined bar chart: 19 primitives/examples, each run ONCE at the largest n
 # where its own in-mem parlaylib baseline still fits DRAM, plotted as a
 # relative-performance bar chart (in-mem pinned at 1.0). See
 # benchmarks/summary_figure.py.  Real-scale run -- not for a tmpfs dev box
@@ -548,7 +297,7 @@ trace:
 # ── cleanup ────────────────────────────────────────────────────────────────────
 
 clean:
-	rm -f $(UTIL_OBJS) $(OBJDIR)/peter_shim.o $(TEST_BINARIES) $(EXAMPLE_BINARIES) \
+	rm -f $(UTIL_OBJS) $(OBJDIR)/*.d $(TEST_BINARIES) $(EXAMPLE_BINARIES) \
 	      $(BINDIR)/delayedCompare $(BINDIR)/chunkSizeCompare_*
 
 distclean: clean

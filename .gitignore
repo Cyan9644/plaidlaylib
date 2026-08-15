@@ -5,3 +5,5 @@ results/
 __pycache__/
 .direnv/
 demo_figures/
+
+build_local/
