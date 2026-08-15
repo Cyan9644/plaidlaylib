@@ -1420,7 +1420,7 @@ class ChunkSequenceReader {
  * everything down after a single pass.
  *
  * Built for fixed-point-iteration callers (e.g. external_bellman_ford_fast,
- * ChunkSequence/examples/external/external_bellman_ford.h) that re-read an
+ * ChunkSequence/examples/chunk_bellman_ford.h) that re-read an
  * unchanged chunk_seq many times: on WSL2, io_uring ring teardown frees its
  * RLIMIT_MEMLOCK charge asynchronously (see InitIoUringWithRetry in
  * utils/file_utils.h), so tearing down and rebuilding rings every round can

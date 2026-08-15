@@ -973,8 +973,8 @@ void sequential_for_each_chunk(const D& d, Body&& body) {
 // sequential_for_each_chunk's blocking-pread path.
 //
 // Meant to be constructed ONCE outside a fixed-point iteration's round loop
-// (e.g. external_bellman_ford_fast, ChunkSequence/examples/external/
-// external_bellman_ford.h) and passed into every round's
+// (e.g. external_bellman_ford_fast, ChunkSequence/examples/
+// chunk_bellman_ford.h) and passed into every round's
 // for_each_chunk/segmented_reduce call, so the expensive part -- io_uring
 // rings, reader OS threads, and fd opens (see PersistentChunkSequenceReader,
 // chunk_seq_reader.h) -- is paid ONCE for the whole run instead of once per

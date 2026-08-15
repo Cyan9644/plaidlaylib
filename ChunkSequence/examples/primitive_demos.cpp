@@ -1031,16 +1031,17 @@ int run(int argc, char* argv[]) {
 // (was ChunkSequence/examples/external/count_sort.cpp)
 // ============================================================================
 
-namespace demo_count_sort {
+namespace demo_group_by_index {
 
-// count_sortExample — out-of-core counting-sort benchmark/demo.
+// group_by_indexExample — out-of-core group-by benchmark/demo.
 //
-// Buckets an n-element uint64_t input via plaid::count_sort_by_key
-// (Primitives/count_sort.h, a single streaming-reader pass that routes each
-// element to its bucket's write stream) and fuses the per-bucket chunk_seqs
-// back into one index-ordered sequence with plaid::fuse.  Compares against
-// parlay::counting_sort (its identity-key overload, which requires elements
-// already in [0, num_buckets)) on the identical input built in DRAM.
+// Buckets an n-element uint64_t input via plaid::group_by_index
+// (Primitives/sort.h, a single streaming-reader pass that routes each
+// element to its bucket's write stream via a key function) and fuses the
+// per-bucket chunk_seqs back into one index-ordered sequence with
+// plaid::fuse.  Compares against parlay::counting_sort (its identity-key
+// overload, which requires elements already in [0, num_buckets)) on the
+// identical input built in DRAM.
 //
 // The key IS the value here (hash64(i) % NUM_BUCKETS, so every element in
 // bucket b is literally the integer b, repeated) -- this makes the
@@ -1054,7 +1055,7 @@ namespace demo_count_sort {
 // greps.  The in-memory baseline is gated by a RAM budget (input + baseline
 // output + readback = ~24n), overridable via EXAMPLE_INMEM_BUDGET_BYTES.
 //
-//   usage: count_sortExample [global --flags] [n]
+//   usage: group_by_indexExample [global --flags] [n]
 
 static constexpr size_t NUM_BUCKETS = 4096;
 
@@ -1093,8 +1094,8 @@ int run(int argc, char* argv[]) {
     budget = std::stoull(e);
   const bool inmem_ok = n <= budget / 24;
 
-  const std::string in_prefix = "csrt_in";
-  const std::string bucket_prefix = "csrt_bucket";
+  const std::string in_prefix = "gbi_ex_in";
+  const std::string bucket_prefix = "gbi_ex_bucket";
 
   std::cout << "Building " << n << "-element input (mod " << NUM_BUCKETS
             << ")..." << std::flush;
@@ -1107,13 +1108,12 @@ int run(int argc, char* argv[]) {
             << "s)\n";
   quiesce_drives();
 
-  std::cout << "Counting-sorting " << n << " elements into " << NUM_BUCKETS
+  std::cout << "Grouping " << n << " elements into " << NUM_BUCKETS
             << " buckets..." << std::flush;
   trace_mark("op_start");
   t0 = Clock::now();
-  std::vector<chunk_seq> buckets(NUM_BUCKETS);
-  plaid::count_sort_by_key<uint64_t>(
-      keys, NUM_BUCKETS, buckets, [](uint64_t v) { return v; }, bucket_prefix);
+  std::vector<chunk_seq> buckets = plaid::group_by_index<uint64_t>(
+      keys, NUM_BUCKETS, bucket_prefix, [](uint64_t v) { return (size_t)v; });
   chunk_seq sorted = plaid::fuse(buckets);
   const double sort_s = elapsed(t0);
   trace_mark("op_end");
@@ -1171,7 +1171,7 @@ int run(int argc, char* argv[]) {
   return agree ? 0 : 1;
 }
 
-}  // namespace demo_count_sort
+}  // namespace demo_group_by_index
 
 // ============================================================================
 // histogram_by_index -- ChunkHistogramByIndex -- per-worker bucket-count fold
@@ -1852,6 +1852,130 @@ int run(int argc, char* argv[]) {
 
 }  // namespace demo_random_shuffle
 
+namespace demo_reverse {
+
+// reverseExample — in-place out-of-core reversal benchmark/demo.
+//
+// Builds an n-element uint64_t input (value i at index i), reverses it in
+// place via plaid::reverse (Primitives/secondary_primitives.h — one
+// O_DIRECT read + write per chunk, no extra output files), and cross-checks
+// the readback against std::reverse on an identical in-memory copy.  Note
+// plaid::reverse does not preserve the dense-except-last chunk invariant (see
+// its doc comment) — the demo only reads the result back via to_vector, which
+// is safe.
+//
+// Dual-purpose like the other examples: prints human-readable timings and
+// ends with a machine-readable `CSV,` line that benchmarks/run_benches.py
+// greps.  The in-memory baseline is gated by a RAM budget (input + baseline
+// copy + readback = ~24n), overridable via EXAMPLE_INMEM_BUDGET_BYTES.
+//
+//   usage: reverseExample [global --flags] [n]
+
+using Clock = std::chrono::steady_clock;
+static double elapsed(Clock::time_point t0) {
+  return std::chrono::duration<double>(Clock::now() - t0).count();
+}
+static double to_gb(size_t bytes) {
+  return (double)bytes / (1024.0 * 1024.0 * 1024.0);
+}
+
+static void quiesce_drives() {
+  sync();
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+}
+
+static void cleanup_prefix(const std::string& prefix) {
+  const auto& ssds = GetSSDList();
+  for (size_t d = 0; d < ssds.size(); d++)
+    unlink(GetFileName(prefix, d).c_str());
+}
+
+int run(int argc, char* argv[]) {
+  ParseGlobalArguments(argc, argv);
+  const size_t n = (argc > 1) ? std::stoull(argv[1]) : 1'000'000;
+  CHECK(n > 0) << "need n > 0 (n=" << n << ")";
+
+  const size_t phys =
+      (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
+  size_t budget = phys / 2;
+  if (const char* e = getenv("EXAMPLE_INMEM_BUDGET_BYTES"))
+    budget = std::stoull(e);
+  const bool inmem_ok = n <= budget / 24;
+
+  const std::string in_prefix = "rev_in";
+
+  std::cout << "Building " << n << "-element input..." << std::flush;
+  trace_mark("build_start");
+  auto t0 = Clock::now();
+  chunk_seq seq = plaid::tabulate<uint64_t>(
+      n, in_prefix, [](size_t i) { return (uint64_t)i; });
+  const double build_s = elapsed(t0);
+  trace_mark("build_end");
+  std::cout << " done (" << std::fixed << std::setprecision(4) << build_s
+            << "s)\n";
+  quiesce_drives();
+
+  std::cout << "Reversing " << n << " elements in place..." << std::flush;
+  trace_mark("op_start");
+  t0 = Clock::now();
+  plaid::reverse<uint64_t>(seq);
+  const double rev_s = elapsed(t0);
+  trace_mark("op_end");
+  const double gb_s = to_gb(n * sizeof(uint64_t)) / rev_s;
+  std::cout << " done   " << std::setprecision(4) << rev_s << "s   "
+            << std::setprecision(2) << gb_s << " GB/s\n";
+
+  bool agree = true;
+  double inmem_rev_s = 0;
+  if (inmem_ok) {
+    auto mem = parlay::tabulate(n, [](size_t i) { return (uint64_t)i; });
+    t0 = Clock::now();
+    std::reverse(mem.begin(), mem.end());
+    inmem_rev_s = elapsed(t0);
+    std::cout << "in-mem std::reverse: " << std::setprecision(4)
+              << inmem_rev_s << "s\n";
+
+    std::vector<uint64_t> ours = seq.to_vector<uint64_t>();
+    if (ours.size() != mem.size()) {
+      std::cout << "*** MISMATCH: out-of-core produced " << ours.size()
+                << " elements, expected " << mem.size() << " ***\n";
+      agree = false;
+    } else {
+      for (size_t i = 0; i < ours.size() && agree; i++) {
+        if (ours[i] != mem[i]) {
+          std::cout << "*** MISMATCH at index " << i << ": " << ours[i]
+                    << " != " << mem[i] << " ***\n";
+          agree = false;
+        }
+      }
+      if (agree)
+        std::cout << "cross-check: out-of-core reverse matches in-mem "
+                     "std::reverse exactly\n";
+    }
+  } else {
+    std::cout << "in-mem std::reverse: skipped (~24n footprint exceeds RAM "
+                 "budget "
+              << std::setprecision(2) << to_gb(budget) << " GB)\n";
+  }
+
+  // Machine-readable line for benchmarks/run_benches.py (examples sweep).
+  // Columns: n,build_s,reverse_s,inmem_reverse_s,throughput_gb_s
+  // (inmem_reverse_s blank when the input exceeds the RAM budget).
+  auto f9 = [](double v) {
+    std::ostringstream o;
+    o << std::setprecision(9) << v;
+    return o.str();
+  };
+  std::cout << "CSV," << n << ',' << f9(build_s) << ',' << f9(rev_s) << ','
+            << (inmem_ok ? f9(inmem_rev_s) : std::string()) << ',' << f9(gb_s)
+            << '\n';
+
+  cleanup_prefix(in_prefix);
+  return agree ? 0 : 1;
+}
+
+}  // namespace demo_reverse
+
 // ============================================================================
 // dispatch
 // ============================================================================
@@ -1865,10 +1989,11 @@ int main(int argc, char* argv[]) {
       {"zip", &demo_zip::run},
       {"filter", &demo_filter::run},
       {"pack", &demo_pack::run},
-      {"count_sort", &demo_count_sort::run},
+      {"group_by_index", &demo_group_by_index::run},
       {"histogram_by_index", &demo_histogram_by_index::run},
       {"cut", &demo_cut::run},
       {"random_shuffle", &demo_random_shuffle::run},
+      {"reverse", &demo_reverse::run},
   };
 
   if (argc < 2 || kDemos.find(argv[1]) == kDemos.end()) {

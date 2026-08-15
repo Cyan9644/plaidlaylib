@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Combined relative-performance bar chart: 17 primitives/examples, each run
+"""Combined relative-performance bar chart: 21 primitives/examples, each run
 ONCE at (approximately) the largest input size where its own in-memory
 parlaylib baseline still fits DRAM, plotted against a pinned in-mem
 reference at 1.0 -- in the spirit of parlaylib's own "ParlayLib vs
@@ -60,22 +60,37 @@ SAFETY = 0.97           # margin below the predicted cliff (RSS accounting is a 
 MAX_ATTEMPTS = 3
 SHRINK = 0.85            # per-retry shrink factor when a prediction overshoots
 
-# (display_label, EXAMPLES registry name) pairs for the 17 bars: 10 primitives
-# + 7 examples, "sort"/"samplesort" collapsed to the single samplesort entry.
-# Already alphabetical by display_label; asserted below so a future edit can't
-# silently desync the claim from the actual order.
+# (display_label, EXAMPLES registry name) pairs for the 21 bars: 12 primitives
+# + 9 examples, "sort"/"samplesort" collapsed to the single samplesort entry
+# and "bellman_ford" mapping to the bellman_ford_sparse registry entry (the
+# sparse RMAT case; see predict_n_bellman_ford_sparse below for why it needs
+# its own budget math). Already alphabetical by display_label; asserted below
+# so a future edit can't silently desync the claim from the actual order.
 #
-# The whitelist cleanup dropped four former bars: bellman_ford, fft and
-# kth_smallest lost their examples outright, and `cut` is omitted because its
-# demo segfaults (a pre-existing break, unchanged by the cleanup -- the
-# subcommand is still there in primitive_demos.cpp for whoever fixes it).
+# The whitelist cleanup dropped four former bars -- bellman_ford, fft,
+# kth_smallest and count_sort's demo -- and `cut` is omitted because its demo
+# segfaults (a pre-existing break, unchanged by the cleanup -- the subcommand
+# is still there in primitive_demos.cpp for whoever fixes it). All three
+# dropped examples have since been recovered from 9c96e4a: kth_smallest as an
+# example-side primitive (chunk_kth_smallest.h); fft as chunk_fft.h + fft.cpp,
+# the transpose-free variant (the counterpart fft_transpose.cpp is swept by
+# run_benches.py but not plotted here); bellman_ford as the CSR-graph
+# subsystem under ChunkSequence/helper/ + chunk_bellman_ford.h + bellman_ford.cpp,
+# with the RMAT graph generator's own numeric_limits gap around sample_sort's
+# pivot padding worked around by reusing direct_sample_sort (examples/
+# direct_samplesort.h) instead. count_sort's demo was repointed to showcase
+# the already-existing group_by_index primitive instead of being restored
+# as-is.
 SUMMARY_ENTRIES = [
+    ("bellman_ford", "bellman_ford_sparse"),
     ("bigint_add", "bigint_add"),
     ("convex_hull", "convex_hull"),
-    ("count_sort", "count_sort"),
+    ("fft", "fft"),
     ("filter", "filter"),
+    ("group_by_index", "group_by_index"),
     ("histogram_by_index", "histogram_by_index"),
     ("kmp", "kmp"),
+    ("kth_smallest", "kth_smallest"),
     ("linefit", "linefit"),
     ("map", "map"),
     ("pack", "pack"),
@@ -83,6 +98,7 @@ SUMMARY_ENTRIES = [
     ("rabin_karp", "rabin_karp"),
     ("random_shuffle", "random_shuffle"),
     ("reduce", "reduce"),
+    ("reverse", "reverse"),
     ("scan", "scan"),
     ("sort / samplesort", "samplesort"),
     ("tabulate", "tabulate"),

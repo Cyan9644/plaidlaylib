@@ -5,10 +5,13 @@ filter, scan, flat-tabulate, find_if, …) for data stored across many SSDs.  Da
 is too large for DRAM; all I/O goes through `io_uring` with `O_DIRECT`.
 The primary goal of the project/library is to demonstrate that multi-SSD programming can be made relatively ergonomic with carefully chosen abstractions, while maintaining parallelism to rival in memory parallel algorithm implementations via techniques such as delaying to reduce IO trips. Examples are free to make calls into the reader and writer but these should be temporary solutions to reveal what abstractions are later needed; the ultimate goal is a useable set of abstractions that avoid burdening the user with the drive setup itself.
 
-The library is deliberately small: **five headers**, six test binaries, eight
+The library is deliberately small: **five headers**, nine test binaries, twelve
 example binaries.  It reached that size through a whitelist cleanup that dropped
 the accumulated experimental surface (parked research, superseded alternates,
-head-to-head comparison drivers).  Everything dropped is intact in git at commit
+head-to-head comparison drivers); a handful of pieces (`reverse`,
+`kth_smallest`, `fft`, `bellman_ford`, …) have since been recovered from that
+cleanup on request — see the Layout/Tests/Examples sections below for what is
+back.  Everything dropped is intact in git at commit
 `9c96e4a`, the state immediately before the cleanup's first deletion — recover a
 file with `git show 9c96e4a:<path>`, or a whole subtree with
 `git checkout 9c96e4a -- <dir>`.
@@ -51,7 +54,7 @@ Assumes `SSD_COUNT` (default 30) mount points named per `SSD_ROOT` (default
 On a dev box you can point all mounts at one tmpfs, but keep sizes small — the
 "SSDs" then share one RAM-backed device, and a run that would be trivial on the
 real machine can fill it and take the box down with it.  Two known cases:
-`primitive_demosExample count_sort` needs `NUM_BUCKETS * CHUNK_SIZE` ≈ 16 GiB of
+`primitive_demosExample group_by_index` needs `NUM_BUCKETS * CHUNK_SIZE` ≈ 16 GiB of
 bucket files *regardless of n*, so it cannot run on a small tmpfs at any size.
 
 ## Layout
@@ -79,26 +82,54 @@ ChunkSequence/
                                 ChunkFlatTabulate, ChunkFlatMap
     secondary_primitives.h      the rest of the eager layer: segmented_reduce,
                                 pack/pack_if/pack_value, histogram, find_if,
-                                partition, flatten, materialize, cut, scan_find,
-                                linear_find.  Includes primitives.h, so including
-                                it gets the whole eager layer
+                                partition, flatten, materialize, cut, reverse,
+                                scan_find, linear_find.  Includes primitives.h,
+                                so including it gets the whole eager layer
     sort.h                      out-of-core sort/shuffle (process_inplace,
                                 ChunkOperation/apply, count_sort, group_by,
                                 sample, sample_sort, random_shuffle,
                                 Permutation)
-  tests/                      six binaries, each exiting 0 on PASS
+  helper/                      graph-only support code, recovered from 9c96e4a
+                                for the bellman_ford example
+    external_compressed_sparse_row.h   chunk_csr / weighted_edge (in-DRAM
+                                degree_scan + out-of-core edge chunk_seq)
+    graph_utils/graph_utils.h   vendored upstream graph_utils<vertex> (rmat_edge,
+                                rmat_symmetric_graph, add_weights, …), with a
+                                local include guard upstream's copy lacks —
+                                needed because both bellman_ford.cpp and
+                                external_rmat.h include it in one TU
+    graph_utils/external_rmat.h out-of-core RMAT generation straight onto the
+                                drives (tabulate -> direct_sample_sort -> one
+                                DensePackStream dedup/CSR-project/degree-count
+                                pass), so a graph larger than DRAM never needs
+                                to be built there just to hand bellman_ford a
+                                chunk_csr
+  tests/                      nine binaries, each exiting 0 on PASS
     primitives_test.cpp         every case for chunk_seq.h/primitives.h/sort.h
     delayed_test.cpp            the delayed layer
     kmp_test.cpp  rabin_karp_test.cpp  bigint_add_test.cpp  convex_hull_test.cpp
-  examples/                   seven demonstration programs + the primitive demos
+    kth_smallest_test.cpp       plaid::kth_smallest / kth_smallest_fast
+    bellman_ford_test.cpp       external_bellman_ford / _fast vs upstream, on
+                                small hand-built graphs
+    external_rmat_test.cpp      external_rmat_symmetric_graph vs the in-memory
+                                graph_utils reference, element-wise
+  examples/                   eleven demonstration programs + the primitive demos
     primes.cpp                  out-of-core prime sieve on ChunkFlatTabulate
     kmp.cpp  chunk_kmp.h        out-of-core KMP search
     rabin_karp.cpp  chunk_rabin_karp.h   out-of-core Rabin-Karp search
+    kth_smallest.cpp  chunk_kth_smallest.h  out-of-core order-statistic selection
     bigint_add.cpp  chunk_bigint_add.h   out-of-core big-integer add (delayed-fused)
     linefit.cpp  chunk_linefit.h         fully-delayed least-squares fit
     convex_hull.cpp  chunk_convex_hull.h out-of-core upper convex hull
     samplesort.cpp              driver for plaid::sample_sort (Primitives/sort.h)
-    primitive_demos.cpp         one binary, 11 per-primitive demos on argv[1]
+    fft.cpp  fft_transpose.cpp  chunk_fft.h  out-of-core FFT (transpose-free +
+                                explicit-transpose variants)
+    bellman_ford.cpp  chunk_bellman_ford.h   out-of-core Bellman-Ford over an
+                                RMAT graph (see helper/ above)
+    direct_samplesort.h         standalone struct-element sort external_rmat.h's
+                                CSR-order pass needs (sample_sort's pivot padding
+                                mishandles a T with no numeric_limits)
+    primitive_demos.cpp         one binary, 12 per-primitive demos on argv[1]
     in_memory_baselines.h       DRAM references for linefit + sample sort
 benchmarks/                   perf benchmarks + Python runner/plotter
   delayed_compare.cpp           in-mem delayed vs chunk-eager vs chunk-delayed
@@ -113,13 +144,13 @@ results/                      timestamped benchmark output; gitignored
 
 ## Tests
 
-`make test` builds and runs all six binaries, continuing past a failure and
+`make test` builds and runs all seven binaries, continuing past a failure and
 exiting non-zero if any failed.  `TEST_ARGS` is forwarded to every binary
 (`make test TEST_ARGS=8000000`); a case with no argument uses its own default.
 
-`bin/primitivesTest` holds sixteen cases — iota, map, reduce, scan,
+`bin/primitivesTest` holds seventeen cases — iota, map, reduce, scan,
 segmented_reduce, find_if, histogram, scalar, filter, flat_tabulate, flat_map,
-partition, group_by, chunk_operation, combined, samplesort — each in its own
+partition, group_by, reverse, chunk_operation, combined, samplesort — each in its own
 namespace with its original `main` renamed to `run()`, ordered cheap-first so a
 substrate break surfaces before the expensive sorts.  `ParseGlobalArguments` is
 called **once** by the dispatcher, not per case: it consumes the global flags and
@@ -173,6 +204,26 @@ mismatch — a differential test in the spirit of the benchmarks' `agree`.
   rolling-hash algorithm** run in DRAM, so this is a same-algorithm
   DRAM-vs-out-of-core comparison at a ~n-byte footprint — not parlaylib's ~9n
   prefix-hash variant.  Same CSV columns as kmp.
+- `kth_smallest.cpp` → `bin/kth_smallestExample [n] [k]`: out-of-core order-
+  statistic selection (`plaid::kth_smallest`, `examples/chunk_kth_smallest.h`,
+  tested by `kthSmallestTest`) — oversample pivots → bucket via
+  `parlay::internal::heap_tree` → `ChunkHistogramByKey` → `pack_value` the
+  winning bucket → recurse, mirroring parlaylib's in-memory `kth_smallest` but
+  keeping every intermediate out of core; below 1536 residual elements it
+  finishes with one `materialize` + `std::nth_element`.  A second entry point,
+  `kth_smallest_fast`, routes every element to its bucket in one
+  `ChunkPartition` pass instead of a histogram pass followed by a separate
+  pack — fewer io_uring rings stood up per recursion level — and is exercised
+  by `kthSmallestTest` but not (yet) by the driver.  Baseline: upstream
+  `parlaylib-examples/kth_smallest.h`, cross-checked by the selected scalar
+  (keys are distinct, so the k-th smallest is unique).  Recovered from
+  `9c96e4a`'s `examples/external/ExternalKthSmallest.h`.  Emits
+  `CSV,n,k,build_s,select_s,inmem_select_s,result,throughput_gb_s`.  **Note:**
+  the plain (non-`_fast`) recursion's `pack_value` intermediates
+  (`next_<n>`-prefixed) are never cleaned up by the algorithm itself — the
+  driver's own `cleanup_prefix` only clears its top-level input, so
+  `run_benches.py`'s `kth_smallest` entry carries `"next_*"` in `data_globs` to
+  avoid stranding recursion intermediates across sweep points.
 - `bigint_add.cpp` → `bin/bigint_addExample [n]`: out-of-core n-limb big-integer
   add (`examples/chunk_bigint_add.h`) as a fused delayed chain (zip → classify →
   carry-scan → add → force).  Baseline: parlaylib `bigint_reference::add`.
@@ -209,12 +260,94 @@ mismatch — a differential test in the spirit of the benchmarks' `agree`.
   (`Primitives/sort.h`) — oversample → `heap_tree` pivots → `group_by_index` →
   per-bucket DRAM sort → `flatten`.  Bucket count is chosen so each bucket fits in
   DRAM, so the per-bucket step is one in-memory pass rather than a recursion.
+- `fft.cpp` / `fft_transpose.cpp` → `bin/fftExample [n]` / `bin/fft_transposeExample
+  [n]`: out-of-core 1-D FFT of a power-of-two `complex<double>` sequence, factored
+  as an A x B matrix (`examples/chunk_fft.h`, namespace `ChunkFFT`) and computed
+  as a transpose-free four-step: stage 1 is a streaming length-A FFT on each
+  contiguous block (`ExternalTransform`); stage 2 is a length-B FFT down each
+  strided column via small 4 KiB random io_uring gather/scatter (`RandomRing`),
+  done in place on stage 1's output.  `fft_transposeExample` is the classic
+  external-memory counterpart: an explicit on-disk band transpose between the
+  two passes (`transpose_pass`) so stage 2T is contiguous streaming too — 6N
+  bytes moved, all sequential, vs. the transpose-free path's 4N with half
+  random.  Both share the same self-contained iterative/recursive radix-2
+  kernel (`fft_inplace`, `FFTPlan`) for both the out-of-core stages and the
+  in-memory baseline (`in_mem_place` + `in_mem_transform`, the same algorithm
+  run in DRAM with no I/O, so the in-mem/out-of-core comparison isolates I/O
+  cost rather than pitting it against a different FFT).  The full-spectrum
+  cross-check against the independent upstream oracle
+  (`parlaylib-examples/fast_fourier_transform.h`'s `complex_fft`) runs
+  whenever the in-memory baseline does, unlike the pre-cleanup driver which
+  gated it behind `FFT_VERIFY=1` — brought in line with every other example's
+  always-on cross-check convention.  16-byte elements (`sizeof(complex<double>)`)
+  divide `CHUNK_SIZE`, same alignment logic as convex_hull's 32-byte `hpoint`;
+  both stages are eager-only (`ExternalTransform`/raw io_uring), never touching
+  `Primitives/delayed.h`'s ≤8-byte-capped layer.  No dedicated unit test — the
+  driver's own cross-check is the correctness test, as for every example
+  without a delayed/algorithmic unit worth isolating separately.  Recovered
+  from `9c96e4a`'s `examples/external/chunk_fft.h` / `fft.cpp` /
+  `fft_transpose.cpp`.  Emits
+  `CSV,N,build_s,stage1_s,stage2_s,total_s,inmem_s,count,throughput_gb_s` (fft)
+  / `CSV,N,build_s,stage1_s,transpose_s,stage2t_s,total_s,inmem_s,count,gb_s`
+  (fft_transpose); only `fft` is in `summary_figure.py`'s bar chart.
+- `bellman_ford.cpp` → `bin/bellman_fordExample [n] [balanced_avg_degree]
+  [case]`: out-of-core Bellman-Ford (`plaid`-free global functions
+  `external_bellman_ford` / `external_bellman_ford_fast`,
+  `examples/chunk_bellman_ford.h`, tested by `bellmanFordTest`) over a
+  symmetric weighted RMAT graph built entirely out-of-core
+  (`ExternalGraphUtils::external_rmat_symmetric_graph`,
+  `helper/graph_utils/external_rmat.h`, tested by `externalRmatTest`) into a
+  `chunk_csr` (`helper/external_compressed_sparse_row.h`).
+  `external_bellman_ford` is the direct port of parlaylib's pull-based
+  algorithm — each round, relax every vertex from a fresh `delayed::cut` +
+  `sequential_materialize` of its in-edge row, one `SequentialReadContext` per
+  parlay worker — so it costs O(rounds·n) reader setups and is only run below
+  a byte budget (`BELLMAN_FORD_PER_VERTEX_MAX_BYTES`, default 512 KiB).
+  `external_bellman_ford_fast` instead does one `delayed::segmented_reduce`
+  streaming pass over the whole edge list per round, reusing a single
+  `PersistentReadContext` built once outside the round loop instead of
+  rebuilding io_uring rings every round — always runs, and is what the
+  `bellman_ford_sparse` benchmark entry plots.  The driver sweeps three RMAT
+  density regimes (`sparse`/`balanced`/`dense`, avg_degree 2/8/n·2⁻¹) from the
+  same requested vertex count `n`, and — DRAM permitting, gated by
+  `BELLMAN_FORD_INMEM_MAX_N` and `BELLMAN_FORD_BUILD_BUDGET_BYTES` — builds a
+  second copy of the same graph via upstream `graph_utils<size_t>` (vendored
+  at `helper/graph_utils/graph_utils.h` with a local include guard) and
+  parlaylib's own `bellman_ford` (`deps/parlaylib-examples/bellman_ford.h`) as
+  the cross-check baseline; both generators are deterministic functions of
+  `(n_req, m_req)`, so building twice doubles as an end-to-end check that they
+  agree.  RMAT's CSR-ordering sort uses `direct_sample_sort`
+  (`examples/direct_samplesort.h`), not `sample_sort` — `sample_sort`'s pivot
+  padding value-initializes past-the-end pivots via
+  `std::numeric_limits<T>::max()`, which for the edge struct type (no
+  `numeric_limits` specialization) is the *minimum*, not the maximum, and
+  would silently misroute.  Recovered from `9c96e4a` (`examples/external/
+  external_bellman_ford.h`, `examples/external/bellman_ford.cpp`,
+  `examples/external_TODO/direct_samplesort.h`, `helper/
+  external_compressed_sparse_row.h`, `helper/graph_utils/external_rmat.h`);
+  `direct_samplesort.h` was not part of the original recovery request but
+  turned out to be a transitive dependency of RMAT generation, so it came
+  along too.  Emits one CSV line per case:
+  `CSV,case,n,m,build_s,op_s,inmem_op_s,reachable,throughput_gb_s,fast_op_s,fast_reachable,fast_throughput_gb_s`
+  (`op_s`/`reachable`/`throughput_gb_s` blank when the per-vertex method is
+  skipped; `inmem_op_s` blank past `BELLMAN_FORD_INMEM_MAX_N`).  Only the
+  `sparse` case is wired into `run_benches.py`/`summary_figure.py` (as
+  `bellman_ford_sparse`); `balanced`/`dense` are available via `case` but have
+  no registry entry.
 - `primitive_demos.cpp` → `bin/primitive_demosExample <primitive> [n ...]`: one
-  binary holding the eleven per-primitive demos — `map`, `reduce`, `scan`,
-  `tabulate`, `zip`, `filter`, `pack`, `count_sort`, `histogram_by_index`, `cut`,
-  `random_shuffle`.  Each was its own binary before the cleanup and moved here
-  verbatim inside its own namespace with `main()` renamed to `run()`; behaviour,
-  cross-checks and CSV columns are unchanged.  **Known broken: `cut` segfaults**
+  binary holding the twelve per-primitive demos — `map`, `reduce`, `scan`,
+  `tabulate`, `zip`, `filter`, `pack`, `group_by_index`, `histogram_by_index`,
+  `cut`, `random_shuffle`, `reverse`.  The first ten were each their own binary
+  before the cleanup and moved here verbatim inside its own namespace with
+  `main()` renamed to `run()`; behaviour, cross-checks and CSV columns are
+  unchanged for those.  `group_by_index` is a demo-level repoint of the former
+  `count_sort` entry — it now calls `plaid::group_by_index` (`Primitives/sort.h`)
+  instead of `plaid::count_sort_by_key`, since a separate, already-tested
+  `group_by_index` primitive existed but had no demo of its own; the library's
+  `count_sort`/`count_sort_by_key` are untouched and still used internally by
+  `sample_sort`'s bucketing.  `reverse` is a new demo for the recovered
+  `plaid::reverse` primitive (`Primitives/secondary_primitives.h`), recovered
+  from `9c96e4a`'s `Primitives/reverse.h`.  **Known broken: `cut` segfaults**
   (a pre-existing break carried over from the parked `external_TODO` tree, not
   introduced by the cleanup — verified identical at the pre-cleanup commit).
 
@@ -257,8 +390,9 @@ driver's flags, e.g. `make bench BENCH_CHUNK_SIZES="2097152 8388608"`.  The driv
 deletes the benchmarks' data files between every sweep point and after the run so
 nothing accumulates on the drives (`--no-clean` to disable); the glob list is
 derived from each `EXAMPLES` entry's `data_globs`, so **an entry with a wrong glob
-silently leaks files** (this bit `count_sort`, whose `csrt_bucket_*` never matched
-the real `csrt_bucket0`, stranding ~4 GB per run).  It also best-effort `fstrim`s
+silently leaks files** (this once bit the demo now named `group_by_index` — then
+named `count_sort` — whose `csrt_bucket_*` never matched the real `csrt_bucket0`,
+stranding ~4 GB per run; already fixed).  It also best-effort `fstrim`s
 the mounts once at startup (`--fstrim-glob`, default `/mnt/ssd*`; a no-op on
 tmpfs, `--no-fstrim` to disable).
 
@@ -286,7 +420,7 @@ summary (also persisted to `warnings.txt`).  It is **not** part of
 `make bench` / `--all`.
 
 `make bench-summary` (`benchmarks/summary_figure.py`) draws the combined
-relative-performance bar chart: 17 entries (10 primitives + 7 examples), each run
+relative-performance bar chart: 21 entries (12 primitives + 9 examples), each run
 once at the largest n where its own in-mem baseline still fits DRAM.  Its
 `SUMMARY_ENTRIES` asserts both alphabetical order and membership in
 `run_benches.EXAMPLES`, so the two files must be edited together.
@@ -344,10 +478,13 @@ Primitive mapping:
 | `NReader` / `NRemoveWorker` | own N-way co-indexed reader (`Primitives/chunk_seq.h`); lockstep read of N parallel `chunk_seq`s (e.g. values + bucket-ids for count-sort) |
 | `tabulate` / `iota` | own writer pipeline (`Primitives/chunk_seq.h`) — no reader stage to unify |
 
-(`ChunkSegmentedReduce` was also exposed per-vertex on CSR graphs, as
+(`ChunkSegmentedReduce` is also exposed per-vertex on CSR graphs, as
 `chunk_csr::segmented_reduce_over_edges` using `degree_scan` for the segment
 bounds — one streaming pass reducing every vertex's in-edge range at once.  The
-CSR/graph family was dropped in the cleanup; it is recoverable from `9c96e4a`.)
+CSR/graph family (`chunk_csr`, `weighted_edge`, `ChunkSequence/helper/
+external_compressed_sparse_row.h`) was dropped in the cleanup and has since
+been recovered from `9c96e4a` for the `bellman_ford` example below — see its
+bullet in the Examples section.)
 
 `Primitives/sort.h` holds the out-of-core sort/shuffle substrate the
 sample sort is built on.  It carries **only what is reachable** from

@@ -2466,6 +2466,70 @@ int run(int argc, char* argv[]) {
 }  // namespace test_group_by
 
 // ============================================================================
+// reverse -- in-place chunk_seq reversal
+//
+// (was ChunkSequence/Primitives/reverse.h)
+// ============================================================================
+
+namespace test_reverse {
+
+// Correctness test for plaid::reverse (secondary_primitives.h): builds
+// 0..n-1, reverses it out-of-core, and checks the readback matches
+// std::reverse on a DRAM copy -- exercised at a size that spans multiple
+// chunks with a partial last chunk, and again at a size that fits in exactly
+// one chunk (n < ELEMS_PER_CHUNK), since reverse's chunk-swap approach
+// deliberately relocates any partial chunk from last to first and the
+// element-level result must still come out byte-correct either way.
+
+static void cleanup_prefix(const std::string& prefix) {
+  const auto& ssds = GetSSDList();
+  for (size_t d = 0; d < ssds.size(); d++)
+    unlink(GetFileName(prefix, d).c_str());
+}
+
+static bool check_reverse(const std::string& label, size_t n) {
+  const std::string prefix = "rev_test_in";
+  chunk_seq seq = plaid::tabulate<uint64_t>(
+      n, prefix, [](size_t i) { return (uint64_t)i; });
+
+  std::vector<uint64_t> expected = seq.to_vector<uint64_t>();
+  std::reverse(expected.begin(), expected.end());
+
+  plaid::reverse<uint64_t>(seq);
+  std::vector<uint64_t> got = seq.to_vector<uint64_t>();
+
+  cleanup_prefix(prefix);
+
+  bool pass = (got == expected);
+  if (!pass) {
+    std::cout << "  FAIL " << label << ": n=" << n
+              << " reversed contents mismatch\n";
+    for (size_t i = 0; i < n && i < 5; i++) {
+      std::cout << "    got[" << i << "]=" << got[i] << " expected[" << i
+                << "]=" << expected[i] << "\n";
+    }
+  } else {
+    std::cout << "  OK " << label << ": n=" << n
+              << " reversed contents match std::reverse\n";
+  }
+  return pass;
+}
+
+int run(int argc, char* argv[]) {
+  const size_t n = (argc > 1) ? std::stoull(argv[1]) : 500'000;
+
+  bool pass = true;
+  if (!check_reverse("reverse (multi-chunk, partial last)", n)) pass = false;
+  if (!check_reverse("reverse (single chunk)",
+                     std::min<size_t>(n, ELEMS_PER_CHUNK / 4)))
+    pass = false;
+
+  return pass ? 0 : 1;
+}
+
+}  // namespace test_reverse
+
+// ============================================================================
 // chunk_operation -- ChunkOperation apply<> + process_inplace_budgeted
 //
 // (was ChunkSequence/tests/chunk_operation_test.cpp)
@@ -3149,6 +3213,7 @@ int main(int argc, char* argv[]) {
           {"flat_map", &test_flat_map::run},
           {"partition", &test_partition::run},
           {"group_by", &test_group_by::run},
+          {"reverse", &test_reverse::run},
           {"chunk_operation", &test_chunk_operation::run},
           {"combined", &test_combined::run},
           {"samplesort", &test_samplesort::run},

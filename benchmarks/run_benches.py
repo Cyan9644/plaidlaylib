@@ -161,6 +161,22 @@ EXAMPLES = [
      "title": "Rabin-Karp search: out-of-core (ChunkRabinKarp) vs in-mem parlaylib",
      "data_globs": ["rk_*"]},
 
+    # kth_smallestExample sweeps n; the plotted time is the selection itself
+    # (input build excluded).  plaid::kth_smallest (the driver's slow path)
+    # recurses via plaid::pack_value into a fresh "next_<n>"-prefixed
+    # chunk_seq per level and never cleans those up itself, so "next_*" must
+    # stay in data_globs or every sweep point strands its recursion's
+    # intermediates (the same failure mode that once bit count_sort's globs).
+    {"name": "kth_smallest", "target": "bin/kth_smallestExample",
+     "cols": ["n", "k", "build_s", "select_s", "inmem_select_s", "result",
+              "throughput_gb_s"],
+     "time_col": "select_s", "inmem_col": "inmem_select_s",
+     "elem_bytes": 8, "input_seqs": 1,
+     "budget_base": "phys", "budget_mult": 16,
+     "xlabel": "input size",
+     "title": "kth-smallest selection: out-of-core (plaid) vs in-mem parlaylib",
+     "data_globs": ["kth_in*", "next_*"]},
+
     # convex_hullExample sweeps n (32-byte points); the plotted time is the hull
     # pass only (point-cloud build excluded).  Its recursion leaves ch_scratch*
     # split intermediates in addition to the ch_in input.
@@ -212,6 +228,57 @@ EXAMPLES = [
      "title": "sample sort: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*",
                     "qs_base_*"]},
+
+    # fftExample sweeps N (rounded down to a power of two >= 2^16); the plotted
+    # time is total_s = stage1_s + stage2_s (input build excluded).  Transpose-
+    # free: stage 2 is random 4 KiB gather/scatter in place on the stage-1
+    # output, so it leaves no separate output prefix beyond fft_in/fft_s1.
+    {"name": "fft", "target": "bin/fftExample",
+     "cols": ["n", "build_s", "stage1_s", "stage2_s", "total_s", "inmem_s",
+              "count", "throughput_gb_s"],
+     "time_col": "total_s", "inmem_col": "inmem_s",
+     "elem_bytes": 16, "input_seqs": 1,
+     "budget_base": "phys/2", "budget_mult": 1,
+     "xlabel": "input size",
+     "title": "FFT (transpose-free): out-of-core (plaid) vs in-mem four-step",
+     "data_globs": ["fft_in*", "fft_s1*"]},
+
+    # bellman_fordExample, sparse case only (avg_degree 2, fixed by
+    # bellman_ford.cpp regardless of extra_argv[0]): m scales linearly with n,
+    # unlike the "dense" case (m ~ n^2/2, see _bellman_ford_dense_n above,
+    # currently unused -- no summary/sweep entry requests "dense"). extra_argv
+    # supplies bellman_ford.cpp's positional balanced_avg_degree (irrelevant
+    # here, must still parse) and case="sparse". Plotted series is fast_op_s
+    # (external_bellman_ford_fast, which always runs) against inmem_op_s;
+    # the per-vertex op_s/reachable/throughput_gb_s columns are frequently
+    # blank (skipped past BELLMAN_FORD_PER_VERTEX_MAX_BYTES) so are not
+    # plotted directly. All of this case's on-disk state -- the final edges
+    # AND the RMAT gen/sort intermediates (self-swept by external_rmat.h,
+    # but only on a clean exit) -- share the "bf_edges_sparse" prefix.
+    {"name": "bellman_ford_sparse", "target": "bin/bellman_fordExample",
+     "extra_argv": ["8", "sparse"],
+     "cols": ["case", "n", "m", "build_s", "op_s", "inmem_op_s", "reachable",
+              "throughput_gb_s", "fast_op_s", "fast_reachable",
+              "fast_throughput_gb_s"],
+     "time_col": "fast_op_s", "inmem_col": "inmem_op_s",
+     "elem_bytes": 64, "input_seqs": 1,
+     "budget_base": "phys/2", "budget_mult": 216,
+     "xlabel": "requested vertex count",
+     "title": "Bellman-Ford (sparse RMAT): out-of-core (plaid) vs in-mem parlaylib",
+     "data_globs": ["bf_edges_sparse*"]},
+
+    # fft_transposeExample: same sweep, classic explicit-transpose variant
+    # (stage1 -> on-disk transpose -> stage2T, all streaming).  Not in
+    # summary_figure.py's SUMMARY_ENTRIES -- fftExample is the one bar.
+    {"name": "fft_transpose", "target": "bin/fft_transposeExample",
+     "cols": ["n", "build_s", "stage1_s", "transpose_s", "stage2t_s", "total_s",
+              "inmem_s", "count", "throughput_gb_s"],
+     "time_col": "total_s", "inmem_col": "inmem_s",
+     "elem_bytes": 16, "input_seqs": 1,
+     "budget_base": "phys/2", "budget_mult": 1,
+     "xlabel": "input size",
+     "title": "FFT (explicit transpose): out-of-core (plaid) vs in-mem four-step",
+     "data_globs": ["fft_in*", "fft_s1*", "fft_t*", "fft_t2*"]},
 
     {"name": "map", "target": "bin/primitive_demosExample", "pre_argv": ["map"],
      "cols": ["n", "build_s", "map_s", "inmem_map_s", "throughput_gb_s"],
@@ -276,14 +343,23 @@ EXAMPLES = [
      "title": "pack: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["pck_in*", "pck_out*"]},
 
-    {"name": "count_sort", "target": "bin/primitive_demosExample", "pre_argv": ["count_sort"],
+    {"name": "group_by_index", "target": "bin/primitive_demosExample", "pre_argv": ["group_by_index"],
      "cols": ["n", "build_s", "sort_s", "inmem_sort_s", "throughput_gb_s"],
      "time_col": "sort_s", "inmem_col": "inmem_sort_s",
      "elem_bytes": 8, "input_seqs": 1,
      "budget_base": "phys/2", "budget_mult": 24,
      "xlabel": "input size",
-     "title": "counting sort: out-of-core (plaid) vs in-mem parlaylib",
-     "data_globs": ["csrt_in*", "csrt_bucket*"]},
+     "title": "group by index: out-of-core (plaid) vs in-mem parlaylib",
+     "data_globs": ["gbi_ex_in*", "gbi_ex_bucket*"]},
+
+    {"name": "reverse", "target": "bin/primitive_demosExample", "pre_argv": ["reverse"],
+     "cols": ["n", "build_s", "reverse_s", "inmem_reverse_s", "throughput_gb_s"],
+     "time_col": "reverse_s", "inmem_col": "inmem_reverse_s",
+     "elem_bytes": 8, "input_seqs": 1,
+     "budget_base": "phys/2", "budget_mult": 24,
+     "xlabel": "input size",
+     "title": "reverse: out-of-core (plaid) vs in-mem std::reverse",
+     "data_globs": ["rev_in*"]},
 
     {"name": "histogram_by_index", "target": "bin/primitive_demosExample", "pre_argv": ["histogram_by_index"],
      "cols": ["n", "build_s", "hist_s", "inmem_hist_s", "num_buckets", "throughput_gb_s"],

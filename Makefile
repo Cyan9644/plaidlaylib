@@ -48,15 +48,20 @@ UTIL_OBJS := $(OBJDIR)/file_utils.o
 # carry a correctness test.
 TEST_BINARIES := $(BINDIR)/primitivesTest $(BINDIR)/delayedTest \
                  $(BINDIR)/kmpTest $(BINDIR)/rabinKarpTest \
-                 $(BINDIR)/bigintAddTest $(BINDIR)/convexHullTest
+                 $(BINDIR)/bigintAddTest $(BINDIR)/convexHullTest \
+                 $(BINDIR)/kthSmallestTest $(BINDIR)/bellmanFordTest \
+                 $(BINDIR)/externalRmatTest
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 # primitive_demos is one binary holding every per-primitive demo, dispatched on
 # argv[1] (see ChunkSequence/examples/primitive_demos.cpp).
 EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
-                    $(BINDIR)/rabin_karpExample $(BINDIR)/bigint_addExample \
+                    $(BINDIR)/rabin_karpExample $(BINDIR)/kth_smallestExample \
+                    $(BINDIR)/bigint_addExample \
                     $(BINDIR)/linefitExample $(BINDIR)/convex_hullExample \
-                    $(BINDIR)/samplesortExample $(BINDIR)/primitive_demosExample
+                    $(BINDIR)/samplesortExample $(BINDIR)/primitive_demosExample \
+                    $(BINDIR)/fftExample $(BINDIR)/fft_transposeExample \
+                    $(BINDIR)/bellman_fordExample
 
 
 .PHONY: all clean distclean deps test examples bench bench-full bench-examples bench-examples-full bench-summary trace clean-bench-data format format-check
@@ -217,6 +222,20 @@ $(BINDIR)/bigintAddTest: ChunkSequence/tests/bigint_add_test.cpp $(UTIL_OBJS)
 # convexHullTest includes upstream quickhull.h (its in-DRAM differential
 # baseline), so it needs the order-only deps/parlaylib-examples prereq.
 $(BINDIR)/convexHullTest: ChunkSequence/tests/convex_hull_test.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(LINKD)
+
+# kthSmallestTest cross-checks against std::nth_element only (no upstream
+# baseline include), so no deps/parlaylib-examples order-only prereq is needed.
+$(BINDIR)/kthSmallestTest: ChunkSequence/tests/kth_smallest_test.cpp $(UTIL_OBJS)
+	$(LINKD)
+
+# bellmanFordTest and externalRmatTest both cross-check against upstream
+# deps/parlaylib-examples/{bellman_ford.h,helper/graph_utils.h}, so both need
+# the order-only prereq.
+$(BINDIR)/bellmanFordTest: ChunkSequence/tests/bellman_ford_test.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(LINKD)
+
+$(BINDIR)/externalRmatTest: ChunkSequence/tests/external_rmat_test.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINKD)
 
 # ── examples ───────────────────────────────────────────────────────────────────

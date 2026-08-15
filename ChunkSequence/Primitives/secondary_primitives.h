@@ -8,7 +8,8 @@
 //   flatten                             concatenate chunk_seqs by reindexing
 //   materialize                         read a chunk_seq (or delayed source)
 //   into DRAM cut                                 chunk-aligned slice / shift /
-//   guard-limb scan_find / scan_size / linear_find single-element probes
+//   guard-limb reverse                             in-place chunk_seq reversal
+//   scan_find / scan_size / linear_find single-element probes
 //
 // Split out from primitives.h so the six core primitives read on their own;
 // this header includes primitives.h, so including it gets you the whole eager
@@ -1198,7 +1199,7 @@ parlay::sequence<typename D::value_type> sequential_materialize(const D& d) {
 // every time.  For a caller like Bellman-Ford that does one small
 // delayed::cut materialize per vertex per round from inside an already
 // parallel outer loop, one context per parlay::worker_id() (see
-// external_bellman_ford.h) amortizes the opens/allocations across the whole
+// chunk_bellman_ford.h) amortizes the opens/allocations across the whole
 // algorithm instead of paying them O(rounds*n) times.
 template <class D, class = typename D::value_type>
 parlay::sequence<typename D::value_type> sequential_materialize(
@@ -1503,6 +1504,63 @@ chunk_seq sequential_cut_no_compression(const chunk_seq& seq,
   free(buf);
   free(buff);
   return sequence;
+}
+
+}  // namespace plaid
+
+// reverse -- in-place chunk_seq reversal
+//
+// (was ChunkSequence/Primitives/reverse.h)
+// ============================================================================
+
+namespace plaid {
+
+namespace detail {
+
+// Reverses chunk c's first c.used/sizeof(T) elements in place, leaving any
+// O_DIRECT-aligned padding past `used` untouched.
+template <typename T>
+void reverse_chunk_contents(const chunk& c) {
+  const size_t n = c.used / sizeof(T);
+  if (n < 2) return;
+  T* buf = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
+  CHECK(buf != nullptr) << "reverse: buffer allocation failed";
+  int fd = open(c.filename.c_str(), O_RDWR | O_DIRECT);
+  CHECK(fd >= 0) << "reverse: open failed for " << c.filename << ": "
+                 << std::strerror(errno);
+  SYSCALL(pread(fd, buf, CHUNK_SIZE, (off_t)c.begin_addr));
+  for (size_t i = 0, j = n - 1; i < j; i++, j--) std::swap(buf[i], buf[j]);
+  SYSCALL(pwrite(fd, buf, CHUNK_SIZE, (off_t)c.begin_addr));
+  close(fd);
+  free(buf);
+}
+
+}  // namespace detail
+
+// Reverses a chunk_seq in place: the whole element sequence, read in index
+// order, comes out exactly reversed. Implemented as two steps -- reverse each
+// chunk's own payload, then reverse chunk order -- rather than a global
+// element shuffle, so the pass is one read + one write per chunk and no
+// element crosses a chunk boundary.
+//
+// NOTE: does NOT preserve the "dense-except-last" chunk_seq invariant. If the
+// input's last chunk is partially used (the common case whenever n isn't a
+// multiple of ELEMS_PER_CHUNK), that partial chunk becomes the *first* chunk
+// after reversal, not the last -- std::reverse on the chunk headers moves it
+// there, and per-chunk reversal alone can't relocate it back without an extra
+// data-moving pass. The result is still exactly correct when read back via
+// materialize()/to_vector() (both size a chunk_seq by summing each chunk's
+// own `used` field), but must NOT be fed into primitives that instead assume
+// only the *last* chunk can be partial -- notably plaid::size<T>(), the
+// delayed layer's zip/chunk grid, and any DensePack-based primitive.
+template <typename T>
+chunk_seq& reverse(chunk_seq& seq) {
+  parlay::parallel_for(0, seq.chunks.size(), [&](size_t i) {
+    detail::reverse_chunk_contents<T>(seq.chunks[i]);
+  });
+  std::reverse(seq.chunks.begin(), seq.chunks.end());
+  for (size_t i = 0; i < seq.chunks.size(); i++) seq.chunks[i].index = i;
+  return seq;
 }
 
 }  // namespace plaid
