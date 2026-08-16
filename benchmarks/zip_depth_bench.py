@@ -30,7 +30,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BINDIR = os.path.join(REPO_ROOT, "bin")
 
 DEFAULT_ZIP_N = "1M"
-DEFAULT_MAX_K = 64
+DEFAULT_MAX_K = 8
 
 ZIP_COLS = ["k", "n", "reduce_s", "throughput_gb_s", "agree"]
 
@@ -155,7 +155,7 @@ def main():
     ap.add_argument("--n", default=DEFAULT_ZIP_N,
                     help="elements per source for the zip-depth sweep (default: 1M)")
     ap.add_argument("--max-k", type=int, default=DEFAULT_MAX_K,
-                    help="max number of zipped sequences (default: 64)")
+                    help="max number of zipped sequences (default: 8)")
     ap.add_argument("--outdir", default="results",
                     help="parent dir for the timestamped run (default: results)")
     ap.add_argument("--ssd-args", default="",

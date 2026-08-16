@@ -24,7 +24,7 @@
 // commit added for shared sources.
 //
 // argv[1] = n (elements per source, default 1<<20)
-// argv[2] = max_k (default 64; hard compile-time ceiling MAX_K = 128)
+// argv[2] = max_k (default 8, which is also the compile-time ceiling MAX_K)
 //
 // CSV line per depth: CSV,<k>,<n>,<reduce_s>,<throughput_gb_s>,<agree>
 
@@ -46,7 +46,7 @@
 
 namespace cd = plaid::delayed;
 
-constexpr size_t MAX_K = 128;
+constexpr size_t MAX_K = 8;
 
 struct SumMonoid {
   uint64_t identity = 0;
@@ -122,7 +122,7 @@ void run_depth(const std::vector<chunk_seq>& srcs, size_t n, size_t max_k) {
 int main(int argc, char* argv[]) {
   ParseGlobalArguments(argc, argv);
   const size_t n = (argc > 1) ? std::stoull(argv[1]) : (size_t(1) << 20);
-  size_t max_k = (argc > 2) ? std::stoull(argv[2]) : 64;
+  size_t max_k = (argc > 2) ? std::stoull(argv[2]) : 8;
   if (max_k > MAX_K) {
     std::cout << "max_k " << max_k << " exceeds compiled ceiling " << MAX_K
               << "; clamping.\n";
