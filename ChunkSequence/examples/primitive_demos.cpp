@@ -1043,7 +1043,7 @@ namespace demo_group_by_index {
 // overload, which requires elements already in [0, num_buckets)) on the
 // identical input built in DRAM.
 //
-// The key IS the value here (hash64(i) % NUM_BUCKETS, so every element in
+// The key IS the value here (hash64(i) % num_buckets, so every element in
 // bucket b is literally the integer b, repeated) -- this makes the
 // bucket-grouped output fully determined regardless of within-bucket order,
 // so the cross-check is a direct element-for-element equality (after reading
@@ -1057,7 +1057,16 @@ namespace demo_group_by_index {
 //
 //   usage: group_by_indexExample [global --flags] [n]
 
-static constexpr size_t NUM_BUCKETS = 4096;
+// Upper bound on bucket count once n is large enough to amortize
+// group_by_index's fixed per-bucket setup cost -- see its derivation from
+// n/RAM in run() below (a fixed 4096 regardless of n used to blow past
+// available RAM at modest n: group_by_index's BucketWriter provisions a
+// kRequestsPerBucket * IO_VECTOR_SIZE-iovec Request pool PER BUCKET
+// (Primitives/chunk_seq.h) plus one live SAMPLE_SORT_BUCKET_SIZE scatter
+// buffer per (worker, bucket) -- overhead that scales with num_buckets, not
+// with n, so a small n can't amortize it the way sample_sort's num_buckets
+// (~filer / 128 MiB, Primitives/sort.h) does).
+static constexpr size_t kMaxBuckets = 4096;
 
 using Clock = std::chrono::steady_clock;
 static double elapsed(Clock::time_point t0) {
@@ -1079,17 +1088,15 @@ static void cleanup_prefix(const std::string& prefix) {
 }
 
 // group_by_index's BucketWriter creates one file per bucket (GetFileName(
-// bucket_prefix, i) for i in [0, NUM_BUCKETS)), not one per drive -- unlike
+// bucket_prefix, i) for i in [0, num_buckets)), not one per drive -- unlike
 // cleanup_prefix above, which only unlinks SSD_COUNT files and is correct for
 // in_prefix (tabulate spreads its few chunks round-robin over the drives).
-// Reusing cleanup_prefix for bucket_prefix would strand NUM_BUCKETS -
+// Reusing cleanup_prefix for bucket_prefix would strand num_buckets -
 // SSD_COUNT files on every run.
 static void cleanup_bucket_prefix(const std::string& prefix,
                                   size_t num_buckets) {
   for (size_t i = 0; i < num_buckets; i++) unlink(GetFileName(prefix, i).c_str());
 }
-
-static uint64_t key_at(size_t i) { return parlay::hash64(i) % NUM_BUCKETS; }
 
 int run(int argc, char* argv[]) {
   ParseGlobalArguments(argc, argv);
@@ -1105,10 +1112,30 @@ int run(int argc, char* argv[]) {
     budget = std::stoull(e);
   const bool inmem_ok = n <= budget / 24;
 
+  // num_buckets: capped at kMaxBuckets, but also bounded so
+  // group_by_index's fixed per-bucket setup cost (a kRequestsPerBucket *
+  // IO_VECTOR_SIZE-iovec Request pool entry, plus one live
+  // SAMPLE_SORT_BUCKET_SIZE scatter buffer per worker -- see
+  // Primitives/chunk_seq.h's BucketWriter / Primitives/sort.h's
+  // group_by_index) can't dwarf the RAM budget at small n.  Mirrors
+  // sample_sort's own bucket count scaling with input size
+  // (Primitives/sort.h) instead of a fixed constant.
+  const size_t per_bucket_overhead_bytes =
+      plaid::kRequestsPerBucket * IO_VECTOR_SIZE * sizeof(struct iovec) +
+      parlay::num_workers() * SAMPLE_SORT_BUCKET_SIZE;
+  const size_t max_buckets_by_ram =
+      std::max<size_t>(1, budget / 4 / per_bucket_overhead_bytes);
+  const size_t num_buckets =
+      std::max<size_t>(1, std::min({kMaxBuckets, max_buckets_by_ram, n}));
+
   const std::string in_prefix = "gbi_ex_in";
   const std::string bucket_prefix = "gbi_ex_bucket";
 
-  std::cout << "Building " << n << "-element input (mod " << NUM_BUCKETS
+  const auto key_at = [num_buckets](size_t i) {
+    return parlay::hash64(i) % num_buckets;
+  };
+
+  std::cout << "Building " << n << "-element input (mod " << num_buckets
             << ")..." << std::flush;
   trace_mark("build_start");
   auto t0 = Clock::now();
@@ -1119,12 +1146,13 @@ int run(int argc, char* argv[]) {
             << "s)\n";
   quiesce_drives();
 
-  std::cout << "Grouping " << n << " elements into " << NUM_BUCKETS
+  std::cout << "Grouping " << n << " elements into " << num_buckets
             << " buckets..." << std::flush;
   trace_mark("op_start");
   t0 = Clock::now();
   std::vector<chunk_seq> buckets = plaid::group_by_index<uint64_t>(
-      keys, NUM_BUCKETS, bucket_prefix, [](uint64_t v) { return (size_t)v; });
+      keys, num_buckets, bucket_prefix,
+      [](uint64_t v) { return (size_t)v; });
   chunk_seq sorted = plaid::fuse(buckets);
   const double sort_s = elapsed(t0);
   trace_mark("op_end");
@@ -1137,7 +1165,7 @@ int run(int argc, char* argv[]) {
   if (inmem_ok) {
     auto keys_mem = parlay::tabulate(n, key_at);
     t0 = Clock::now();
-    auto sorted_mem = parlay::counting_sort(keys_mem, NUM_BUCKETS).first;
+    auto sorted_mem = parlay::counting_sort(keys_mem, num_buckets).first;
     inmem_sort_s = elapsed(t0);
     std::cout << "in-mem parlay::counting_sort: " << std::setprecision(4)
               << inmem_sort_s << "s\n";
@@ -1178,7 +1206,7 @@ int run(int argc, char* argv[]) {
             << '\n';
 
   cleanup_prefix(in_prefix);
-  cleanup_bucket_prefix(bucket_prefix, NUM_BUCKETS);
+  cleanup_bucket_prefix(bucket_prefix, num_buckets);
   return agree ? 0 : 1;
 }
 

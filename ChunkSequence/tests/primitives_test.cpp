@@ -2403,6 +2403,42 @@ int run(int argc, char* argv[]) {
     cleanup_prefix(out_prefix);
   }
 
+  // group_by_index with a bucket count in the thousands -- unlike the k=4
+  // case above, this exercises BucketWriter's per-bucket setup cost
+  // (Primitives/chunk_seq.h: a Request pool entry and scatter buffers sized
+  // per bucket, not per element) at a bucket count large relative to n, the
+  // regime that crashed benchmarks/summary_figure.py's group_by_index demo
+  // (ChunkSequence/examples/primitive_demos.cpp) before it started scaling
+  // its bucket count with n/RAM instead of using a fixed 4096. cleanup here
+  // must unlink one file per bucket, not per drive -- reusing cleanup_prefix
+  // (SSD_COUNT files) for a bucket prefix would strand almost all of them.
+  {
+    const size_t n_large = 50'000;
+    const size_t k_large = 4096;
+    const std::string in_prefix = "gbi_large_in";
+    const std::string out_prefix = "gbi_large_out";
+    chunk_seq seq = plaid::tabulate<uint64_t>(
+        n_large, in_prefix, [](size_t i) { return (uint64_t)i; });
+
+    std::vector<chunk_seq> parts = plaid::group_by_index<uint64_t>(
+        seq, k_large, out_prefix,
+        [k_large](uint64_t v) { return (size_t)(v % k_large); });
+
+    if (parts.size() != k_large) {
+      std::cout << "  FAIL group_by_index(large k): got " << parts.size()
+                << " buckets, expected " << k_large << "\n";
+      pass = false;
+    } else if (!check_grouping(
+                   "group_by_index(large k)", parts, n_large,
+                   [k_large](uint64_t v) { return (size_t)(v % k_large); })) {
+      pass = false;
+    }
+
+    cleanup_prefix(in_prefix);
+    for (size_t i = 0; i < k_large; i++)
+      unlink(GetFileName(out_prefix, i).c_str());
+  }
+
   // group_by_key: identity key, default Hash = std::hash<uint64_t>.
   {
     const std::string in_prefix = "gbk_id_in";
