@@ -1037,11 +1037,13 @@ namespace demo_group_by_index {
 //
 // Buckets an n-element uint64_t input via plaid::group_by_index
 // (Primitives/sort.h, a single streaming-reader pass that routes each
-// element to its bucket's write stream via a key function) and fuses the
-// per-bucket chunk_seqs back into one index-ordered sequence with
-// plaid::fuse.  Compares against parlay::counting_sort (its identity-key
-// overload, which requires elements already in [0, num_buckets)) on the
-// identical input built in DRAM.
+// element to its bucket's write stream via a key function), then reads each
+// bucket's chunk_seq back with plaid::materialize individually and lays the
+// results out in bucket order -- group_by_index's own contract forbids
+// concatenating its per-bucket chunk_seqs (plaid::fuse), since that would
+// bury each bucket's trailing partial chunk mid-sequence.  Compares against
+// parlay::counting_sort (its identity-key overload, which requires elements
+// already in [0, num_buckets)) on the identical input built in DRAM.
 //
 // The key IS the value here (hash64(i) % num_buckets, so every element in
 // bucket b is literally the integer b, repeated) -- this makes the
@@ -1100,6 +1102,10 @@ static void cleanup_bucket_prefix(const std::string& prefix,
 
 int run(int argc, char* argv[]) {
   ParseGlobalArguments(argc, argv);
+  // group_by_index's BucketWriter opens one fd per bucket (up to
+  // kMaxBuckets), past the 1024 soft fd limit; lift it to the hard limit
+  // before any I/O starts.
+  RaiseFdLimit();
   const size_t n = (argc > 1) ? std::stoull(argv[1]) : 1'000'000;
   CHECK(n > 0) << "need n > 0 (n=" << n << ")";
 
@@ -1153,7 +1159,6 @@ int run(int argc, char* argv[]) {
   std::vector<chunk_seq> buckets = plaid::group_by_index<uint64_t>(
       keys, num_buckets, bucket_prefix,
       [](uint64_t v) { return (size_t)v; });
-  chunk_seq sorted = plaid::fuse(buckets);
   const double sort_s = elapsed(t0);
   trace_mark("op_end");
   const double gb_s = to_gb(n * sizeof(uint64_t)) / sort_s;
@@ -1170,13 +1175,27 @@ int run(int argc, char* argv[]) {
     std::cout << "in-mem parlay::counting_sort: " << std::setprecision(4)
               << inmem_sort_s << "s\n";
 
-    auto ours = plaid::materialize<uint64_t>(sorted);
-    if (ours.size() != sorted_mem.size()) {
-      std::cout << "*** MISMATCH: out-of-core produced " << ours.size()
+    // group_by_index's per-bucket chunk_seqs must not be concatenated
+    // (Primitives/sort.h) -- materialize each bucket separately and lay the
+    // results out in bucket order, matching counting_sort's layout, instead
+    // of fusing the chunk lists first.
+    parlay::sequence<uint64_t> ours(n);
+    size_t offset = 0;
+    for (size_t b = 0; b < num_buckets && offset <= n; b++) {
+      auto part = plaid::materialize<uint64_t>(buckets[b]);
+      if (offset + part.size() > n) {
+        offset = n + 1;  // force the size mismatch branch below
+        break;
+      }
+      std::copy(part.begin(), part.end(), ours.begin() + offset);
+      offset += part.size();
+    }
+    if (offset != sorted_mem.size()) {
+      std::cout << "*** MISMATCH: out-of-core produced " << offset
                 << " elements, expected " << sorted_mem.size() << " ***\n";
       agree = false;
     } else {
-      for (size_t i = 0; i < ours.size() && agree; i++) {
+      for (size_t i = 0; i < offset && agree; i++) {
         if (ours[i] != sorted_mem[i]) {
           std::cout << "*** MISMATCH at index " << i << ": " << ours[i]
                     << " != " << sorted_mem[i] << " ***\n";
