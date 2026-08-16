@@ -53,9 +53,14 @@ Assumes `SSD_COUNT` (default 30) mount points named per `SSD_ROOT` (default
 `/mnt/ssd%lu`), i.e. `/mnt/ssd0 … /mnt/ssd29`.  Edit `configs.h` for your box.
 On a dev box you can point all mounts at one tmpfs, but keep sizes small — the
 "SSDs" then share one RAM-backed device, and a run that would be trivial on the
-real machine can fill it and take the box down with it.  Two known cases:
-`primitive_demosExample group_by_index` needs `NUM_BUCKETS * CHUNK_SIZE` ≈ 16 GiB of
-bucket files *regardless of n*, so it cannot run on a small tmpfs at any size.
+real machine can fill it and take the box down with it.  (An earlier version of
+this note claimed `primitive_demosExample group_by_index` needs `NUM_BUCKETS *
+CHUNK_SIZE` ≈ 16 GiB of bucket files regardless of n; that doesn't match the
+current `BucketWriter`/`group_by_index` implementation, which never
+`fallocate`s a bucket file to `CHUNK_SIZE` — bucket files grow lazily with the
+bytes actually written, so `group_by_index`'s disk use scales with `n *
+sizeof(T)` like any other example, plus a few KiB of `O_DIRECT_MULTIPLE`
+alignment slop per bucket.)
 
 ## Layout
 

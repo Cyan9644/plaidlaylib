@@ -1078,6 +1078,17 @@ static void cleanup_prefix(const std::string& prefix) {
     unlink(GetFileName(prefix, d).c_str());
 }
 
+// group_by_index's BucketWriter creates one file per bucket (GetFileName(
+// bucket_prefix, i) for i in [0, NUM_BUCKETS)), not one per drive -- unlike
+// cleanup_prefix above, which only unlinks SSD_COUNT files and is correct for
+// in_prefix (tabulate spreads its few chunks round-robin over the drives).
+// Reusing cleanup_prefix for bucket_prefix would strand NUM_BUCKETS -
+// SSD_COUNT files on every run.
+static void cleanup_bucket_prefix(const std::string& prefix,
+                                  size_t num_buckets) {
+  for (size_t i = 0; i < num_buckets; i++) unlink(GetFileName(prefix, i).c_str());
+}
+
 static uint64_t key_at(size_t i) { return parlay::hash64(i) % NUM_BUCKETS; }
 
 int run(int argc, char* argv[]) {
@@ -1167,7 +1178,7 @@ int run(int argc, char* argv[]) {
             << '\n';
 
   cleanup_prefix(in_prefix);
-  cleanup_prefix(bucket_prefix);
+  cleanup_bucket_prefix(bucket_prefix, NUM_BUCKETS);
   return agree ? 0 : 1;
 }
 
