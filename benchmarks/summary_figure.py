@@ -125,9 +125,16 @@ def get_budget(budget_base, env_var="EXAMPLE_INMEM_BUDGET_BYTES"):
 
 
 def predict_n(entry, scale):
-    """Target n for a 'generic' entry: budget/mult, chunk-grid rounded."""
+    """Target n for a 'generic' entry: budget/mult, chunk-grid rounded.
+
+    Some entries hard-cap their in-mem baseline below whatever the RAM
+    budget would otherwise allow (e.g. convex_hull's n<2^31 upstream int
+    index limit) -- "max_n", if present, clamps the prediction to that.
+    """
     budget = get_budget(entry["budget_base"])
     n_target = max(1, int(budget / entry["budget_mult"] * SAFETY * scale))
+    if "max_n" in entry:
+        n_target = min(n_target, entry["max_n"])
     size_bytes = n_target * entry["elem_bytes"] * entry["input_seqs"]
     return rb.size_to_n(entry, size_bytes)
 
@@ -196,10 +203,14 @@ def run_summary(bellman_ford_n, extra_ssd_args, clear_glob, clear_enabled, warni
             if problem:
                 w = f"summary {label} ({name}) at n={n}: {problem}"
                 print(f"  !!! {w}", flush=True)
-                warnings.append(w)
+                if attempt < max_attempts:
+                    warnings.append(w)
                 rb.clear_bench_data(clear_glob, clear_enabled)
-                if not fields:
-                    break  # crashed / no CSV -- no point retrying blindly
+                # A crash (no CSV) is often the same RAM-cliff-adjacent
+                # problem as a blank inmem field (e.g. real peak RSS
+                # slightly exceeds a budget estimate) -- shrink and retry
+                # the same as any other cliff miss, rather than giving up
+                # on the first attempt.
                 scale *= SHRINK
                 continue
 

@@ -172,7 +172,9 @@ EXAMPLES = [
               "throughput_gb_s"],
      "time_col": "select_s", "inmem_col": "inmem_select_s",
      "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys", "budget_mult": 16,
+     "budget_base": "phys", "budget_mult": 20,  # 16 is parlaylib's own estimate;
+     # padded for real-world overhead (fragmentation, page cache pressure from
+     # the on-disk input) observed to push actual peak RSS past the 16n cliff
      "xlabel": "input size",
      "title": "kth-smallest selection: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["kth_in*", "next_*"]},
@@ -184,7 +186,8 @@ EXAMPLES = [
      "cols": ["n", "build_s", "hull_s", "inmem_hull_s", "count", "throughput_gb_s"],
      "time_col": "hull_s", "inmem_col": "inmem_hull_s",
      "elem_bytes": 32, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 32,  # plus a separate n<2^31 cap
+     "budget_base": "phys/2", "budget_mult": 32,
+     "max_n": (1 << 31) - 1,  # convex_hull.cpp's baseline hard-caps at n<2^31
      "xlabel": "input size",
      "title": "Upper convex hull: out-of-core (quickhull) vs in-mem parlaylib",
      "data_globs": ["ch_in*", "ch_scratch*"]},
@@ -238,7 +241,7 @@ EXAMPLES = [
               "count", "throughput_gb_s"],
      "time_col": "total_s", "inmem_col": "inmem_s",
      "elem_bytes": 16, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 1,
+     "budget_base": "phys/2", "budget_mult": 16,  # matches fft.cpp's N*sizeof(cd)<=budget
      "xlabel": "input size",
      "title": "FFT (transpose-free): out-of-core (plaid) vs in-mem four-step",
      "data_globs": ["fft_in*", "fft_s1*"]},
@@ -275,7 +278,7 @@ EXAMPLES = [
               "inmem_s", "count", "throughput_gb_s"],
      "time_col": "total_s", "inmem_col": "inmem_s",
      "elem_bytes": 16, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 1,
+     "budget_base": "phys/2", "budget_mult": 16,  # matches fft.cpp's N*sizeof(cd)<=budget
      "xlabel": "input size",
      "title": "FFT (explicit transpose): out-of-core (plaid) vs in-mem four-step",
      "data_globs": ["fft_in*", "fft_s1*", "fft_t*", "fft_t2*"]},
@@ -358,7 +361,7 @@ EXAMPLES = [
      "elem_bytes": 8, "input_seqs": 1,
      "budget_base": "phys/2", "budget_mult": 24,
      "xlabel": "input size",
-     "title": "reverse: out-of-core (plaid) vs in-mem std::reverse",
+     "title": "reverse: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["rev_in*"]},
 
     {"name": "histogram_by_index", "target": "bin/primitive_demosExample", "pre_argv": ["histogram_by_index"],

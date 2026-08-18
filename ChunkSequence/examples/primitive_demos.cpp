@@ -1841,8 +1841,11 @@ int run(int argc, char* argv[]) {
     std::cout << "in-mem parlay::random_shuffle   " << std::setprecision(4)
               << inmem_shuffle_s << "s\n";
 
-    auto ref = keys_mem;  // the key set, sorted: the permutation target
-    parlay::sort_inplace(ref);
+    // Sort keys_mem in place as the permutation target -- it's not needed
+    // unmodified after this point, so reuse it instead of an extra n-element
+    // copy (peak stays ~32n as check_ok assumes, not ~40n).
+    parlay::sort_inplace(keys_mem);
+    auto& ref = keys_mem;
 
     // Sorting a valid shuffle of the input must reproduce the key set exactly
     // (the keys are distinct), so this catches a dropped, duplicated, or
@@ -1917,7 +1920,8 @@ namespace demo_reverse {
 // Builds an n-element uint64_t input (value i at index i), reverses it in
 // place via plaid::reverse (Primitives/secondary_primitives.h — one
 // O_DIRECT read + write per chunk, no extra output files), and cross-checks
-// the readback against std::reverse on an identical in-memory copy.  Note
+// the readback against parlay::reverse_inplace on an identical in-memory
+// copy.  Note
 // plaid::reverse does not preserve the dense-except-last chunk invariant (see
 // its doc comment) — the demo only reads the result back via to_vector, which
 // is safe.
@@ -1988,9 +1992,9 @@ int run(int argc, char* argv[]) {
   if (inmem_ok) {
     auto mem = parlay::tabulate(n, [](size_t i) { return (uint64_t)i; });
     t0 = Clock::now();
-    std::reverse(mem.begin(), mem.end());
+    parlay::reverse_inplace(mem);
     inmem_rev_s = elapsed(t0);
-    std::cout << "in-mem std::reverse: " << std::setprecision(4)
+    std::cout << "in-mem parlay::reverse_inplace: " << std::setprecision(4)
               << inmem_rev_s << "s\n";
 
     std::vector<uint64_t> ours = seq.to_vector<uint64_t>();
@@ -2008,11 +2012,11 @@ int run(int argc, char* argv[]) {
       }
       if (agree)
         std::cout << "cross-check: out-of-core reverse matches in-mem "
-                     "std::reverse exactly\n";
+                     "parlay::reverse_inplace exactly\n";
     }
   } else {
-    std::cout << "in-mem std::reverse: skipped (~24n footprint exceeds RAM "
-                 "budget "
+    std::cout << "in-mem parlay::reverse_inplace: skipped (~24n footprint "
+                 "exceeds RAM budget "
               << std::setprecision(2) << to_gb(budget) << " GB)\n";
   }
 
