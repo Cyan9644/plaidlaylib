@@ -19,6 +19,22 @@
 // obvious reasons.
 namespace plaid {
 
+// Monotonic id source for unique per-call scratch prefixes -- same shape as
+// chunk_convex_hull.h's prefix_counter, so two recursion levels (or two
+// concurrent top-level calls) never share a ChunkPartition prefix.
+inline std::atomic<size_t>& kth_smallest_prefix_counter() {
+  static std::atomic<size_t> c{0};
+  return c;
+}
+
+// Remove the one-file-per-drive scratch a ChunkPartition call left under
+// `prefix` once every bucket it produced has been fully consumed.
+inline void kth_smallest_cleanup_prefix(const std::string& prefix) {
+  const auto& ssds = GetSSDList();
+  for (size_t d = 0; d < ssds.size(); d++)
+    unlink(GetFileName(prefix, d).c_str());
+}
+
 // randomized ~O(n) algorithm
 template <typename T, typename Less = std::less<>>
 T kth_smallest(chunk_seq& seq, long k, Less less1 = {}) {
@@ -87,27 +103,15 @@ T kth_smallest(chunk_seq& seq, long k, Less less1 = {}) {
       std::upper_bound(offsets.begin(), offsets.end(), k) - offsets.begin() - 1;
 
   // Pack survivors straight off seq's values (single read pass, no selector).
+  const std::string next_prefix = "next_" + std::to_string(n);
   auto next = plaid::pack_value<T>(
-      seq, "next_" + std::to_string(n),
-      [&, id](T e) { return key_fn(e) == (size_t)id; });
+      seq, next_prefix, [&, id](T e) { return key_fn(e) == (size_t)id; });
   // recur on much smaller set, adjusting k as needed
-  return kth_smallest<T>(next, k - offsets[id], less1);
-}
-
-// Monotonic id source for unique per-call scratch prefixes -- same shape as
-// chunk_convex_hull.h's prefix_counter, so two recursion levels (or two
-// concurrent top-level calls) never share a ChunkPartition prefix.
-inline std::atomic<size_t>& kth_smallest_prefix_counter() {
-  static std::atomic<size_t> c{0};
-  return c;
-}
-
-// Remove the one-file-per-drive scratch a ChunkPartition call left under
-// `prefix` once every bucket it produced has been fully consumed.
-inline void kth_smallest_cleanup_prefix(const std::string& prefix) {
-  const auto& ssds = GetSSDList();
-  for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+  T result = kth_smallest<T>(next, k - offsets[id], less1);
+  // `next` is fully consumed now -- unlink its scratch so recursion doesn't
+  // strand a file set per level on every one of the SSDs.
+  kth_smallest_cleanup_prefix(next_prefix);
+  return result;
 }
 
 // randomized ~O(n) algorithm

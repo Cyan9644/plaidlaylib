@@ -405,8 +405,25 @@ inline void stage2_cols(chunk_seq& s1, const Dims& d,
   // this stage OOMs instead of shrinking to fit.
   const size_t phys = AvailablePhysicalMemoryBytes();
   size_t budget = std::min<size_t>(size_t(8) << 30, phys / 8);
-  if (const char* e = getenv("FFT_STAGE2_DRAM_BUDGET_BYTES"))
-    budget = std::stoull(e);
+  const bool explicit_budget = getenv("FFT_STAGE2_DRAM_BUDGET_BYTES") != nullptr;
+  if (explicit_budget) budget = std::stoull(getenv("FFT_STAGE2_DRAM_BUDGET_BYTES"));
+  if (!explicit_budget) {
+    // Reserve headroom for memory this print/print-derived NBUF doesn't
+    // account for, so actual peak RSS stays closer to the printed "peak":
+    // stage 1's ChunkSequenceReader buffer pool is a process-lifetime
+    // singleton that is never freed once allocated (chunk_seq.h's Allocator),
+    // so up to its full buf_queue_sz (default 512) * CHUNK_SIZE can still be
+    // resident here; and every parlay worker thread that has executed a
+    // stage-2 column FFT keeps two persistent thread_local B-sized scratch
+    // buffers (the consumer's `col` plus fft_inplace's own recursion
+    // scratch) that never shrink for the life of the thread.  An explicit
+    // env override is trusted as-is and skips this reservation.
+    const size_t reader_pool_headroom = 512 * CHUNK_SIZE;
+    const size_t worker_scratch_headroom =
+        (size_t)parlay::num_workers() * 2 * B * sizeof(cd);
+    const size_t headroom = reader_pool_headroom + worker_scratch_headroom;
+    budget = budget > headroom ? budget - headroom : tile_bytes * 2;
+  }
   size_t nbuf = std::min<size_t>(18, std::max<size_t>(1, budget / tile_bytes));
   // 2 is the structural minimum (one gather ring's buffer + one scatter
   // ring's buffer -- G/S below underflow below that); anything past 2 is a

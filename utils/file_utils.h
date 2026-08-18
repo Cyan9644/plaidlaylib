@@ -13,8 +13,10 @@
 #include <sys/resource.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -95,14 +97,52 @@ void InitLogger();
 
 inline size_t GetFileOffset(int fd) { return lseek(fd, 0, SEEK_CUR); }
 
+// Bytes remaining under this process's cgroup memory limit, or SIZE_MAX if
+// there is no cgroup limit (bare metal, or an "unlimited"/max cgroup).
+// Checks the cgroup v2 unified hierarchy first, then falls back to v1; a
+// missing/unreadable file (no cgroups, or a v1-only/v2-only host) is treated
+// as "no limit" rather than an error, since most dev boxes have none.
+inline size_t CgroupAvailableMemoryBytes() {
+  auto read_u64 = [](const char* path) -> long long {
+    FILE* f = fopen(path, "r");
+    if (!f) return -1;
+    char buf[64] = {0};
+    bool ok = fgets(buf, sizeof(buf), f) != nullptr;
+    fclose(f);
+    if (!ok) return -1;
+    if (strncmp(buf, "max", 3) == 0) return -1;  // v2 "unlimited"
+    char* end = nullptr;
+    long long v = strtoll(buf, &end, 10);
+    return end == buf ? -1 : v;
+  };
+
+  long long limit = read_u64("/sys/fs/cgroup/memory.max");
+  long long usage = read_u64("/sys/fs/cgroup/memory.current");
+  if (limit < 0 || usage < 0) {
+    // cgroup v1 fallback.
+    limit = read_u64("/sys/fs/cgroup/memory/memory.limit_in_bytes");
+    usage = read_u64("/sys/fs/cgroup/memory/memory.usage_in_bytes");
+    // v1's "no limit" sentinel is a huge value (close to SIZE_MAX/PAGE_SIZE),
+    // not a missing file -- treat anything absurdly large as unlimited too.
+    if (limit > (long long)((size_t)1 << 60)) limit = -1;
+  }
+  if (limit < 0 || usage < 0) return SIZE_MAX;
+  return limit > usage ? (size_t)(limit - usage) : 0;
+}
+
 // Bytes of RAM actually free for this process to use right now, as opposed to
 // total installed RAM (sysconf(_SC_PHYS_PAGES)*_SC_PAGE_SIZE), which on a
 // smaller/shared box overstates what's really available and lets memory
 // budgets computed from it OOM instead of degrading gracefully.  Reads
 // /proc/meminfo's "MemAvailable" (kernel's own free+reclaimable estimate,
 // present since Linux 3.14); falls back to the sysconf total if the file
-// can't be read (e.g. non-Linux).
+// can't be read (e.g. non-Linux).  Also takes the min with the process's
+// cgroup memory headroom (limit - current usage): MemAvailable is a
+// host-level figure, so on a container/VM whose cgroup limit is below what
+// the host reports as available, budgets computed from MemAvailable alone
+// can pick a ceiling the container will never actually be allowed to reach.
 inline size_t AvailablePhysicalMemoryBytes() {
+  size_t meminfo_avail;
   if (FILE* f = fopen("/proc/meminfo", "r")) {
     char line[256];
     size_t kb = 0;
@@ -114,9 +154,14 @@ inline size_t AvailablePhysicalMemoryBytes() {
       }
     }
     fclose(f);
-    if (found) return kb * 1024;
+    meminfo_avail = found ? kb * 1024
+                          : (size_t)sysconf(_SC_PHYS_PAGES) *
+                                (size_t)sysconf(_SC_PAGE_SIZE);
+  } else {
+    meminfo_avail =
+        (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
   }
-  return (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
+  return std::min(meminfo_avail, CgroupAvailableMemoryBytes());
 }
 
 // ============================================================================

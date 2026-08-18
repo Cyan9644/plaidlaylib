@@ -223,12 +223,13 @@ mismatch — a differential test in the spirit of the benchmarks' `agree`.
   `parlaylib-examples/kth_smallest.h`, cross-checked by the selected scalar
   (keys are distinct, so the k-th smallest is unique).  Recovered from
   `9c96e4a`'s `examples/external/ExternalKthSmallest.h`.  Emits
-  `CSV,n,k,build_s,select_s,inmem_select_s,result,throughput_gb_s`.  **Note:**
-  the plain (non-`_fast`) recursion's `pack_value` intermediates
-  (`next_<n>`-prefixed) are never cleaned up by the algorithm itself — the
-  driver's own `cleanup_prefix` only clears its top-level input, so
-  `run_benches.py`'s `kth_smallest` entry carries `"next_*"` in `data_globs` to
-  avoid stranding recursion intermediates across sweep points.
+  `CSV,n,k,build_s,select_s,inmem_select_s,result,throughput_gb_s`.  The plain
+  (non-`_fast`) recursion unlinks each level's `pack_value` intermediate
+  (`next_<n>`-prefixed, via `kth_smallest_cleanup_prefix`) as soon as that
+  level's recursive call returns, mirroring `kth_smallest_fast`'s own
+  prefix-cleanup discipline; `run_benches.py`'s `kth_smallest` entry still
+  carries `"next_*"` in `data_globs` as a harmless belt-and-suspenders sweep
+  between points, not because the algorithm itself leaves anything behind.
 - `bigint_add.cpp` → `bin/bigint_addExample [n]`: out-of-core n-limb big-integer
   add (`examples/chunk_bigint_add.h`) as a fused delayed chain (zip → classify →
   carry-scan → add → force).  Baseline: parlaylib `bigint_reference::add`.

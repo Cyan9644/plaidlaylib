@@ -337,11 +337,15 @@ void process_inplace(chunk_seq& seq, Processor processor) {
 }
 
 // Env override: PROCESS_INPLACE_BUDGET_BYTES (same naming pattern as
-// sort_buckets.h's SORT_BUCKETS_BUDGET_BYTES). Default: physical RAM / 4 --
-// identical formula to sort_buckets.h.
+// sort_buckets.h's SORT_BUCKETS_BUDGET_BYTES). Default: *available* RAM / 4,
+// not total installed RAM -- a fixed fraction of total RAM ignores whatever
+// an earlier pass in the same process already retained (e.g. random_shuffle's
+// two back-to-back methods, or repeated calls to sample_sort/Permutation),
+// so a later call can be handed a budget with far less real headroom than
+// the first call had.  AvailablePhysicalMemoryBytes() is re-read on every
+// call, so it reflects memory pressure at the moment this budget is needed.
 inline size_t GetProcessInplaceBudgetBytes() {
-  size_t budget =
-      ((size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE)) / 4;
+  size_t budget = AvailablePhysicalMemoryBytes() / 4;
   if (const char* e = getenv("PROCESS_INPLACE_BUDGET_BYTES"))
     budget = std::stoull(e);
   return budget;
