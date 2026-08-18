@@ -95,6 +95,42 @@ void test_spanning() {
   vio::unlink(p);
 }
 
+// ── the block size class a file gets is fixed by its first write ───────
+//
+// A file the engine writes one whole chunk at a time gets CHUNK_SIZE blocks,
+// so each chunk is one contiguous allocation and the reader can hand out a
+// pointer into it.  Anything else keeps the small class, which is what stops a
+// few hundred tiny bucket files from costing 4 MiB apiece.
+void test_block_class() {
+  const size_t base = vio::resident_bytes();
+
+  const char* small = "mem:/vio_test/small_first";
+  int fd = open_mem(small, O_RDWR | O_CREAT | O_TRUNC);
+  char one = 'x';
+  vio::pwrite(fd, &one, 1, 0);
+  check(vio::resident_bytes() - base < CHUNK_SIZE,
+        "block class: a small first write takes the small class");
+  vio::close(fd);
+  vio::unlink(small);
+
+  const size_t base2 = vio::resident_bytes();
+  const char* big = "mem:/vio_test/chunk_first";
+  fd = open_mem(big, O_RDWR | O_CREAT | O_TRUNC);
+  std::vector<char> blk(CHUNK_SIZE, 'z');
+  vio::pwrite(fd, blk.data(), blk.size(), 0);
+  check(vio::resident_bytes() - base2 == CHUNK_SIZE,
+        "block class: a whole-chunk first write takes exactly one block");
+  // A second chunk at the next aligned offset costs exactly one more block.
+  vio::pwrite(fd, blk.data(), blk.size(), CHUNK_SIZE);
+  check(vio::resident_bytes() - base2 == 2 * CHUNK_SIZE,
+        "block class: each further chunk is one more block");
+  std::vector<char> back(CHUNK_SIZE, 0);
+  vio::pread(fd, back.data(), back.size(), CHUNK_SIZE);
+  check(back == blk, "block class: the second chunk reads back intact");
+  vio::close(fd);
+  vio::unlink(big);
+}
+
 // ── truncation, including the O_TRUNC path the writers depend on ────────────
 void test_truncate() {
   const char* p = "mem:/vio_test/trunc";
@@ -106,8 +142,12 @@ void test_truncate() {
   check(two_blocks >= 2 * CHUNK_SIZE, "truncate: two blocks are resident");
 
   check(vio::ftruncate(fd, 0) == 0, "truncate: ftruncate(0) succeeds");
-  check(vio::resident_bytes() < two_blocks,
-        "truncate: ftruncate released the blocks");
+  // With a descriptor still open the dropped blocks are *retired*, not
+  // returned to the pool: a reader may be holding a pointer straight into one
+  // of them (vio::borrow).  They read as zeros at once but stay resident until
+  // the file itself dies.
+  check(vio::resident_bytes() == two_blocks,
+        "truncate: ftruncate with an fd open retires rather than releases");
   std::vector<char> back(64, 'b');
   vio::pread(fd, back.data(), back.size(), 0);
   bool zeroed = true;
@@ -118,10 +158,15 @@ void test_truncate() {
   // Re-opening with O_TRUNC must clear a file that already has content --
   // UnorderedFileWriter opens O_CREAT without O_TRUNC and relies on the
   // producer having cleared the file separately.
+  // No descriptor is open at that moment, so nothing can be holding a pointer
+  // and the blocks go straight back to the pool instead of being retired.
   fd = open_mem(p, O_RDWR | O_CREAT);
   vio::pwrite(fd, blk.data(), blk.size(), 0);
   vio::close(fd);
+  const size_t with_content = vio::resident_bytes();
   fd = open_mem(p, O_WRONLY | O_CREAT | O_TRUNC);
+  check(vio::resident_bytes() < with_content,
+        "truncate: O_TRUNC with no fd open releases immediately");
   std::vector<char> after(64, 'c');
   vio::pread(fd, after.data(), after.size(), 0);
   bool cleared = true;
@@ -216,6 +261,7 @@ int main() {
                "====================\n";
   test_holes();
   test_spanning();
+  test_block_class();
   test_truncate();
   test_open_semantics();
   test_concurrent();

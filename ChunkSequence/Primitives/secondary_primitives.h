@@ -239,6 +239,10 @@ chunk_seq pack(const chunk_seq& seq, const std::string& result_prefix,
     sub.chunks.assign(seq.chunks.begin() + base,
                       seq.chunks.begin() + base + batch_n);
     auto reader = std::make_unique<ChunkSequenceReader<T>>();
+    // This pack compacts survivors into the reader's own buffer
+    // (buf[s++] = buf[j] below), so it must own them: a borrowed buffer
+    // is the source file itself and the compaction would corrupt it.
+    reader->allow_borrow = false;
     reader->PrepChunks(sub);
     reader->Start(5, 32, 16);
 
@@ -323,6 +327,10 @@ chunk_seq pack(const chunk_seq& seq, const std::string& result_prefix,
                            flag_seq.chunks.begin() + base + batch_n);
 
     auto reader = std::make_unique<ChunkSequenceReader<T>>();
+    // This pack compacts survivors into the reader's own buffer
+    // (buf[s++] = buf[j] below), so it must own them: a borrowed buffer
+    // is the source file itself and the compaction would corrupt it.
+    reader->allow_borrow = false;
     reader->PrepChunks(data_sub);
     reader->Start(5, 32, 16);
 
@@ -430,6 +438,10 @@ chunk_seq pack_if(const chunk_seq& seq, const std::string& result_prefix,
                            keep_seq.chunks.begin() + base + batch_n);
 
     auto reader = std::make_unique<ChunkSequenceReader<T>>();
+    // This pack compacts survivors into the reader's own buffer
+    // (buf[s++] = buf[j] below), so it must own them: a borrowed buffer
+    // is the source file itself and the compaction would corrupt it.
+    reader->allow_borrow = false;
     reader->PrepChunks(data_sub);
     reader->Start(5, 32, 16);
 
@@ -533,6 +545,10 @@ chunk_seq pack_value(const chunk_seq& seq, const std::string& result_prefix,
     sub.chunks.assign(seq.chunks.begin() + base,
                       seq.chunks.begin() + base + batch_n);
     auto reader = std::make_unique<ChunkSequenceReader<T>>();
+    // This pack compacts survivors into the reader's own buffer
+    // (buf[s++] = buf[j] below), so it must own them: a borrowed buffer
+    // is the source file itself and the compaction would corrupt it.
+    reader->allow_borrow = false;
     reader->PrepChunks(sub);
     reader->Start(5, 32, 16);
 

@@ -494,15 +494,64 @@ call sequence, so a call site differs from the original by its qualification
 alone.  A `Ring` creates its real `io_uring` **lazily**, on the first submit
 carrying a real descriptor, so a memory-only pass never enters the kernel at
 all.  Submission is deferred: `get_sqe`/`prep_*` record the request and
-`submit()` either memcpys it or replays it into the real ring; completions drain
+`submit()` either services it in DRAM (copying, or by donating the buffer -- see
+Zero-copy below) or replays it into the real ring; completions drain
 from a software queue first, then the kernel's.  Measured cost in disk mode is
 under 1% (min-of-8 on `delayedCompare`, medians favouring the shim).
 
-Memory-backed files are sparse: 64 KiB blocks carved from 16 MiB slabs,
-materialized on write, reading as zeros where nothing was written.  The block is
-**much smaller than CHUNK_SIZE on purpose** -- `group_by_index` keeps one file
-per bucket and a few hundred buckets is ordinary, so CHUNK_SIZE granularity
-would cost 4 MiB apiece (gigabytes total) for files holding a few KiB on disk.
+Memory-backed files are sparse: blocks carved from larger slabs, materialized on
+write, reading as zeros where nothing was written.  The **block size is per file,
+fixed by its first write**: a write of a whole `CHUNK_SIZE` at a chunk-aligned
+offset -- what every chunk producer does -- takes `CHUNK_SIZE` blocks, so each
+chunk is one contiguous allocation; anything else takes 64 KiB blocks.  The small
+class is what keeps `group_by_index`, which holds one file per bucket and a few
+hundred buckets is ordinary, from costing 4 MiB apiece (gigabytes total) for
+files holding a few KiB on disk.  The large class wastes nothing, since a chunk
+is always written as a full `CHUNK_SIZE` block, zero-padded when partial.
+
+**Zero-copy.**  The disk path never copies: `O_DIRECT` has the drive DMA
+straight into the reader's pool buffer.  So a memcpy-based memory backend is
+*strictly more work per byte than 30 SSDs*, and measurably slower on
+bandwidth-bound examples.  Both directions of copy are therefore removed:
+
+- **Reads borrow.**  `vio::borrow(fd, len, off)` returns a pointer into the
+  store when the range is one contiguous resident block, and both reader workers
+  publish it directly -- no `Sqe`, no `submit`, no `Cqe`.  It returns `nullptr`
+  for a real descriptor, an unwritten hole, or a span crossing a block boundary,
+  and the caller then reads normally, so mixed-mode `zip` needs no plumbing.
+  `ChunkSequenceReader::Allocator::Free` keeps its signature: it range-checks
+  the pointer against its own slabs and simply drops anything borrowed, which is
+  why none of its ~17 call sites changed.
+- **Writes donate.**  A producer that allocates its own `CHUNK_SIZE` block hands
+  it over with a `DonatableFree<T>` deleter; when the store adopts the buffer as
+  its own block the writer disarms the deleter via `std::get_deleter`, so the
+  write is a pointer assignment and nothing is freed.  The deleter type *is* the
+  opt-in signal, so `ChunkPartition` -- which hands over reader-pool buffers with
+  an `alloc->Free` deleter -- is never offered.
+
+**A borrowed buffer is the file itself**, so a consumer must not write through
+one.  Four sites do (the `pack` family compacts survivors with
+`buf[s++] = buf[j]`) and are opted out with `reader->allow_borrow = false`.
+Nothing in the type system stops a fifth, so **run the suite once with
+`PLAID_VERIFY_BORROW=1` after touching any read path**: it hashes every borrowed
+buffer at hand-out, re-checks at release, and fails naming the reader to fix.
+
+`PLAID_MEMORY_ZEROCOPY=0` restores the copying path; `make test` runs
+`storageModeTest` a second time that way, so both paths stay covered.
+`vio::borrowed_bytes()/declined_bytes()` are the read-side hit rate (asserted
+>99% for the streaming primitives, so a silent fall back to copying cannot pass
+unnoticed), `donated_bytes()` the write-side counterpart.
+
+**Out of scope: the sort family.**  `count_sort`/`group_by_index`/`sample_sort`
+stay on the copying path.  `BucketWriter` gathers sub-`CHUNK_SIZE` pieces with
+`writev` (a genuine gather, nothing to donate) and its bucket files therefore
+take the 64 KiB class; `process_inplace` coalesces contiguous chunk runs into
+one multi-megabyte read, which no single block covers.  `sort.h` is untouched by
+zero-copy, and memory-mode `sample_sort` keeps its memory-vs-disk gap by design.
+Pre-sizing would fix `process_inplace` -- a contiguous per-file arena on
+`fallocate`, which the pre-sized producers already call with the exact size --
+but `count_sort` is a single streaming scatter with no histogram pass, so bucket
+sizes are not known until `ReapResult()`.
 
 **Cap.**  `PLAID_MEMORY_CAP_BYTES` (default half of physical RAM) is enforced
 with a `CHECK` naming the prefix being grown -- the actionable part, since it
@@ -784,3 +833,5 @@ Environment / flags (not `configs.h`):
 |---|---|---|
 | `PLAID_STORAGE` / `--storage=` | `disk` | backend a root creator uses when the caller names none (`memory`/`disk`) |
 | `PLAID_MEMORY_CAP_BYTES` | RAM/2 | ceiling on memory-backed file storage; exceeding it is a `CHECK` failure |
+| `PLAID_MEMORY_ZEROCOPY` | `1` | `0` makes memory-backed reads/writes copy instead of borrowing/donating |
+| `PLAID_VERIFY_BORROW` | unset | hash-check every borrowed buffer for modification while on loan (slow; for a post-change suite run) |

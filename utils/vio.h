@@ -105,6 +105,10 @@ struct Cqe {
   int res = 0;
   void* data = nullptr;
   struct io_uring_cqe* real = nullptr;
+  // Set when the memory-backed store adopted this write's buffer instead of
+  // copying it.  The writer then releases the buffer without freeing it: those
+  // bytes are the file now.  Always false for a real descriptor.
+  bool donated = false;
 };
 
 // A recorded, not-yet-submitted request.
@@ -118,6 +122,8 @@ struct Sqe {
   unsigned len = 0;
   off_t off = 0;
   void* data = nullptr;
+  // Offers this write's buffer to the store; see sqe_set_donate.
+  bool donate = false;
 };
 
 class Ring {
@@ -198,9 +204,72 @@ inline void prep_writev(Sqe* s, int fd, const struct iovec* iov, unsigned nvec,
 }
 inline void sqe_set_data(Sqe* s, void* data) { s->data = data; }
 
+// Offer this write's buffer to a memory-backed store, which may take it as its
+// own block rather than copying into one -- the write-side mirror of borrow().
+// Only meaningful for a caller that owns the buffer outright and would free it
+// once the write completes; the completion reports whether it was taken.
+inline void sqe_set_donate(Sqe* s) { s->donate = true; }
+
 // ---------------------------------------------------------------------------
 // Memory-backed storage: accounting and lifetime
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Zero-copy reads
+//
+// A memory-backed chunk already sits in DRAM, so filling a caller's buffer from
+// it is a pure memcpy that the disk path does not pay: O_DIRECT has the drive
+// DMA straight into the reader's buffer, so nothing copies there at all.  On a
+// 30-drive array that memcpy is enough to make memory mode the *slower* of the
+// two on bandwidth-bound work.
+//
+// borrow() removes it.  It returns a pointer into the store itself when the
+// requested range is one contiguous resident run, and nullptr otherwise -- a
+// real descriptor, an unwritten hole, a span crossing a block boundary, or
+// zero-copy disabled.  A nullptr is never an error: the caller falls back to
+// its ordinary buffer-and-read path.
+//
+// The returned bytes stay valid while `fd` is open (truncate retires rather
+// than releases blocks while any descriptor is open, for exactly this reason).
+// Callers MUST treat them as read-only: they are the file, not a copy of it.
+char* borrow(int fd, size_t len, off_t off);
+
+// Hand a borrowed pointer back.  A no-op in ordinary runs -- a borrow owns
+// nothing, so there is nothing to return -- but under PLAID_VERIFY_BORROW=1 it
+// is where the buffer is checked for having been modified while out on loan.
+// The four pack sites that compact in place are opted out of borrowing, but
+// nothing in the type system stops a fifth consumer from writing through one,
+// and the corruption would land silently in the source file.  Run the suite
+// once with the flag on after touching any read path.
+void release_borrow(const void* p);
+
+// Off via PLAID_MEMORY_ZEROCOPY=0, which restores the copying path so a run can
+// be compared against results taken before zero-copy existed.  The setter lets
+// a test exercise both paths in one process.
+bool zerocopy_enabled();
+void set_zerocopy_enabled(bool on);
+
+// Read-side accounting.
+//
+// borrowed_bytes/declined_bytes are the two outcomes of a borrow() request
+// against a memory-backed descriptor, so their ratio is the zero-copy hit rate
+// of the read path alone -- which is what tests assert, so that a silent fall
+// back to copying cannot pass unnoticed.  A request against a real descriptor
+// counts as neither: there was never anything to borrow.
+//
+// copied_bytes is broader: every byte memcpy'd by a memory-backed pread or
+// pwrite,
+// including callers that must copy no matter what (materialize/to_vector build
+// a caller-owned parlay::sequence) and the paths deliberately left copying
+// (process_inplace's multi-chunk runs, the cut seams).  Useful context, not a
+// pass/fail signal.
+size_t borrowed_bytes();
+size_t declined_bytes();
+
+// Write-side mirror of borrowed_bytes: bytes the store adopted outright
+// (sqe_set_donate) instead of copying into a block of its own.
+size_t donated_bytes();
+size_t copied_bytes();
 
 // Total bytes currently held by memory-backed files.  Tests assert this
 // returns to zero after cleanup, which is how an unreleased intermediate gets

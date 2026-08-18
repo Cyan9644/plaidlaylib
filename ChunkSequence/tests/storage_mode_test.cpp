@@ -151,8 +151,12 @@ int main(int argc, char** argv) {
   InitLogger();
   ParseGlobalArguments(argc, argv);
   if (argc > 1) N = std::stoull(argv[1]);
+  const bool zerocopy = plaid::vio::zerocopy_enabled();
   std::cout << "==================== storage mode differential  n=" << N
+            << (zerocopy ? "  [zero-copy]" : "  [copying]")
             << " ====================\n";
+  const size_t borrowed0 = plaid::vio::borrowed_bytes();
+  const size_t declined0 = plaid::vio::declined_bytes();
 
   // The input itself: does tabulate lay out identically in both backends?
   {
@@ -237,6 +241,13 @@ int main(int argc, char** argv) {
     cleanup("sm_part_m");
   }
 
+  // Everything above is an in-scope streaming primitive and should have
+  // borrowed essentially every byte it read from a memory-backed file.  Snapshot
+  // here so the assertion is not diluted by sample_sort, which follows and is
+  // deliberately left on the copying path.
+  const size_t borrowed_streaming = plaid::vio::borrowed_bytes() - borrowed0;
+  const size_t declined_streaming = plaid::vio::declined_bytes() - declined0;
+
   // sample_sort drives BucketWriter, count_sort and process_inplace -- the
   // deepest path, and the one with run coalescing and two rings per worker.
   {
@@ -256,6 +267,27 @@ int main(int argc, char** argv) {
   std::cout << "resident after all cleanup: " << plaid::vio::resident_bytes()
             << " bytes\n";
   report("no memory-backed storage leaked", plaid::vio::resident_bytes() == 0);
+
+  // What fraction of the reads from memory-backed files avoided a copy.
+  // Without this a silent fall back to copying -- a block class picked wrong, a
+  // borrow declined for a reason nobody noticed -- would still pass every
+  // correctness check above while quietly costing exactly what zero-copy exists
+  // to save.
+  const size_t stream_total = borrowed_streaming + declined_streaming;
+  const double hit =
+      stream_total == 0 ? 0.0 : (double)borrowed_streaming / (double)stream_total;
+  std::cout << "streaming reads: " << borrowed_streaming << " borrowed, "
+            << declined_streaming << " declined  (" << (int)(hit * 100)
+            << "% zero-copy)\n";
+  std::cout << "writes donated: " << plaid::vio::donated_bytes() << " bytes\n";
+  std::cout << "memory-backed pread/pwrite copies (all paths, incl. to_vector): "
+            << plaid::vio::copied_bytes() << " bytes\n";
+  if (zerocopy)
+    report("streaming reads are zero-copy", hit > 0.99);
+  else
+    report("PLAID_MEMORY_ZEROCOPY=0 neither borrows nor donates",
+           plaid::vio::borrowed_bytes() == 0 &&
+               plaid::vio::donated_bytes() == 0);
 
   std::cout << (failures == 0 ? "ALL PASS" : "SOME FAILED") << "\n";
   return failures == 0 ? 0 : 1;

@@ -42,6 +42,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <queue>
 #include <random>
 #include <string>
@@ -172,6 +173,28 @@ struct UnorderedWriterConfig {
         queue_size(queue_size),
         num_threads(num_threads),
         num_files(num_files) {}
+};
+
+// Deleter for a write buffer the memory-backed store is allowed to adopt.
+//
+// A producer that allocates its own CHUNK_SIZE block and hands it to the writer
+// normally gets it free()d once the write completes.  In memory mode that write
+// is a memcpy into storage the store just allocated -- two buffers and a copy
+// where one buffer would do.  Handing the block over instead makes the write a
+// pointer assignment, but then the free() must not happen: those bytes are the
+// file now.  So the writer reaches into the deleter with std::get_deleter and
+// disarms it.  On disk, and whenever the store declines, this is plain free().
+//
+// The deleter type doubles as the opt-in signal: the writer offers a buffer for
+// donation exactly when its shared_ptr carries this deleter, so a producer that
+// does not own its buffer outright (ChunkPartition hands over pool buffers with
+// an alloc->Free deleter) is never asked.
+template <typename T>
+struct DonatableFree {
+  bool donated = false;
+  void operator()(T* p) const {
+    if (!donated) free(p);
+  }
 };
 
 template <typename T>
@@ -382,6 +405,14 @@ class UnorderedFileWriter {
           auto* file = request->file;
           file->bytes_written += request->size * sizeof(T);
 
+          // The store adopted the buffer: disarm the deleter so releasing the
+          // shared_ptr below leaves those bytes alone instead of freeing the
+          // file out from under itself.  Read before cqe_seen recycles `cqe`.
+          if (cqe->donated) {
+            auto* d = std::get_deleter<DonatableFree<T>>(request->data);
+            if (d != nullptr) d->donated = true;
+          }
+
           vio::cqe_seen(&ring, cqe);
           outstanding_request--;
           delete request;
@@ -441,6 +472,10 @@ class UnorderedFileWriter {
         vio::prep_write(sqe, file->fd, request->data.get(), num_bytes,
                             offset);
         file->bytes_issued += num_bytes;
+        // Only a buffer whose deleter says the producer owns it outright may
+        // be handed to the store; see DonatableFree.
+        if (std::get_deleter<DonatableFree<T>>(request->data) != nullptr)
+          vio::sqe_set_donate(sqe);
         vio::sqe_set_data(sqe, request);
         submit_write = true;
         outstanding_request++;
@@ -832,7 +867,7 @@ chunk_seq tabulate(size_t n, const std::string& result_prefix, F f,
 
           // Hand ownership of this buffer to the writer (freed once its write
           // completes) and move on to the next chunk in this thread's slice.
-          writer.Push(std::shared_ptr<T>(buf, free), CHUNK_SIZE / sizeof(T),
+          writer.Push(std::shared_ptr<T>(buf, DonatableFree<T>{}), CHUNK_SIZE / sizeof(T),
                       drive_of[i], slot_of[i] * CHUNK_SIZE);
         }
       },
@@ -962,7 +997,7 @@ chunk_seq from_file(const std::string& input_path,
           if (bytes < CHUNK_SIZE)
             memset((char*)buf + bytes, 0, CHUNK_SIZE - bytes);
 
-          writer.Push(std::shared_ptr<T>(buf, free), CHUNK_SIZE / sizeof(T),
+          writer.Push(std::shared_ptr<T>(buf, DonatableFree<T>{}), CHUNK_SIZE / sizeof(T),
                       drive_of[i], slot_of[i] * CHUNK_SIZE);
         }
       },
@@ -1231,6 +1266,17 @@ class ChunkSequenceReader {
       static std::mutex m;
       return m;
     }
+    // Address ranges of the slabs AllocateMore has carved buffers from.
+    // Append-only and never freed (see the class comment), so Free() can ask
+    // "did this pointer come from me?" with a handful of compares.
+    static std::vector<std::pair<uintptr_t, uintptr_t>>& slabs() {
+      static std::vector<std::pair<uintptr_t, uintptr_t>> v;
+      return v;
+    }
+    static std::shared_mutex& slabs_lock() {
+      static std::shared_mutex m;
+      return m;
+    }
 
     Allocator() {
       // Prime the pool once; the threshold guard makes later readers no-ops.
@@ -1249,6 +1295,11 @@ class ChunkSequenceReader {
       T* base =
           (T*)std::aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, BUFFER_SIZE * n);
       CHECK(base != nullptr) << "ChunkSequenceReader: out of memory";
+      {
+        std::unique_lock<std::shared_mutex> sl(slabs_lock());
+        slabs().emplace_back((uintptr_t)base,
+                             (uintptr_t)base + BUFFER_SIZE * n);
+      }
       std::lock_guard<std::mutex> fl(free_list_lock());
       for (size_t i = 0; i < n; i++)
         free_list().push_back((T*)((intptr_t)base + i * BUFFER_SIZE));
@@ -1267,13 +1318,35 @@ class ChunkSequenceReader {
       }
     }
 
+    // True when `p` was handed out by Alloc().  Anything else reaching Free()
+    // is a pointer borrowed straight out of the memory-backed store
+    // (vio::borrow) -- the file's own bytes, not ours to recycle.  Pushing one
+    // onto the free list would hand a later reader a window into a live file.
+    static bool from_pool(const T* p) {
+      const uintptr_t a = (uintptr_t)p;
+      std::shared_lock<std::shared_mutex> sl(slabs_lock());
+      for (const auto& [lo, hi] : slabs())
+        if (a >= lo && a < hi) return true;
+      return false;
+    }
+
     void Free(T* p) {
+      if (p == nullptr) return;
+      if (!from_pool(p)) {
+        vio::release_borrow(p);  // borrowed from the store; nothing to recycle
+        return;
+      }
       std::lock_guard<std::mutex> l(free_list_lock());
       free_list().push_back(p);
     }
   };
 
   Allocator allocator;
+
+  // Set false by a consumer that writes into the buffers it is handed -- the
+  // pack family compacts survivors in place -- since a borrowed buffer is the
+  // source file itself and such a write would corrupt it.
+  bool allow_borrow = true;
 
   ChunkSequenceReader() = default;
 
@@ -1396,11 +1469,27 @@ class ChunkSequenceReader {
       bool submitted = false;
       while (!free_pool.empty() && !pending.empty() &&
              outstanding < max_requests) {
-        vio::Sqe* sqe = vio::get_sqe(&ring);
-        if (sqe == nullptr) break;
-
         const chunk c =
             pending.front();  // copy before pop to avoid dangling ref
+
+        // A memory-backed chunk that is already one contiguous run in the
+        // store needs no transfer at all: publish a pointer into the store
+        // and skip the ring entirely.  Decided before get_sqe() so that a
+        // borrowed chunk never leaves an unfilled Sqe behind in the batch.
+        // allocator.Free() tells a borrowed buffer from a pooled one by
+        // address, so every consumer's release path is unchanged.
+        if (self->allow_borrow) {
+          if (T* p = (T*)vio::borrow(get_fd(c.filename), AlignUp(c.used),
+                                     c.begin_addr)) {
+            pending.pop_front();
+            self->buffer_queue.Push({p, c.used / sizeof(T), c.index});
+            completed++;
+            continue;
+          }
+        }
+
+        vio::Sqe* sqe = vio::get_sqe(&ring);
+        if (sqe == nullptr) break;
         pending.pop_front();
 
         auto* req = free_pool.back();
@@ -1480,6 +1569,9 @@ class PersistentChunkSequenceReader {
   // persistent across reader instances, so no new persistence design is needed
   // for buffers specifically.
   typename ChunkSequenceReader<T>::Allocator allocator;
+
+  // See ChunkSequenceReader::allow_borrow.
+  bool allow_borrow = true;
 
   PersistentChunkSequenceReader() = default;
   PersistentChunkSequenceReader(const PersistentChunkSequenceReader&) = delete;
@@ -1645,11 +1737,27 @@ class PersistentChunkSequenceReader {
         bool submitted = false;
         while (!free_pool.empty() && !pending.empty() &&
                outstanding < max_requests) {
-          vio::Sqe* sqe = vio::get_sqe(&ring);
-          if (sqe == nullptr) break;
-
           const chunk c =
               pending.front();  // copy before pop to avoid dangling ref
+
+          // A memory-backed chunk that is already one contiguous run in the
+          // store needs no transfer at all: publish a pointer into the store
+          // and skip the ring entirely.  Decided before get_sqe() so that a
+          // borrowed chunk never leaves an unfilled Sqe behind in the batch.
+          // allocator.Free() tells a borrowed buffer from a pooled one by
+          // address, so every consumer's release path is unchanged.
+          if (self->allow_borrow) {
+            if (T* p = (T*)vio::borrow(get_fd(c.filename), AlignUp(c.used),
+                                       c.begin_addr)) {
+              pending.pop_front();
+              self->buffer_queue.Push({p, c.used / sizeof(T), c.index});
+              completed++;
+              continue;
+            }
+          }
+
+          vio::Sqe* sqe = vio::get_sqe(&ring);
+          if (sqe == nullptr) break;
           pending.pop_front();
 
           auto* req = free_pool.back();
@@ -1771,7 +1879,7 @@ class ChunkEmitter {
 
   // Convenience overload: adopt a raw block from alloc() (freed with free()).
   void emit(R* buf, size_t count, size_t logical_index) const {
-    emit(std::shared_ptr<R>(buf, free), count, logical_index);
+    emit(std::shared_ptr<R>(buf, DonatableFree<R>{}), count, logical_index);
   }
 
  private:
@@ -2049,7 +2157,8 @@ chunk_seq DensePack(size_t num_virtual, const std::string& result_prefix,
     for (size_t k = 0; k < num_out; k++) {
       const size_t d = drive_dist(rng);
       const size_t slot = next_slot[d]++;
-      writer.Push(std::shared_ptr<R>(obuf[k], free), CHUNK_SIZE / sizeof(R), d,
+      writer.Push(std::shared_ptr<R>(obuf[k], DonatableFree<R>{}),
+                  CHUNK_SIZE / sizeof(R), d,
                   slot * CHUNK_SIZE);
       out_chunks.push_back(
           {filenames[d], slot * CHUNK_SIZE, CHUNK_SIZE, out_idx++});
@@ -2071,7 +2180,7 @@ chunk_seq DensePack(size_t num_virtual, const std::string& result_prefix,
     memcpy(buf, carry.data(), carry.size() * sizeof(R));
     const size_t d = drive_dist(rng);
     const size_t slot = next_slot[d]++;
-    writer.Push(std::shared_ptr<R>(buf, free), CHUNK_SIZE / sizeof(R), d,
+    writer.Push(std::shared_ptr<R>(buf, DonatableFree<R>{}), CHUNK_SIZE / sizeof(R), d,
                 slot * CHUNK_SIZE);
     out_chunks.push_back(
         {filenames[d], slot * CHUNK_SIZE, carry.size() * sizeof(R), out_idx++});
@@ -2250,7 +2359,7 @@ chunk_seq DensePackStream(const chunk_seq& seq,
             memset((char*)cur + packed_bytes, 0, CHUNK_SIZE - packed_bytes);
           const size_t d = drive_dist(rng);
           const size_t slot = next_slot[d]++;
-          writer.Push(std::shared_ptr<R>(cur, free), epct, d,
+          writer.Push(std::shared_ptr<R>(cur, DonatableFree<R>{}), epct, d,
                       slot * CHUNK_SIZE);
           out_chunks.push_back(
               {filenames[d], slot * CHUNK_SIZE, CHUNK_SIZE, out_idx++});
@@ -2263,7 +2372,7 @@ chunk_seq DensePackStream(const chunk_seq& seq,
       memset((char*)cur + cur_n * sizeof(R), 0, CHUNK_SIZE - cur_n * sizeof(R));
       const size_t d = drive_dist(rng);
       const size_t slot = next_slot[d]++;
-      writer.Push(std::shared_ptr<R>(cur, free), epct, d, slot * CHUNK_SIZE);
+      writer.Push(std::shared_ptr<R>(cur, DonatableFree<R>{}), epct, d, slot * CHUNK_SIZE);
       out_chunks.push_back(
           {filenames[d], slot * CHUNK_SIZE, cur_n * sizeof(R), out_idx++});
     } else {

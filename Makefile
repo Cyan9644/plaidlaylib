@@ -103,6 +103,9 @@ test: $(TEST_BINARIES)
 	  $$t $(TEST_ARGS) || fail=1; \
 	  echo; \
 	done; \
+	echo "==================== $(BINDIR)/storageModeTest $(TEST_ARGS) (PLAID_MEMORY_ZEROCOPY=0) ===================="; \
+	PLAID_MEMORY_ZEROCOPY=0 $(BINDIR)/storageModeTest $(TEST_ARGS) || fail=1; \
+	echo; \
 	if [ $$fail -ne 0 ]; then echo "SOME TESTS FAILED"; exit 1; \
 	else echo "ALL TESTS PASSED"; fi
 

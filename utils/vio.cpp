@@ -24,13 +24,18 @@ bool is_mem_path(const char* path) {
          std::strncmp(path, kMemPathPrefix, kMemPathPrefixLen) == 0;
 }
 
+// Defined below with the other public entry points.  MemFile::donate needs it:
+// the knob has to gate both halves of zero-copy, or PLAID_MEMORY_ZEROCOPY=0
+// would still hand write buffers to the store.
+bool zerocopy_enabled();
+
 namespace {
 
 // ---------------------------------------------------------------------------
 // Block pool
 //
-// Memory-backed files are built out of CHUNK_SIZE blocks carved from much
-// larger slabs.  Allocating each 4 MiB block on its own would be the mistake
+// Memory-backed files are built out of fixed-size blocks carved from much
+// larger slabs.  Allocating each block on its own would be the mistake
 // this codebase already documents in three places (chunk_seq.h's to_vector,
 // ChunkPartition, delayed.h's read pool): an allocation that size goes to mmap,
 // and the kernel serializes all workers on mmap_sem.  Pooling means the steady
@@ -42,18 +47,36 @@ namespace {
 // return to zero, and is what the leak assertions check).
 // ---------------------------------------------------------------------------
 
-// Deliberately much smaller than CHUNK_SIZE.  A memory-backed file rounds up
-// to whole blocks, and plenty of workloads keep many files holding only a few
-// kilobytes each -- group_by_index opens one per bucket, and a few hundred
-// buckets are ordinary.  At CHUNK_SIZE granularity those cost 4 MiB apiece
-// (gigabytes in total) where on disk they occupy a few KiB, which would make
-// memory mode fail on workloads disk mode handles comfortably and would wreck
-// the like-for-like comparison the mode exists to provide.  64 KiB bounds that
-// waste while keeping a full-chunk transfer to 64 memcpys.
-constexpr size_t kBlockSize = 64 * 1024;
-constexpr size_t kBlocksPerSlab = 256;  // 16 MiB slabs
+// Two block size classes, picked per file from its first write.
+//
+// kSmallBlock is the conservative default, and is deliberately much smaller
+// than CHUNK_SIZE: a memory-backed file rounds up to whole blocks, and plenty
+// of workloads keep many files holding only a few kilobytes each --
+// group_by_index opens one per bucket, and a few hundred buckets are ordinary.
+// At CHUNK_SIZE granularity those cost 4 MiB apiece (gigabytes in total) where
+// on disk they occupy a few KiB, which would make memory mode fail on
+// workloads disk mode handles comfortably and would wreck the like-for-like
+// comparison the mode exists to provide.
+//
+// kLargeBlock is exactly CHUNK_SIZE, for the files the engine writes one whole
+// chunk at a time.  Those waste nothing -- a chunk is always written as a full
+// CHUNK_SIZE block, zero-padded when partial -- and in exchange a chunk's
+// bytes land in ONE contiguous allocation, which is what lets the reader hand
+// out a pointer into the store instead of copying it.  At kSmallBlock a 4 MiB
+// chunk is 64 pieces at descending addresses, so no such pointer exists.
+constexpr size_t kSmallBlock = 64 * 1024;
+constexpr size_t kLargeBlock = CHUNK_SIZE;
+
+// Enough blocks per slab that growth is rare, without making any single
+// aligned_alloc absurd.
+constexpr size_t kSmallBlocksPerSlab = 256;  // 16 MiB slabs
+constexpr size_t kLargeBlocksPerSlab = 16;   // 16 * CHUNK_SIZE = 64 MiB slabs
 
 std::atomic<size_t> g_file_bytes{0};
+std::atomic<size_t> g_borrowed_bytes{0};
+std::atomic<size_t> g_copied_bytes{0};
+std::atomic<size_t> g_declined_bytes{0};
+std::atomic<size_t> g_donated_bytes{0};
 
 size_t MemoryCapBytes() {
   static const size_t cap = [] {
@@ -81,29 +104,58 @@ class BlockPool {
 
   // `who` names the file being grown: when the cap trips, that is the one piece
   // of information that points at the offending intermediate.
-  char* alloc(const char* who, bool zero) {
+  char* alloc(size_t block_size, const char* who, bool zero) {
+    SizeClass& sc = class_for(block_size);
     char* p = nullptr;
     {
       std::lock_guard<std::mutex> lk(mu_);
-      if (free_.empty()) grow(who);
-      p = free_.back();
-      free_.pop_back();
+      if (sc.free_.empty()) grow(sc, block_size, who);
+      p = sc.free_.back();
+      sc.free_.pop_back();
     }
-    if (zero) std::memset(p, 0, kBlockSize);
-    g_file_bytes.fetch_add(kBlockSize, std::memory_order_relaxed);
+    if (zero) std::memset(p, 0, block_size);
+    g_file_bytes.fetch_add(block_size, std::memory_order_relaxed);
     return p;
   }
 
-  void release(char* p) {
-    if (p == nullptr) return;
-    g_file_bytes.fetch_sub(kBlockSize, std::memory_order_relaxed);
+  // A buffer donated straight into a file never passes through the free lists
+  // above, so it is charged and un-charged here to keep one budget for all
+  // memory-backed storage.
+  void note_adopted(size_t bytes, const char* who) {
     std::lock_guard<std::mutex> lk(mu_);
-    free_.push_back(p);
+    CHECK_LE(pool_bytes_ + bytes, MemoryCapBytes())
+        << "vio: in-memory storage would exceed PLAID_MEMORY_CAP_BYTES ("
+        << MemoryCapBytes() << " bytes) adopting a write buffer for \'" << who
+        << "\'; already holding " << pool_bytes_ << " bytes.";
+    pool_bytes_ += bytes;
+  }
+
+  void note_released(size_t bytes) {
+    std::lock_guard<std::mutex> lk(mu_);
+    pool_bytes_ -= bytes;
+  }
+
+  void release(size_t block_size, char* p) {
+    if (p == nullptr) return;
+    g_file_bytes.fetch_sub(block_size, std::memory_order_relaxed);
+    SizeClass& sc = class_for(block_size);
+    std::lock_guard<std::mutex> lk(mu_);
+    sc.free_.push_back(p);
   }
 
  private:
-  void grow(const char* who) {  // caller holds mu_
-    const size_t slab_bytes = kBlockSize * kBlocksPerSlab;
+  struct SizeClass {
+    std::vector<char*> free_;
+  };
+
+  SizeClass& class_for(size_t block_size) {
+    return block_size == kLargeBlock ? large_ : small_;
+  }
+
+  void grow(SizeClass& sc, size_t block_size, const char* who) {  // holds mu_
+    const size_t n =
+        (block_size == kLargeBlock) ? kLargeBlocksPerSlab : kSmallBlocksPerSlab;
+    const size_t slab_bytes = block_size * n;
     CHECK_LE(pool_bytes_ + slab_bytes, MemoryCapBytes())
         << "vio: in-memory storage would exceed PLAID_MEMORY_CAP_BYTES ("
         << MemoryCapBytes() << " bytes) while growing \'" << who
@@ -117,12 +169,12 @@ class BlockPool {
                            << "-byte slab for \'" << who << "\'";
     pool_bytes_ += slab_bytes;
     slabs_.push_back(slab);
-    for (size_t i = 0; i < kBlocksPerSlab; i++)
-      free_.push_back(slab + i * kBlockSize);
+    for (size_t i = 0; i < n; i++) sc.free_.push_back(slab + i * block_size);
   }
 
   std::mutex mu_;
-  std::vector<char*> free_;
+  SizeClass small_;
+  SizeClass large_;
   std::vector<char*> slabs_;
   size_t pool_bytes_ = 0;
 };
@@ -140,8 +192,14 @@ class MemFile {
   explicit MemFile(std::string name) : name_(std::move(name)) {}
 
   ~MemFile() {
-    for (char* b : blocks_) BlockPool::instance().release(b);
+    for (Block& b : blocks_) release_block(b);
+    for (Block& b : retired_) release_block(b);
   }
+
+  // Descriptor accounting, used only by truncate() to decide whether anyone
+  // could still be holding a pointer into this file's blocks.
+  void ref_fd() { open_fds_.fetch_add(1, std::memory_order_relaxed); }
+  void unref_fd() { open_fds_.fetch_sub(1, std::memory_order_relaxed); }
 
   ssize_t pread(void* buf, size_t count, off_t offset) {
     char* out = (char*)buf;
@@ -149,41 +207,107 @@ class MemFile {
     // One acquisition for the whole request rather than one per block: the
     // lock guards only table growth, and a block never moves once allocated.
     std::shared_lock<std::shared_mutex> lk(mu_);
+    const size_t bs = block_size_;
     while (done < count) {
       const size_t pos = (size_t)offset + done;
-      const size_t bi = pos / kBlockSize;
-      const size_t within = pos % kBlockSize;
-      const size_t n = std::min(count - done, kBlockSize - within);
-      char* blk = (bi < blocks_.size()) ? blocks_[bi] : nullptr;
+      const size_t bi = pos / bs;
+      const size_t within = pos % bs;
+      const size_t n = std::min(count - done, bs - within);
+      char* blk = (bi < blocks_.size()) ? blocks_[bi].p : nullptr;
       if (blk == nullptr)
         std::memset(out + done, 0, n);  // an unwritten hole
       else
         std::memcpy(out + done, blk + within, n);
       done += n;
     }
+    g_copied_bytes.fetch_add(count, std::memory_order_relaxed);
     return (ssize_t)count;
+  }
+
+  // A pointer straight into this file's storage, or nullptr when the range is
+  // not one contiguous resident run.  See vio::borrow() for the contract; in
+  // particular the bytes are the file itself, so callers must not write them.
+  char* borrow(size_t count, off_t offset) {
+    if (count == 0) return nullptr;
+    std::shared_lock<std::shared_mutex> lk(mu_);
+    const size_t bs = block_size_;
+    const size_t pos = (size_t)offset;
+    const size_t within = pos % bs;
+    if (within + count > bs) return nullptr;  // straddles a block boundary
+    const size_t bi = pos / bs;
+    if (bi >= blocks_.size()) return nullptr;  // past the end
+    char* blk = blocks_[bi].p;
+    if (blk == nullptr) return nullptr;  // an unwritten hole: must read zeros
+    return blk + within;
+  }
+
+  // Adopt `buf` as this file's block covering [offset, offset+count), so a
+  // write that would have been a memcpy becomes a pointer assignment.  Returns
+  // false -- having copied nothing -- unless the buffer is exactly one whole,
+  // still-unwritten block of the large class, in which case the caller falls
+  // back to an ordinary pwrite.  On success the buffer belongs to this file and
+  // the caller must not free it (see plaid::DonatableFree).
+  bool donate(void* buf, size_t count, off_t offset) {
+    if (!zerocopy_enabled()) return false;  // PLAID_MEMORY_ZEROCOPY=0
+    if (buf == nullptr || count == 0) return false;
+    if ((uintptr_t)buf % O_DIRECT_MEMORY_ALIGNMENT != 0) return false;
+    if (count != kLargeBlock || (size_t)offset % kLargeBlock != 0) return false;
+
+    std::unique_lock<std::shared_mutex> lk(mu_);
+    if (!block_size_fixed_) {
+      block_size_ = kLargeBlock;
+      block_size_fixed_ = true;
+    } else if (block_size_ != kLargeBlock) {
+      return false;
+    }
+    const size_t bi = (size_t)offset / kLargeBlock;
+    if (bi < blocks_.size() && blocks_[bi].p != nullptr) return false;
+    if (bi >= blocks_.size()) blocks_.resize(bi + 1);
+    // Adopted buffers skip the slab pool, so they have to be charged against
+    // the same cap or memory mode could sail straight past it.
+    BlockPool::instance().note_adopted(kLargeBlock, name_.c_str());
+    g_file_bytes.fetch_add(kLargeBlock, std::memory_order_relaxed);
+    blocks_[bi] = Block{(char*)buf, true};
+    g_donated_bytes.fetch_add(kLargeBlock, std::memory_order_relaxed);
+    size_ = std::max(size_, (size_t)offset + count);
+    return true;
   }
 
   ssize_t pwrite(const void* buf, size_t count, off_t offset) {
     if (count == 0) return 0;
-    const size_t first = (size_t)offset / kBlockSize;
-    const size_t last = ((size_t)offset + count - 1) / kBlockSize;
 
+    size_t bs;
     // Materialize everything this request needs in one exclusive pass, so the
     // copy below -- and every concurrent writer to blocks that already exist --
     // only ever contends on the shared side.
     {
       std::unique_lock<std::shared_mutex> lk(mu_);
-      if (last >= blocks_.size()) blocks_.resize(last + 1, nullptr);
+      if (!block_size_fixed_) {
+        // The engine writes a whole chunk at a chunk-aligned offset; that
+        // shape, and only that shape, earns the large class.  Everything else
+        // -- BucketWriter's sub-chunk writev appends, the cut seams, a
+        // single-element push_back -- keeps the small one.
+        block_size_ =
+            (count >= kLargeBlock && (size_t)offset % kLargeBlock == 0)
+                ? kLargeBlock
+                : kSmallBlock;
+        block_size_fixed_ = true;
+      }
+      bs = block_size_;
+      const size_t first = (size_t)offset / bs;
+      const size_t last = ((size_t)offset + count - 1) / bs;
+      if (last >= blocks_.size()) blocks_.resize(last + 1);
       for (size_t bi = first; bi <= last; bi++) {
-        if (blocks_[bi] != nullptr) continue;
+        if (blocks_[bi].p != nullptr) continue;
         // A write covering a whole block overwrites every byte of it, so the
         // zero-fill can be skipped -- the common case, since the engine writes
         // whole CHUNK_SIZE runs at aligned offsets.
-        const size_t bstart = bi * kBlockSize;
+        const size_t bstart = bi * bs;
         const bool covers = (size_t)offset <= bstart &&
-                            bstart + kBlockSize <= (size_t)offset + count;
-        blocks_[bi] = BlockPool::instance().alloc(name_.c_str(), !covers);
+                            bstart + bs <= (size_t)offset + count;
+        blocks_[bi] =
+            Block{BlockPool::instance().alloc(bs, name_.c_str(), !covers),
+                  false};
       }
       size_ = std::max(size_, (size_t)offset + count);
     }
@@ -193,23 +317,37 @@ class MemFile {
     std::shared_lock<std::shared_mutex> lk(mu_);
     while (done < count) {
       const size_t pos = (size_t)offset + done;
-      const size_t within = pos % kBlockSize;
-      const size_t n = std::min(count - done, kBlockSize - within);
-      std::memcpy(blocks_[pos / kBlockSize] + within, in + done, n);
+      const size_t within = pos % bs;
+      const size_t n = std::min(count - done, bs - within);
+      std::memcpy(blocks_[pos / bs].p + within, in + done, n);
       done += n;
     }
+    g_copied_bytes.fetch_add(count, std::memory_order_relaxed);
     return (ssize_t)count;
   }
 
   // Shrinking frees the blocks past the new end; growing is sparse, so it only
   // moves the recorded size and lets the blocks materialize on write.
+  //
+  // "Frees" is conditional.  While any descriptor is open on this file a reader
+  // may be holding a pointer directly into one of these blocks, so they are
+  // retired instead and returned when the file itself dies.  With no descriptor
+  // open nobody can hold such a pointer and they go back at once -- the common
+  // case, since open(O_TRUNC) on a reused prefix runs before its own descriptor
+  // is installed.
   int truncate(off_t length) {
     std::unique_lock<std::shared_mutex> lk(mu_);
     const size_t len = (size_t)length;
-    const size_t keep = (len + kBlockSize - 1) / kBlockSize;
+    const size_t keep = (len + block_size_ - 1) / block_size_;
+    const bool may_be_borrowed = open_fds_.load(std::memory_order_relaxed) > 0;
     for (size_t i = keep; i < blocks_.size(); i++) {
-      BlockPool::instance().release(blocks_[i]);
-      blocks_[i] = nullptr;
+      if (blocks_[i].p == nullptr) continue;
+      if (may_be_borrowed) {
+        retired_.push_back(blocks_[i]);
+        blocks_[i] = Block{};
+      } else {
+        release_block(blocks_[i]);
+      }
     }
     if (keep < blocks_.size()) blocks_.resize(keep);
     size_ = len;
@@ -224,8 +362,32 @@ class MemFile {
   }
 
  private:
+  // A donated block came from a writer's aligned_alloc rather than the slab
+  // pool, so it goes back with free() and its bytes are un-charged by hand.
+  struct Block {
+    char* p = nullptr;
+    bool donated = false;
+  };
+
+  void release_block(Block& b) {
+    if (b.p == nullptr) return;
+    if (b.donated) {
+      g_file_bytes.fetch_sub(block_size_, std::memory_order_relaxed);
+      BlockPool::instance().note_released(block_size_);
+      std::free(b.p);
+    } else {
+      BlockPool::instance().release(block_size_, b.p);
+    }
+    b = Block{};
+  }
+
   mutable std::shared_mutex mu_;
-  std::vector<char*> blocks_;
+  std::vector<Block> blocks_;
+  // Blocks dropped by truncate() while a descriptor was open; see truncate().
+  std::vector<Block> retired_;
+  size_t block_size_ = kSmallBlock;
+  bool block_size_fixed_ = false;
+  std::atomic<size_t> open_fds_{0};
   size_t size_ = 0;
   std::string name_;
 };
@@ -289,6 +451,113 @@ size_t resident_bytes() {
   return g_file_bytes.load(std::memory_order_relaxed);
 }
 
+std::atomic<int>& zerocopy_slot() {
+  static std::atomic<int>* s = new std::atomic<int>(-1);  // -1 = unresolved
+  return *s;
+}
+
+bool zerocopy_enabled() {
+  std::atomic<int>& slot = zerocopy_slot();
+  int v = slot.load(std::memory_order_relaxed);
+  if (v < 0) {
+    const char* e = getenv("PLAID_MEMORY_ZEROCOPY");
+    v = (e != nullptr && e[0] == '0' && e[1] == '\0') ? 0 : 1;
+    slot.store(v, std::memory_order_relaxed);
+  }
+  return v != 0;
+}
+
+void set_zerocopy_enabled(bool on) {
+  zerocopy_slot().store(on ? 1 : 0, std::memory_order_relaxed);
+}
+
+namespace {
+
+bool verify_borrow_enabled() {
+  static const bool on = [] {
+    const char* e = getenv("PLAID_VERIFY_BORROW");
+    return e != nullptr && !(e[0] == '0' && e[1] == '\0');
+  }();
+  return on;
+}
+
+uint64_t fold(const char* p, size_t n) {
+  uint64_t h = 1469598103934665603ULL;  // FNV-1a over 8-byte words, then tail
+  size_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    uint64_t w;
+    std::memcpy(&w, p + i, 8);
+    h = (h ^ w) * 1099511628211ULL;
+  }
+  for (; i < n; i++) h = (h ^ (unsigned char)p[i]) * 1099511628211ULL;
+  return h;
+}
+
+struct Loan {
+  size_t len;
+  uint64_t hash;
+  size_t refs;
+};
+
+std::mutex& loans_mu() {
+  static std::mutex* m = new std::mutex();
+  return *m;
+}
+std::unordered_map<const void*, Loan>& loans() {
+  static auto* m = new std::unordered_map<const void*, Loan>();
+  return *m;
+}
+
+}  // namespace
+
+void release_borrow(const void* p) {
+  if (!verify_borrow_enabled() || p == nullptr) return;
+  std::lock_guard<std::mutex> lk(loans_mu());
+  auto it = loans().find(p);
+  if (it == loans().end()) return;  // never lent, or already checked
+  if (--it->second.refs > 0) return;
+  const uint64_t now = fold((const char*)p, it->second.len);
+  CHECK_EQ(now, it->second.hash)
+      << "vio: a borrowed buffer was modified while on loan (" << it->second.len
+      << " bytes at " << p
+      << ").  A borrowed buffer IS the memory-backed file, so this corrupted "
+         "the source sequence.  Set allow_borrow=false on the reader whose "
+         "consumer writes into the buffers it is handed.";
+  loans().erase(it);
+}
+
+char* borrow(int fd, size_t len, off_t off) {
+  if (!zerocopy_enabled()) return nullptr;
+  if (!is_virtual_fd(fd)) return nullptr;  // a real file: nothing to borrow
+  char* p = lookup_fd(fd)->borrow(len, off);
+  if (p != nullptr)
+    g_borrowed_bytes.fetch_add(len, std::memory_order_relaxed);
+  else
+    g_declined_bytes.fetch_add(len, std::memory_order_relaxed);
+  if (p != nullptr && verify_borrow_enabled()) {
+    std::lock_guard<std::mutex> lk(loans_mu());
+    auto it = loans().find(p);
+    if (it == loans().end())
+      loans().emplace(p, Loan{len, fold(p, len), 1});
+    else
+      it->second.refs++;
+  }
+  return p;
+}
+
+size_t borrowed_bytes() {
+  return g_borrowed_bytes.load(std::memory_order_relaxed);
+}
+size_t declined_bytes() {
+  return g_declined_bytes.load(std::memory_order_relaxed);
+}
+size_t donated_bytes() {
+  return g_donated_bytes.load(std::memory_order_relaxed);
+}
+size_t copied_bytes() {
+  return g_copied_bytes.load(std::memory_order_relaxed);
+}
+
 void release_prefix(const std::string& prefix) {
   std::lock_guard<std::mutex> lk(registry_mu());
   for (auto it = registry().begin(); it != registry().end();) {
@@ -329,6 +598,7 @@ int open(const char* path, int flags, mode_t mode) {
   // the file separately, so honouring O_TRUNC here is what keeps a reused
   // prefix from inheriting the previous run's blocks.
   if (flags & O_TRUNC) f->truncate(0);
+  f->ref_fd();
   return install_fd(std::move(f));
 }
 
@@ -337,6 +607,7 @@ int close(int fd) {
   const int slot = fd & ~kVirtualFdBit;
   std::lock_guard<std::mutex> lk(fdtab_mu());
   CHECK_LT((size_t)slot, fdtab().size()) << "vio: close of bad virtual fd " << fd;
+  if (fdtab()[slot] != nullptr) fdtab()[slot]->unref_fd();
   fdtab()[slot].reset();
   fdfree().push_back(slot);
   return 0;
@@ -456,7 +727,16 @@ int Ring::submit() {
           c->res = (int)pread(s.fd, s.buf, s.len, s.off);
           break;
         case Sqe::Op::kWrite:
-          c->res = (int)pwrite(s.fd, s.buf, s.len, s.off);
+          // A donatable write whose buffer happens to be exactly one whole,
+          // unwritten block becomes a pointer assignment; anything else falls
+          // back to the copy.  The completion tells the writer which happened,
+          // since only in the first case must it not free the buffer.
+          if (s.donate && lookup_fd(s.fd)->donate(s.buf, s.len, s.off)) {
+            c->donated = true;
+            c->res = (int)s.len;
+          } else {
+            c->res = (int)pwrite(s.fd, s.buf, s.len, s.off);
+          }
           break;
         case Sqe::Op::kWritev: {
           // Gathered now, not lazily: BucketWriter recycles the request (and

@@ -1408,7 +1408,7 @@ chunk_seq force(const D& d, const std::string& result_prefix) {
       ++it;
     }
     memset((char*)out + n * sizeof(R), 0, CHUNK_SIZE - n * sizeof(R));
-    writer.Push(std::shared_ptr<R>(out, free), CHUNK_SIZE / sizeof(R),
+    writer.Push(std::shared_ptr<R>(out, DonatableFree<R>{}), CHUNK_SIZE / sizeof(R),
                 drive_of[ci], slot_of[ci] * CHUNK_SIZE);
   });
 
@@ -1533,7 +1533,8 @@ chunk_seq filter(const D& d, const std::string& result_prefix, Pred pred) {
     for (size_t k = 0; k < num_out; k++) {
       const size_t dr = drive_dist(rng);
       const size_t slot = next_slot[dr]++;
-      writer.Push(std::shared_ptr<R>(obuf[k], free), CHUNK_SIZE / sizeof(R), dr,
+      writer.Push(std::shared_ptr<R>(obuf[k], DonatableFree<R>{}),
+                  CHUNK_SIZE / sizeof(R), dr,
                   slot * CHUNK_SIZE);
       out_chunks.push_back(
           {filenames[dr], slot * CHUNK_SIZE, CHUNK_SIZE, out_idx++});
@@ -1554,7 +1555,7 @@ chunk_seq filter(const D& d, const std::string& result_prefix, Pred pred) {
     memcpy(buf, carry.data(), carry.size() * sizeof(R));
     const size_t dr = drive_dist(rng);
     const size_t slot = next_slot[dr]++;
-    writer.Push(std::shared_ptr<R>(buf, free), CHUNK_SIZE / sizeof(R), dr,
+    writer.Push(std::shared_ptr<R>(buf, DonatableFree<R>{}), CHUNK_SIZE / sizeof(R), dr,
                 slot * CHUNK_SIZE);
     out_chunks.push_back({filenames[dr], slot * CHUNK_SIZE,
                           carry.size() * sizeof(R), out_idx++});
