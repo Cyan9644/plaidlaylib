@@ -118,13 +118,19 @@ int main(int argc, char* argv[]) {
   std::cout << "Selecting k=" << k << " (0-based) of " << n << "..."
             << std::flush;
   t0 = Clock::now();
-  // kth_smallest_fast routes every element to its bucket in one ChunkPartition
-  // pass instead of a histogram pass followed by a separate pack, avoiding
-  // the plain recursion's per-batch io_uring ring churn (thousands of
-  // ring create/destroy cycles at multi-billion-element n, which can outrun
-  // RLIMIT_MEMLOCK's asynchronous reclaim on teardown -- see
-  // chunk_kth_smallest.h's file comment).
-  uint64_t result = plaid::kth_smallest_fast<uint64_t>(seq, (long)k);
+  // TEMPORARY DEBUG (chasing the kth_smallest SIGSEGV at multi-billion-
+  // element n -- see the plan): KTH_SMALLEST_USE_PARTITION=1 switches to
+  // kth_smallest_fast_partition (ChunkPartition-based top-level split, one
+  // reader/one writer for the whole input) instead of the default
+  // kth_smallest_fast (ChunkHistogramByKey + pack_value, whose pack_value
+  // call is built on DensePack -- a fresh ChunkSequenceReader every 128
+  // input chunks). Comparing which variant crashes (or doesn't) at the same
+  // n isolates whether the bug is in DensePack's per-batch reader churn or
+  // in logic both variants share. Remove this switch once the real fix
+  // lands.
+  uint64_t result = getenv("KTH_SMALLEST_USE_PARTITION")
+                        ? plaid::kth_smallest_fast_partition<uint64_t>(seq, (long)k)
+                        : plaid::kth_smallest_fast<uint64_t>(seq, (long)k);
   const double select_s = elapsed(t0);
   std::cout << " done\n";
 

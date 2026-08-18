@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <functional>
+#include <iostream>
 #include <random>
 
 #include "ChunkSequence/Primitives/secondary_primitives.h"
@@ -114,13 +115,20 @@ T kth_smallest(chunk_seq& seq, long k, Less less1 = {}) {
   return result;
 }
 
-// Superseded by the non-recursive kth_smallest_fast below (materializes the
-// winning bucket into DRAM and finishes with parlay::kth_smallest instead of
-// recursing out-of-core).  Kept for reference, not compiled.
-#if 0
-// randomized ~O(n) algorithm
+// TEMPORARY DEBUG (see plan: chasing the kth_smallest SIGSEGV at
+// multi-billion-element n): re-enabled alongside kth_smallest_fast below as a
+// second entry point selectable via KTH_SMALLEST_USE_PARTITION=1
+// (kth_smallest.cpp).  Unlike kth_smallest_fast's ChunkHistogramByKey +
+// pack_value first pass (built on DensePack, which spins up a fresh
+// ChunkSequenceReader every 128 input chunks -- ~390 reader lifecycles for a
+// ~50000-chunk top-level input), this variant's top-level split is ONE
+// ChunkPartition pass (single reader + single writer for the whole input),
+// then recurses into the much-smaller plain kth_smallest.  If this variant
+// does NOT crash where kth_smallest_fast does at the same n, that isolates
+// the bug to DensePack's per-batch reader churn rather than the pivot/
+// bucketing logic both variants share.
 template <typename T, typename Less = std::less<>>
-T kth_smallest_fast(chunk_seq& seq, long k, Less less1 = {}) {
+T kth_smallest_fast_partition(chunk_seq& seq, long k, Less less1 = {}) {
   size_t n = 0;
   for (size_t r = 0; r < seq.chunks.size(); r++) {
     n += seq.chunks[r]
@@ -203,10 +211,14 @@ T kth_smallest_fast(chunk_seq& seq, long k, Less less1 = {}) {
   // chunk_convex_hull.h's UpperHull, which made the identical trade for its
   // own per-level split.  offsets/id below then come for free from each
   // bucket's own chunk count (size<T>), no extra I/O.
+  std::cerr << "[kth_debug] partition: n=" << n << " ChunkPartition start\n"
+            << std::flush;
   const std::string part_prefix =
       "kth_next_" + std::to_string(kth_smallest_prefix_counter().fetch_add(1));
   std::vector<chunk_seq> buckets = plaid::ChunkPartition<T>(
       seq, sample_size + 1, part_prefix, key_fn);
+  std::cerr << "[kth_debug] partition: n=" << n << " ChunkPartition done\n"
+            << std::flush;
 
   parlay::sequence<size_t> sums(sample_size + 1);
   for (size_t b = 0; b < (size_t)sample_size + 1; b++)
@@ -216,20 +228,28 @@ T kth_smallest_fast(chunk_seq& seq, long k, Less less1 = {}) {
   auto [offsets, total] = parlay::scan(sums);
   auto id =
       std::upper_bound(offsets.begin(), offsets.end(), k) - offsets.begin() - 1;
+  std::cerr << "[kth_debug] partition: n=" << n << " winning bucket " << id
+            << " size=" << sums[id] << " (n/32~=" << n / 32 << ")\n"
+            << std::flush;
 
   // recur on much smaller set, adjusting k as needed
   T result = kth_smallest<T>(buckets[id], k - offsets[id], less1);
   // buckets[id] (and every sibling bucket) has now been fully consumed --
   // free the whole partition's shared files.
   kth_smallest_cleanup_prefix(part_prefix);
+  std::cerr << "[kth_debug] partition: n=" << n << " done\n" << std::flush;
   return result;
 }
-#endif
 
 // Copy of kth_smallest that does not recurse out-of-core: once the winning
 // bucket is packed, it is materialized into DRAM and finished with
 // parlay::kth_smallest (in-memory selection) instead of another out-of-core
 // recursion level.
+//
+// TEMPORARY DEBUG (see plan: chasing the kth_smallest SIGSEGV at
+// multi-billion-element n): std::cerr brackets around each stage, so a
+// crash's last printed line pins down the faulting stage without needing
+// symbols.  Remove once the real fix lands.
 template <typename T, typename Less = std::less<>>
 T kth_smallest_fast(chunk_seq& seq, long k, Less less1 = {}) {
   size_t n = 0;
@@ -239,6 +259,8 @@ T kth_smallest_fast(chunk_seq& seq, long k, Less less1 = {}) {
                      // the number of total elements in the sequence
   }
   n /= sizeof(T);
+  std::cerr << "[kth_debug] fast: n=" << n << " k=" << k << " start\n"
+            << std::flush;
 
   if (n < 1536) {  // 1536 elements is the point at which we say we can
                    // materialize and sort directly
@@ -278,6 +300,8 @@ T kth_smallest_fast(chunk_seq& seq, long k, Less less1 = {}) {
   });
 
   // we now have the values of the pivots in memory
+  std::cerr << "[kth_debug] fast: n=" << n << " pivot sampling done\n"
+            << std::flush;
 
   // take the oversampleth pivots
   pivots = parlay::sort(pivots, less2);
@@ -289,25 +313,46 @@ T kth_smallest_fast(chunk_seq& seq, long k, Less less1 = {}) {
   parlay::internal::heap_tree ss(seconds);
   auto key_fn = [&](T e) { return (size_t)ss.rank(e, less1); };
 
+  std::cerr << "[kth_debug] fast: n=" << n << " ChunkHistogramByKey start\n"
+            << std::flush;
   auto sums = plaid::ChunkHistogramByKey<T>(seq, sample_size + 1, key_fn);
+  std::cerr << "[kth_debug] fast: n=" << n << " ChunkHistogramByKey done\n"
+            << std::flush;
 
   // find which bucket k belongs in, and pack the keys in that bucket into next
   auto [offsets, total] = parlay::scan(sums);
   auto id =
       std::upper_bound(offsets.begin(), offsets.end(), k) - offsets.begin() - 1;
+  std::cerr << "[kth_debug] fast: n=" << n << " winning bucket " << id
+            << " size=" << sums[id] << " (n/32~=" << n / 32 << ")\n"
+            << std::flush;
 
   // Pack survivors straight off seq's values (single read pass, no selector).
   const std::string next_prefix = "next_" + std::to_string(n);
+  std::cerr << "[kth_debug] fast: n=" << n << " pack_value start\n"
+            << std::flush;
   auto next = plaid::pack_value<T>(
       seq, next_prefix, [&, id](T e) { return key_fn(e) == (size_t)id; });
+  std::cerr << "[kth_debug] fast: n=" << n << " pack_value done, next size="
+            << plaid::size<T>(next) << "\n"
+            << std::flush;
 
   // Instead of recursing out-of-core again, materialize the winning bucket
   // into DRAM and finish with parlay::kth_smallest's in-memory selection.
   // parlay::kth_smallest returns an iterator into next_mem, not the value.
+  std::cerr << "[kth_debug] fast: n=" << n << " materialize start\n"
+            << std::flush;
   auto next_mem = plaid::materialize<T>(next);
+  std::cerr << "[kth_debug] fast: n=" << n
+            << " materialize done, next_mem.size()=" << next_mem.size()
+            << "\n"
+            << std::flush;
   T result = *parlay::kth_smallest(next_mem, (size_t)(k - offsets[id]), less1);
+  std::cerr << "[kth_debug] fast: n=" << n << " in-mem kth_smallest done\n"
+            << std::flush;
   // `next` is fully consumed now -- unlink its scratch.
   kth_smallest_cleanup_prefix(next_prefix);
+  std::cerr << "[kth_debug] fast: n=" << n << " done\n" << std::flush;
   return result;
 }
 

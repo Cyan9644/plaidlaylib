@@ -162,11 +162,12 @@ EXAMPLES = [
      "data_globs": ["rk_*"]},
 
     # kth_smallestExample sweeps n; the plotted time is the selection itself
-    # (input build excluded).  plaid::kth_smallest (the driver's slow path)
-    # recurses via plaid::pack_value into a fresh "next_<n>"-prefixed
-    # chunk_seq per level and never cleans those up itself, so "next_*" must
-    # stay in data_globs or every sweep point strands its recursion's
-    # intermediates (the same failure mode that once bit count_sort's globs).
+    # (input build excluded).  The driver calls plaid::kth_smallest_fast,
+    # which packs the winning bucket into a "next_<n>"-prefixed chunk_seq via
+    # plaid::pack_value and unlinks it itself once consumed -- "next_*" stays
+    # in data_globs as a harmless belt-and-suspenders sweep between points,
+    # not because the algorithm itself leaves anything behind (the same glob
+    # family that once bit count_sort's globs when it was actually needed).
     {"name": "kth_smallest", "target": "bin/kth_smallestExample",
      "cols": ["n", "k", "build_s", "select_s", "inmem_select_s", "result",
               "throughput_gb_s"],
