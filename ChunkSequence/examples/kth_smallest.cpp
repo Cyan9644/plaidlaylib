@@ -118,7 +118,13 @@ int main(int argc, char* argv[]) {
   std::cout << "Selecting k=" << k << " (0-based) of " << n << "..."
             << std::flush;
   t0 = Clock::now();
-  uint64_t result = plaid::kth_smallest<uint64_t>(seq, (long)k);
+  // kth_smallest_fast routes every element to its bucket in one ChunkPartition
+  // pass instead of a histogram pass followed by a separate pack, avoiding
+  // the plain recursion's per-batch io_uring ring churn (thousands of
+  // ring create/destroy cycles at multi-billion-element n, which can outrun
+  // RLIMIT_MEMLOCK's asynchronous reclaim on teardown -- see
+  // chunk_kth_smallest.h's file comment).
+  uint64_t result = plaid::kth_smallest_fast<uint64_t>(seq, (long)k);
   const double select_s = elapsed(t0);
   std::cout << " done\n";
 

@@ -218,8 +218,13 @@ mismatch — a differential test in the spirit of the benchmarks' `agree`.
   finishes with one `materialize` + `std::nth_element`.  A second entry point,
   `kth_smallest_fast`, routes every element to its bucket in one
   `ChunkPartition` pass instead of a histogram pass followed by a separate
-  pack — fewer io_uring rings stood up per recursion level — and is exercised
-  by `kthSmallestTest` but not (yet) by the driver.  Baseline: upstream
+  pack — fewer io_uring rings stood up per recursion level — and is what the
+  driver calls; the plain (non-`_fast`) recursion's per-batch ring churn (a
+  fresh `DensePack` batch reader per 128 chunks) was found to blow past
+  `RLIMIT_MEMLOCK`'s asynchronous reclaim on teardown at multi-billion-element
+  n, crashing with SIGSEGV — `kth_smallest_fast` avoids this by never tearing
+  down rings mid-recursion-level.  Both entry points are exercised by
+  `kthSmallestTest`.  Baseline: upstream
   `parlaylib-examples/kth_smallest.h`, cross-checked by the selected scalar
   (keys are distinct, so the k-th smallest is unique).  Recovered from
   `9c96e4a`'s `examples/external/ExternalKthSmallest.h`.  Emits

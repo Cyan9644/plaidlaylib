@@ -351,6 +351,17 @@ inline size_t GetProcessInplaceBudgetBytes() {
   return budget;
 }
 
+// process_inplace pipelines 3 Stage objects per worker (previous/current/next,
+// see its file comment) concurrently, each holding up to one bucket's full
+// `buf`, plus (for a multi-run bucket) an equal-sized `compact` copy -- so a
+// wave whose *nominal* byte sum equals the budget can peak at ~3x that in
+// real RSS. process_inplace_budgeted's wave-packing must divide the budget it
+// packs against by this multiplier so waves are actually sized to real peak
+// RSS, not the raw bucket-byte sum; applied unconditionally (including under
+// an explicit PROCESS_INPLACE_BUDGET_BYTES override) since an unaccounted 3x
+// is a correctness/safety issue, not a tunable.
+inline constexpr size_t kProcessInplacePipelineMultiplier = 3;
+
 // Budget-checked, wave-batched process_inplace: instead of requiring every
 // sequence in `seqs` to already be pre-sized to fit DRAM (process_inplace's
 // assumption), greedily packs consecutive sequences into DRAM-budget-sized
@@ -382,6 +393,9 @@ void process_inplace_budgeted(std::vector<chunk_seq>& seqs, Processor processor,
                               size_t budget_bytes = 0) {
   if (seqs.empty()) return;
   if (budget_bytes == 0) budget_bytes = GetProcessInplaceBudgetBytes();
+  // Pack waves against real peak RSS, not raw bucket bytes -- see
+  // kProcessInplacePipelineMultiplier's comment.
+  budget_bytes = std::max<size_t>(1, budget_bytes / kProcessInplacePipelineMultiplier);
 
   std::vector<size_t> nb(seqs.size(), 0);
   for (size_t i = 0; i < seqs.size(); i++)

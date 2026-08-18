@@ -186,6 +186,12 @@ def run_summary(bellman_ford_n, extra_ssd_args, clear_glob, clear_enabled, warni
         inmem_col = entry["inmem_col"]
         print(f"\n######## summary: {label} ({name}) ########", flush=True)
 
+        # fft quantizes its problem size to the largest power of two <= n
+        # (choose_dims), so the default SHRINK=0.85 per-retry factor can
+        # leave every retry inside the same power-of-two bucket -- identical
+        # A/B dims, identical failure. Halving guarantees each retry crosses
+        # into a strictly smaller bucket.
+        shrink = 0.5 if name == "fft" else SHRINK
         scale = 1.0
         got_row = None
         for attempt in range(1, max_attempts + 1):
@@ -211,7 +217,7 @@ def run_summary(bellman_ford_n, extra_ssd_args, clear_glob, clear_enabled, warni
                 # slightly exceeds a budget estimate) -- shrink and retry
                 # the same as any other cliff miss, rather than giving up
                 # on the first attempt.
-                scale *= SHRINK
+                scale *= shrink
                 continue
 
             row = dict(zip(entry["cols"], fields))
@@ -223,7 +229,7 @@ def run_summary(bellman_ford_n, extra_ssd_args, clear_glob, clear_enabled, warni
                 print(f"  !!! {w}", flush=True)
                 if attempt < max_attempts:
                     warnings.append(w)
-                scale *= SHRINK
+                scale *= shrink
                 continue
 
             got_row = row
@@ -273,17 +279,16 @@ def plot_summary(rows, path):
     fig, ax = plt.subplots(figsize=(max(10, 0.55 * len(labels)), 6.5),
                            constrained_layout=True)
     ax.bar(x - width / 2, [1.0] * len(labels), width,
-          label="in-mem parlaylib (DRAM)", color=plot_style.PALETTE["green"])
+          label="ParlayLib DRAM", color=plot_style.PALETTE["green"])
     ax.bar(x + width / 2, ratios, width,
-          label="out-of-core (plaid)", color=plot_style.PALETTE["blue"])
+          label="PLaID external", color=plot_style.PALETTE["blue"])
     ax.axhline(1.0, color=plot_style.PALETTE["red"], linestyle="--",
               linewidth=1.0, zorder=0)
 
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=45, ha="right")
-    ax.set_ylabel("Relative Performance (out-of-core time / in-mem time)")
-    ax.set_title("plaid primitives/examples vs in-memory parlaylib\n"
-                 "(each point: largest n where the in-mem baseline still fits DRAM)")
+    ax.set_ylabel("Relative Performance")
+    ax.set_title("plaid primitives/examples vs parlaylib")
     ax.grid(True, axis="y")
     ax.legend()
 

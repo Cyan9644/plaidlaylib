@@ -402,9 +402,13 @@ inline void stage2_cols(chunk_seq& s1, const Dims& d,
   // NBUF buffers, split into G gather rings + S scatter rings.  Cap by budget.
   // Budget off *available* memory, not total installed RAM -- on a box with
   // other resident memory pressure, phys overstates what's actually free and
-  // this stage OOMs instead of shrinking to fit.
+  // this stage OOMs instead of shrinking to fit.  No fixed ceiling (unlike
+  // this function's earlier 8 GiB cap): a fixed ceiling doesn't shrink on a
+  // box with less real free RAM than that, which is exactly the OOM this
+  // budget exists to avoid -- phys/8 alone tracks the box's actual headroom,
+  // matching GetProcessInplaceBudgetBytes's (sort.h) no-fixed-ceiling style.
   const size_t phys = AvailablePhysicalMemoryBytes();
-  size_t budget = std::min<size_t>(size_t(8) << 30, phys / 8);
+  size_t budget = phys / 8;
   const bool explicit_budget = getenv("FFT_STAGE2_DRAM_BUDGET_BYTES") != nullptr;
   if (explicit_budget) budget = std::stoull(getenv("FFT_STAGE2_DRAM_BUDGET_BYTES"));
   if (!explicit_budget) {
@@ -416,12 +420,17 @@ inline void stage2_cols(chunk_seq& s1, const Dims& d,
     // resident here; and every parlay worker thread that has executed a
     // stage-2 column FFT keeps two persistent thread_local B-sized scratch
     // buffers (the consumer's `col` plus fft_inplace's own recursion
-    // scratch) that never shrink for the life of the thread.  An explicit
-    // env override is trusted as-is and skips this reservation.
+    // scratch) that never shrink for the life of the thread.  These are
+    // themselves estimates (e.g. the reader pool may not always reach its
+    // full buf_queue_sz, or may exceed the assumed per-worker scratch count),
+    // so a 1.5x safety margin is applied on top -- cheap insurance against a
+    // hard OOM-kill, at the cost of a smaller nbuf/less pipelining depth.
+    // An explicit env override is trusted as-is and skips all of this.
     const size_t reader_pool_headroom = 512 * CHUNK_SIZE;
     const size_t worker_scratch_headroom =
         (size_t)parlay::num_workers() * 2 * B * sizeof(cd);
-    const size_t headroom = reader_pool_headroom + worker_scratch_headroom;
+    const size_t headroom =
+        (reader_pool_headroom + worker_scratch_headroom) * 3 / 2;
     budget = budget > headroom ? budget - headroom : tile_bytes * 2;
   }
   size_t nbuf = std::min<size_t>(18, std::max<size_t>(1, budget / tile_bytes));
