@@ -1,0 +1,13 @@
+example primes at size=1 TiB (n=1099511627776): exited -6 (killed by signal 6 (crash)) — point dropped
+example kmp at size=256 GiB (n=274877906944): exited -6 (killed by signal 6 (crash)) — point dropped
+example kmp at size=1 TiB (n=1099511627776): exited -6 (killed by signal 6 (crash)) — point dropped
+example rabin_karp at size=256 GiB (n=274877906944): exited -6 (killed by signal 6 (crash)) — point dropped
+example rabin_karp at size=1 TiB (n=1099511627776): exited -6 (killed by signal 6 (crash)) — point dropped
+example convex_hull at size=256 GiB (n=8589934592): exited -6 (killed by signal 6 (crash)) — point dropped
+example convex_hull at size=1 TiB (n=34359738368): exited -6 (killed by signal 6 (crash)) — point dropped
+example bigint_add at size=256 GiB (n=17179869184): exited -6 (killed by signal 6 (crash)) — point dropped
+example bigint_add at size=1 TiB (n=68719476736): exited -6 (killed by signal 6 (crash)) — point dropped
+example linefit at size=256 GiB (n=17179869184): exited -6 (killed by signal 6 (crash)) — point dropped
+example linefit at size=1 TiB (n=68719476736): exited -6 (killed by signal 6 (crash)) — point dropped
+example samplesort at size=256 GiB (n=34359738368): exited -6 (killed by signal 6 (crash)) — point dropped
+example samplesort at size=1 TiB (n=137438953472): exited -6 (killed by signal 6 (crash)) — point dropped
