@@ -19,9 +19,15 @@
 // scalar, so unlike KMP/Rabin-Karp there is nothing to read back
 // element-wise -- one equality check suffices; keys are distinct, so the
 // k-th smallest is unique and the two substrates must agree exactly).
-// Budget: half of physical RAM, override via EXAMPLE_INMEM_BUDGET_BYTES; when
-// skipped the CSV field is left blank so the plotted in-mem line stops at the
-// RAM cliff (as in KMP/Rabin-Karp and delayed_compare).
+// Budget: AvailablePhysicalMemoryBytes() (real headroom right now, not raw
+// installed RAM -- see its comment in utils/file_utils.h; matches sort.h's
+// GetProcessInplaceBudgetBytes), override via EXAMPLE_INMEM_BUDGET_BYTES;
+// when skipped the CSV field is left blank so the plotted in-mem line stops
+// at the RAM cliff (as in KMP/Rabin-Karp and delayed_compare).  Using raw
+// installed RAM here previously let this budget pass at an n whose ~195 GB
+// keys_mem allocation had no real headroom behind it (the out-of-core input
+// just built at that same n already occupies a comparable footprint),
+// crashing with SIGSEGV rather than skipping the baseline.
 //
 //   usage: kth_smallestExample [global --flags] [n] [k]
 //     n   number of keys (default 1e6)
@@ -97,13 +103,16 @@ int main(int argc, char* argv[]) {
   // RAM budget for the in-memory parlaylib baseline (as in delayed_compare and
   // the other examples): its resident set is the n-key input (8n bytes) plus
   // the per-recursion bucket ids (~n bytes) and packed survivors, with
-  // sort/pack roughly doubling the top level -- call it ~16n.
-  const size_t phys =
-      (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
-  size_t budget = phys;
+  // sort/pack roughly doubling the top level -- call it ~16n.  Budget off
+  // *available* memory (see the file comment), not raw installed RAM -- see
+  // sort.h's GetProcessInplaceBudgetBytes for the same fix applied earlier.
+  size_t budget = AvailablePhysicalMemoryBytes();
   if (const char* e = getenv("EXAMPLE_INMEM_BUDGET_BYTES"))
     budget = std::stoull(e);
   const bool inmem_ok = n <= budget / 16;
+  std::cerr << "[kth_debug] main: budget=" << budget << " (" << to_gb(budget)
+            << " GB) inmem_ok=" << inmem_ok << "\n"
+            << std::flush;
 
   const std::string in_prefix = "kth_in";
 
@@ -144,9 +153,17 @@ int main(int argc, char* argv[]) {
   bool agree = true;
   double inmem_select_s = 0;
   if (inmem_ok) {
+    std::cerr << "[kth_debug] main: n=" << n << " in-mem tabulate start\n"
+              << std::flush;
     auto keys_mem = parlay::tabulate(n, key_at);  // parlay::sequence<uint64_t>
+    std::cerr << "[kth_debug] main: n=" << n
+              << " in-mem tabulate done, keys_mem.size()=" << keys_mem.size()
+              << "\n"
+              << std::flush;
     t0 = Clock::now();
     uint64_t result_mem = kth_smallest(keys_mem, (long)k);
+    std::cerr << "[kth_debug] main: n=" << n << " in-mem kth_smallest done\n"
+              << std::flush;
     inmem_select_s = elapsed(t0);
     std::cout << "in-mem parlaylib kth_smallest = " << result_mem << "   "
               << std::setprecision(4) << inmem_select_s << "s\n";
