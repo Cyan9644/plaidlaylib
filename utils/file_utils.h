@@ -15,6 +15,7 @@
 
 #include <cerrno>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <map>
@@ -93,6 +94,30 @@ struct FileInfo {
 void InitLogger();
 
 inline size_t GetFileOffset(int fd) { return lseek(fd, 0, SEEK_CUR); }
+
+// Bytes of RAM actually free for this process to use right now, as opposed to
+// total installed RAM (sysconf(_SC_PHYS_PAGES)*_SC_PAGE_SIZE), which on a
+// smaller/shared box overstates what's really available and lets memory
+// budgets computed from it OOM instead of degrading gracefully.  Reads
+// /proc/meminfo's "MemAvailable" (kernel's own free+reclaimable estimate,
+// present since Linux 3.14); falls back to the sysconf total if the file
+// can't be read (e.g. non-Linux).
+inline size_t AvailablePhysicalMemoryBytes() {
+  if (FILE* f = fopen("/proc/meminfo", "r")) {
+    char line[256];
+    size_t kb = 0;
+    bool found = false;
+    while (fgets(line, sizeof(line), f)) {
+      if (sscanf(line, "MemAvailable: %zu kB", &kb) == 1) {
+        found = true;
+        break;
+      }
+    }
+    fclose(f);
+    if (found) return kb * 1024;
+  }
+  return (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
+}
 
 // ============================================================================
 // Paths, alignment, drive list, raw read/write

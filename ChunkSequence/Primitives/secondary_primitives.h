@@ -709,7 +709,13 @@ parlay::sequence<size_t> ChunkHistogramByKey(const chunk_seq& seq,
         while (true) {
           auto [ptr, size, index] = reader.Poll();
           if (ptr == nullptr) break;
-          for (size_t k = 0; k < size; k++) h[(size_t)key_fn(ptr[k])]++;
+          for (size_t k = 0; k < size; k++) {
+            size_t j = (size_t)key_fn(ptr[k]);
+            CHECK(j < num_buckets)
+                << "ChunkHistogramByKey: bucket id " << j
+                << " out of range (num_buckets=" << num_buckets << ")";
+            h[j]++;
+          }
           reader.allocator.Free(ptr);
         }
         return h;

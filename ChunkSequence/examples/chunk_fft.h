@@ -400,13 +400,19 @@ inline void stage2_cols(chunk_seq& s1, const Dims& d,
   planB.init(B);  // shared read-only across workers
 
   // NBUF buffers, split into G gather rings + S scatter rings.  Cap by budget.
-  const size_t phys =
-      (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
+  // Budget off *available* memory, not total installed RAM -- on a box with
+  // other resident memory pressure, phys overstates what's actually free and
+  // this stage OOMs instead of shrinking to fit.
+  const size_t phys = AvailablePhysicalMemoryBytes();
   size_t budget = std::min<size_t>(size_t(8) << 30, phys / 8);
   if (const char* e = getenv("FFT_STAGE2_DRAM_BUDGET_BYTES"))
     budget = std::stoull(e);
   size_t nbuf = std::min<size_t>(18, std::max<size_t>(1, budget / tile_bytes));
-  nbuf = std::max<size_t>(nbuf, 4);  // need a few to pipeline
+  // 2 is the structural minimum (one gather ring's buffer + one scatter
+  // ring's buffer -- G/S below underflow below that); anything past 2 is a
+  // pipelining nicety the budget should be allowed to say no to, so this no
+  // longer force-floors to 4 regardless of budget the way it used to.
+  nbuf = std::max<size_t>(nbuf, 2);
   const size_t G = std::max<size_t>(1, (nbuf - 2) / 2);
   const size_t S = std::max<size_t>(1, (nbuf - 2) / 2);
   std::fprintf(

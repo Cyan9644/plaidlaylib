@@ -1116,8 +1116,9 @@ chunk_seq random_shuffle_method(chunk_seq& seq,
   size_t filer = n;
   n /= sizeof(T);
 
-  size_t min_sample_size =
-      std::max(1UL, 4 * parlay::num_workers() * filer / DRAM_SIZE);
+  size_t min_sample_size = std::max(
+      1UL,
+      4 * parlay::num_workers() * filer / AvailablePhysicalMemoryBytes());
   // size_t max_sample_size = std::max(1UL, std::min(n / sizeof(T), filer /
   // O_DIRECT_MULTIPLE));
   size_t max_sample_size =
@@ -1209,7 +1210,7 @@ chunk_seq random_shuffle_method(chunk_seq& seq,
   //    });
   auto seed = 42;
   parlay::random rng(seed);
-  plaid::process_inplace<T>(
+  plaid::process_inplace_budgeted<T>(
       externalSequenceVector, [&](size_t b, T* buf, size_t nelem) {
         auto shuffled = parlay::random_shuffle(
             parlay::make_slice(buf, buf + nelem), rng.fork(b));
@@ -1270,8 +1271,9 @@ class Permutation {
     }
     // FIXME: assuming no bucket is skewed to the point where it is 3 times the
     // average size
-    size_t min_sample_size =
-        std::max(1UL, 4 * parlay::num_workers() * file_size / MAIN_MEMORY_SIZE);
+    size_t min_sample_size = std::max(
+        1UL, 4 * parlay::num_workers() * file_size /
+                 AvailablePhysicalMemoryBytes());
     // bucket count cannot exceed the number of elements; it should also not
     // result in very tiny files
     size_t max_sample_size = std::max(
@@ -1309,9 +1311,13 @@ class Permutation {
     std::vector<chunk_seq> buckets(num_buckets);
     count_sort(ids, num_buckets, buckets, result_prefix);
 
-    // Phase 2 (ProcessBucket): every bucket is DRAM-sized by construction, so
-    // each is read back, processed, and written over its own chunks.
-    process_inplace<T>(buckets, processor);
+    // Phase 2 (ProcessBucket): buckets are sized to fit DRAM by construction,
+    // but process_inplace_budgeted (rather than raw process_inplace) is used
+    // as a safety net -- a bucket that's still too large for real available
+    // memory (e.g. GetBucketCount's estimate was off, or the box has less
+    // free RAM than expected) fails with a clear CHECK message instead of
+    // getting OOM-killed.
+    process_inplace_budgeted<T>(buckets, processor);
 
     // Gather: the buckets, in bucket order, are the output sequence.
     return flatten(buckets);
