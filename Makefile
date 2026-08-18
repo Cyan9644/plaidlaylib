@@ -133,8 +133,9 @@ deps/parlaylib:
 # A separate clone of the same pinned commit: the deps/parlaylib rule above
 # keeps only include/, and won't re-fire on checkouts that already have it.
 #
-# Three upstream bugs are patched after the fetch (each confirmed, and the
-# fix verified, with an exact-position brute-force property test):
+# Four upstream bugs are patched after the fetch (the first three each
+# confirmed, and the fix verified, with an exact-position brute-force property
+# test):
 #  1. kmp: the search loop index is `int`, so any text over 2^31 chars
 #     truncates it negative -> wild read -> SIGSEGV.
 #  2. kmp: after a full match the automaton state is never reset, so the next
@@ -144,6 +145,19 @@ deps/parlaylib:
 #  3. rabin_karp: the last window is compared against `total` (the powers-scan
 #     total, x^n) instead of `sum` (the text-hash total), so a match at the
 #     final position n-m is missed.
+#  4. kth_smallest: `int sample_size = 31` makes
+#     `histogram_by_index(ids, sample_size+1)` deduce `Integer_t = int`, and
+#     that header sets `val_type = Integer_t` -- so the bucket counts AND the
+#     `parlay::scan(sums)` prefix offsets are 32-bit.  Past 2^31 total elements
+#     the running prefix wraps, `offsets` stops being monotonic, and
+#     `upper_bound(.., k)` (k itself > INT_MAX) always returns end() -> the
+#     recursion picks the last bucket every level while k stays huge, until the
+#     n<=1000 base case indexes `parlay::sort(in)[k]` ~100 GB past a <=1000-
+#     element buffer -> SIGSEGV.  Confirmed as the crash behind
+#     kth_smallestExample at n=26215448576.  Fix = force the 64-bit (and
+#     signed, matching the header's `long n`/`long k`) instantiation.  The
+#     *library* parlay::kth_smallest in parlay/primitives.h is unaffected: it
+#     declares `constexpr size_t sample_size`.
 deps/parlaylib-examples:
 	mkdir -p deps
 	git clone https://github.com/ParAlg/parlaylib.git deps/parlaylib-examples-full
@@ -156,6 +170,16 @@ deps/parlaylib-examples:
 	    deps/parlaylib-examples/knuth_morris_pratt.h
 	sed -i 's/total = total\] (long i)/total = sum] (long i)/' \
 	    deps/parlaylib-examples/rabin_karp.h
+	sed -i 's/parlay::histogram_by_index(ids, sample_size+1)/parlay::histogram_by_index<long>(ids, sample_size+1)/' \
+	    deps/parlaylib-examples/kth_smallest.h
+# Fail the fetch if any patch above silently did nothing (an upstream text
+# change would leave the bug in place with no other symptom until a multi-GB
+# run crashes).
+	@grep -q 'for (long i=start;' deps/parlaylib-examples/knuth_morris_pratt.h && \
+	 grep -q 'tail = failure_p\[tail\];' deps/parlaylib-examples/knuth_morris_pratt.h && \
+	 grep -q 'total = sum\]' deps/parlaylib-examples/rabin_karp.h && \
+	 grep -q 'histogram_by_index<long>' deps/parlaylib-examples/kth_smallest.h || \
+	 { echo "ERROR: upstream parlaylib-examples patches did not apply"; exit 1; }
 
 deps/abseil-cpp/install:
 	mkdir -p deps

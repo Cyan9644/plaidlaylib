@@ -172,14 +172,22 @@ and it always ends with a machine-readable `CSV,` line the runner greps.
 
 Each example also times an **in-memory baseline** in DRAM: the corresponding
 upstream parlaylib example (`deps/parlaylib-examples/`) where one exists, or
-`in_memory_baselines.h` for linefit and sample sort.  The fetch **patches three
+`in_memory_baselines.h` for linefit and sample sort.  The fetch **patches four
 upstream bugs** (see the sed commands in the Makefile: an `int` loop index that
 segfaults KMP past 2^31 chars, a missing KMP state reset after a match that reads
-past the pattern, and Rabin-Karp comparing the last window against the powers-scan
-total `x^n` instead of the text-hash total, dropping a match at position n−m); all
-three were confirmed and the fixes verified against brute force with exact-position
-property tests.  **Checkouts that fetched `deps/parlaylib-examples` before the
-patches existed must `rm -rf deps/parlaylib-examples && make deps` to re-fetch.**
+past the pattern, Rabin-Karp comparing the last window against the powers-scan
+total `x^n` instead of the text-hash total, dropping a match at position n−m, and
+`kth_smallest`'s 32-bit bucket histogram — `int sample_size` makes
+`histogram_by_index(ids, sample_size+1)` deduce `Integer_t = int`, so past 2^31
+elements the scanned prefix offsets wrap, `upper_bound` picks a bucket that
+doesn't contain k, and the out-of-range k rides the recursion down to the
+`n<=1000` base case's unchecked `parlay::sort(in)[k]` → SIGSEGV); the first
+three were confirmed and the fixes verified against brute force with
+exact-position property tests, the fourth against the crashing n directly.  The
+fetch now **asserts each patch applied** (a `grep -q` chain), so an upstream text
+change fails the fetch instead of silently shipping the bug.  **Checkouts that
+fetched `deps/parlaylib-examples` before a patch existed must
+`rm -rf deps/parlaylib-examples && make deps` to re-fetch.**
 The baseline is gated by a RAM budget — half of physical RAM, overridable via
 `EXAMPLE_INMEM_BUDGET_BYTES`; past the budget the run is skipped and the CSV field
 left blank, so the plotted in-mem line stops at the RAM cliff.  When the baseline
@@ -216,17 +224,25 @@ mismatch — a differential test in the spirit of the benchmarks' `agree`.
   winning bucket → recurse, mirroring parlaylib's in-memory `kth_smallest` but
   keeping every intermediate out of core; below 1536 residual elements it
   finishes with one `materialize` + `std::nth_element`.  A second entry point,
-  `kth_smallest_fast`, routes every element to its bucket in one
-  `ChunkPartition` pass instead of a histogram pass followed by a separate
-  pack — fewer io_uring rings stood up per recursion level — and is what the
-  driver calls; the plain (non-`_fast`) recursion's per-batch ring churn (a
-  fresh `DensePack` batch reader per 128 chunks) was found to blow past
-  `RLIMIT_MEMLOCK`'s asynchronous reclaim on teardown at multi-billion-element
-  n, crashing with SIGSEGV — `kth_smallest_fast` avoids this by never tearing
-  down rings mid-recursion-level.  Both entry points are exercised by
+  `kth_smallest_fast`, does not recurse out-of-core at all: one
+  `ChunkHistogramByKey` pass picks the winning bucket, one `pack_value` pass
+  packs it, and that residual is `materialize`d into DRAM and finished with
+  `parlay::kth_smallest`, so a whole level of out-of-core recursion (and the
+  io_uring rings it stands up) never happens.  It is what the driver calls.  An
+  earlier SIGSEGV at multi-billion-element n was attributed to the plain
+  (non-`_fast`) recursion's per-batch ring churn (a fresh `DensePack` batch
+  reader per 128 chunks) outrunning `RLIMIT_MEMLOCK`'s asynchronous reclaim on
+  teardown; treat that attribution as **unverified** — it was observed through
+  the same driver that carried the in-memory baseline's 32-bit histogram bug
+  (below), which is the confirmed cause of the crashes chased in 2026-08.
+  Both entry points are exercised by
   `kthSmallestTest`.  Baseline: upstream
   `parlaylib-examples/kth_smallest.h`, cross-checked by the selected scalar
-  (keys are distinct, so the k-th smallest is unique).  Recovered from
+  (keys are distinct, so the k-th smallest is unique).  That baseline's own
+  bucket histogram is 64-bit **only because of the Makefile's fourth upstream
+  patch** (see above); unpatched it SIGSEGVs inside the DRAM baseline past 2^31
+  elements — a crash that looks like an out-of-core failure but isn't, since
+  `plaid::ChunkHistogramByKey` already returns `sequence<size_t>`.  Recovered from
   `9c96e4a`'s `examples/external/ExternalKthSmallest.h`.  Emits
   `CSV,n,k,build_s,select_s,inmem_select_s,result,throughput_gb_s`.  The plain
   (non-`_fast`) recursion unlinks each level's `pack_value` intermediate

@@ -110,9 +110,6 @@ int main(int argc, char* argv[]) {
   if (const char* e = getenv("EXAMPLE_INMEM_BUDGET_BYTES"))
     budget = std::stoull(e);
   const bool inmem_ok = n <= budget / 16;
-  std::cerr << "[kth_debug] main: budget=" << budget << " (" << to_gb(budget)
-            << " GB) inmem_ok=" << inmem_ok << "\n"
-            << std::flush;
 
   const std::string in_prefix = "kth_in";
 
@@ -127,19 +124,7 @@ int main(int argc, char* argv[]) {
   std::cout << "Selecting k=" << k << " (0-based) of " << n << "..."
             << std::flush;
   t0 = Clock::now();
-  // TEMPORARY DEBUG (chasing the kth_smallest SIGSEGV at multi-billion-
-  // element n -- see the plan): KTH_SMALLEST_USE_PARTITION=1 switches to
-  // kth_smallest_fast_partition (ChunkPartition-based top-level split, one
-  // reader/one writer for the whole input) instead of the default
-  // kth_smallest_fast (ChunkHistogramByKey + pack_value, whose pack_value
-  // call is built on DensePack -- a fresh ChunkSequenceReader every 128
-  // input chunks). Comparing which variant crashes (or doesn't) at the same
-  // n isolates whether the bug is in DensePack's per-batch reader churn or
-  // in logic both variants share. Remove this switch once the real fix
-  // lands.
-  uint64_t result = getenv("KTH_SMALLEST_USE_PARTITION")
-                        ? plaid::kth_smallest_fast_partition<uint64_t>(seq, (long)k)
-                        : plaid::kth_smallest_fast<uint64_t>(seq, (long)k);
+  uint64_t result = plaid::kth_smallest_fast<uint64_t>(seq, (long)k);
   const double select_s = elapsed(t0);
   std::cout << " done\n";
 
@@ -153,17 +138,9 @@ int main(int argc, char* argv[]) {
   bool agree = true;
   double inmem_select_s = 0;
   if (inmem_ok) {
-    std::cerr << "[kth_debug] main: n=" << n << " in-mem tabulate start\n"
-              << std::flush;
     auto keys_mem = parlay::tabulate(n, key_at);  // parlay::sequence<uint64_t>
-    std::cerr << "[kth_debug] main: n=" << n
-              << " in-mem tabulate done, keys_mem.size()=" << keys_mem.size()
-              << "\n"
-              << std::flush;
     t0 = Clock::now();
     uint64_t result_mem = kth_smallest(keys_mem, (long)k);
-    std::cerr << "[kth_debug] main: n=" << n << " in-mem kth_smallest done\n"
-              << std::flush;
     inmem_select_s = elapsed(t0);
     std::cout << "in-mem parlaylib kth_smallest = " << result_mem << "   "
               << std::setprecision(4) << inmem_select_s << "s\n";
@@ -191,9 +168,9 @@ int main(int argc, char* argv[]) {
             << (inmem_ok ? f9(inmem_select_s) : std::string()) << ',' << result
             << ',' << f9(gb_s) << '\n';
 
-  // Don't leave the input on the drives across sweep points.  (The algorithm's
-  // next_/kth_next_ recursion intermediates are cleared by run_benches's
-  // per-point glob sweep.)
+  // Don't leave the input on the drives across sweep points.  (The algorithm
+  // unlinks its own next_ intermediates; run_benches's per-point glob sweep
+  // covers them again as belt and suspenders.)
   cleanup_prefix(in_prefix);
   return agree ? 0 : 1;
 }
