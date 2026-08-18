@@ -19,11 +19,14 @@
 #include <utility>
 #include <vector>
 
+#include <optional>
+
 #include "ChunkSequence/Primitives/chunk_seq.h"
 #include "absl/log/check.h"
 #include "configs.h"
 #include "parlay/primitives.h"
 #include "utils/file_utils.h"
+#include "utils/vio.h"
 
 namespace plaid {
 // Retained name for the input-chunk batch size (== the DensePack batch size).
@@ -270,6 +273,7 @@ struct leaf_source {
   static constexpr size_t epc = CHUNK_SIZE / sizeof(T);
 
   size_t length() const { return len; }
+  std::optional<plaid::storage> mode() const { return src->mode(); }
   size_t num_chunks() const { return (len + epc - 1) / epc; }
   size_t chunk_len(size_t i) const {
     const size_t base = i * epc;
@@ -335,6 +339,7 @@ struct cut_source {
   static constexpr size_t epc = CHUNK_SIZE / sizeof(T);
 
   size_t length() const { return len; }
+  std::optional<plaid::storage> mode() const { return src->mode(); }
   size_t num_chunks() const { return (len + epc - 1) / epc; }
   size_t chunk_len(size_t i) const {
     const size_t base = i * epc;
@@ -399,6 +404,8 @@ struct leaf_index {
   F f;
 
   size_t length() const { return n; }
+  // Generated, not read: this node implies no storage of its own.
+  std::optional<plaid::storage> mode() const { return std::nullopt; }
   size_t num_chunks() const { return grid_num_chunks(n); }
   size_t chunk_len(size_t i) const { return grid_chunk_len(n, i); }
 
@@ -419,6 +426,7 @@ struct map_node {
   G g;
 
   size_t length() const { return d.length(); }
+  std::optional<plaid::storage> mode() const { return d.mode(); }
   size_t num_chunks() const { return d.num_chunks(); }
   size_t chunk_len(size_t i) const { return d.chunk_len(i); }
 
@@ -442,6 +450,7 @@ struct scan_node {
   std::shared_ptr<std::vector<value_type>> offsets;
 
   size_t length() const { return d.length(); }
+  std::optional<plaid::storage> mode() const { return d.mode(); }
   size_t num_chunks() const { return d.num_chunks(); }
   size_t chunk_len(size_t i) const { return d.chunk_len(i); }
 
@@ -471,6 +480,13 @@ struct zip_node {
   size_t lenA, lenB, len;
 
   size_t length() const { return len; }
+  // Either side may be a generator; take whichever names a backend, and
+  // refuse a zip that straddles two.
+  std::optional<plaid::storage> mode() const {
+    auto ma = a.mode(), mb = b.mode();
+    if (ma && mb) CHECK(*ma == *mb) << "zip: operands are in different storage";
+    return ma ? ma : mb;
+  }
   size_t num_chunks() const { return grid_num_chunks(len); }
   size_t chunk_len(size_t i) const { return grid_chunk_len(len, i); }
 
@@ -511,6 +527,7 @@ struct filter_node {
   size_t total;  // sum of per-source-chunk survivor counts
 
   size_t length() const { return total; }
+  std::optional<plaid::storage> mode() const { return d.mode(); }
   size_t num_chunks() const { return grid_num_chunks(total); }
   size_t chunk_len(size_t i) const { return grid_chunk_len(total, i); }
 
@@ -845,7 +862,7 @@ void for_each_chunk(const D& d, Body&& body, size_t reader_threads = 10,
 // chunk_partition.h's / count_sort.h's per-worker-slot idiom, valid because a
 // parlay task runs uninterrupted on one worker) and threaded through every
 // sequential_for_each_chunk / sequential_materialize call that would otherwise
-// pay open()+aligned_alloc() per call (e.g. Bellman-Ford's per-vertex
+// pay vio::open()+aligned_alloc() per call (e.g. Bellman-Ford's per-vertex
 // delayed::cut, called O(rounds*n) times).
 //
 // The buffer pool grows on demand -- slot s covers "unique read slot s" across
@@ -859,7 +876,7 @@ void for_each_chunk(const D& d, Body&& body, size_t reader_threads = 10,
 // for its whole run and touches one fd per unique *physical chunk file* across
 // O(rounds*n) calls, so an unbounded per-worker cache can accumulate enough
 // open fds (across all workers) to blow past the process's RLIMIT_NOFILE --
-// observed as open() failing with EMFILE. Rounds revisit the same vertices, so
+// observed as vio::open() failing with EMFILE. Rounds revisit the same vertices, so
 // LRU still captures most of the reuse an unbounded cache would.
 struct SequentialReadContext {
   static constexpr size_t MAX_CACHED_FDS = 256;
@@ -877,7 +894,7 @@ struct SequentialReadContext {
 
   // Returns an open fd for `filename`, opening (and evicting the LRU entry if
   // the cache is full) on a miss. Unlike the old direct fd_cache.emplace, a
-  // failed open() is fatal rather than being silently cached as -1 and fed to
+  // failed vio::open() is fatal rather than being silently cached as -1 and fed to
   // a later pread -- that used to fail with EBADF on every subsequent access
   // to the same filename, silently leaving the caller's buffer untouched.
   int get_fd(const std::string& filename) {
@@ -888,11 +905,11 @@ struct SequentialReadContext {
     }
     if (fd_cache.size() >= MAX_CACHED_FDS) {
       const std::string& victim = lru.back();
-      close(fd_cache.at(victim).first);
+      vio::close(fd_cache.at(victim).first);
       fd_cache.erase(victim);
       lru.pop_back();
     }
-    int fd = open(filename.c_str(), O_RDONLY | O_DIRECT);
+    int fd = vio::open(filename.c_str(), O_RDONLY | O_DIRECT);
     CHECK(fd >= 0) << "SequentialReadContext: open failed for " << filename
                    << ": " << std::strerror(errno);
     lru.push_front(filename);
@@ -902,7 +919,7 @@ struct SequentialReadContext {
 
   ~SequentialReadContext() {
     for (char* p : buf_pool) free(p);
-    for (auto& [name, entry] : fd_cache) close(entry.first);
+    for (auto& [name, entry] : fd_cache) vio::close(entry.first);
   }
 };
 
@@ -951,7 +968,7 @@ void sequential_for_each_chunk(const D& d, SequentialReadContext& ctx,
       char* buf = ctx.buf_pool[s];
       if (c.used == 0) continue;
       int fd = ctx.get_fd(c.filename);
-      SYSCALL(pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
+      SYSCALL(vio::pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
     }
 
     Resolver r{&ctx.buf_pool, &pl.leaf_slots, 0};
@@ -1324,6 +1341,7 @@ parlay::sequence<typename D::value_type> segmented_reduce(
 // *after* the accumulator is emitted, so in-place reuse would corrupt it).
 template <class D>
 chunk_seq force(const D& d, const std::string& result_prefix) {
+  const plaid::storage st = d.mode().value_or(plaid::default_storage());
   using R = typename D::value_type;
   static_assert(CHUNK_SIZE % sizeof(R) == 0,
                 "sizeof(R) must divide CHUNK_SIZE for O_DIRECT alignment");
@@ -1356,15 +1374,15 @@ chunk_seq force(const D& d, const std::string& result_prefix) {
   parlay::parallel_for(
       0, num_drives,
       [&](size_t dr) {
-        filenames[dr] = GetFileName(result_prefix, dr);
+        filenames[dr] = GetFileName(result_prefix, dr, st);
         const size_t file_size = drive_chunks[dr].size() * CHUNK_SIZE;
         if (file_size == 0) return;
         int fd =
-            open(filenames[dr].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            vio::open(filenames[dr].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         SYSCALL(fd);
-        if (fallocate(fd, 0, 0, (off_t)file_size) != 0)
-          SYSCALL(ftruncate(fd, (off_t)file_size));
-        SYSCALL(close(fd));
+        if (vio::fallocate(fd, 0, 0, (off_t)file_size) != 0)
+          SYSCALL(vio::ftruncate(fd, (off_t)file_size));
+        SYSCALL(vio::close(fd));
       },
       /*granularity=*/1);
 
@@ -1406,6 +1424,7 @@ chunk_seq force(const D& d, const std::string& result_prefix) {
 // index-ordered chunk_seq.
 template <class D, class Pred>
 chunk_seq filter(const D& d, const std::string& result_prefix, Pred pred) {
+  const plaid::storage st = d.mode().value_or(plaid::default_storage());
   using R = typename D::value_type;
   static_assert(CHUNK_SIZE % sizeof(R) == 0,
                 "sizeof(R) must divide CHUNK_SIZE for O_DIRECT alignment");
@@ -1421,11 +1440,11 @@ chunk_seq filter(const D& d, const std::string& result_prefix, Pred pred) {
   parlay::parallel_for(
       0, num_drives,
       [&](size_t dr) {
-        filenames[dr] = GetFileName(result_prefix, dr);
+        filenames[dr] = GetFileName(result_prefix, dr, st);
         int fd =
-            open(filenames[dr].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            vio::open(filenames[dr].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         SYSCALL(fd);
-        SYSCALL(close(fd));
+        SYSCALL(vio::close(fd));
       },
       1);
 

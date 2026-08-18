@@ -189,9 +189,7 @@ inline chunk_seq ChunkBigIntAddEager(const chunk_seq& a, const chunk_seq& b,
   chunk_seq result_seq = delayed::force(result, result_prefix);
 
   // Drop the two on-disk intermediates so they don't accumulate on the drives.
-  for (const std::string& p : {cls_prefix, scn_prefix})
-    for (size_t d = 0, nd = GetSSDList().size(); d < nd; d++)
-      unlink(GetFileName(p, d).c_str());
+  for (const std::string& p : {cls_prefix, scn_prefix}) plaid::cleanup_prefix(p);
 
   // Same-sign addition that flips the sign bit overflowed into a new limb.
   digit top = result_seq[n_a - 1];

@@ -80,9 +80,8 @@ static void quiesce_drives() {
 }
 
 static void cleanup_prefix(const std::string& prefix) {
-  const auto& ssds = GetSSDList();
-  for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+  // Both backends: an example may have been run with --storage=memory.
+  plaid::cleanup_prefix(prefix);
 }
 
 static uint64_t elem_at(size_t i) { return parlay::hash64(i); }
@@ -223,9 +222,8 @@ static void quiesce_drives() {
 }
 
 static void cleanup_prefix(const std::string& prefix) {
-  const auto& ssds = GetSSDList();
-  for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+  // Both backends: an example may have been run with --storage=memory.
+  plaid::cleanup_prefix(prefix);
 }
 
 static uint64_t elem_at(size_t i) { return (uint64_t)i; }
@@ -355,9 +353,8 @@ static void quiesce_drives() {
 }
 
 static void cleanup_prefix(const std::string& prefix) {
-  const auto& ssds = GetSSDList();
-  for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+  // Both backends: an example may have been run with --storage=memory.
+  plaid::cleanup_prefix(prefix);
 }
 
 static uint64_t elem_at(size_t i) { return parlay::hash64(i); }
@@ -499,9 +496,8 @@ static double to_gb(size_t bytes) {
 }
 
 static void cleanup_prefix(const std::string& prefix) {
-  const auto& ssds = GetSSDList();
-  for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+  // Both backends: an example may have been run with --storage=memory.
+  plaid::cleanup_prefix(prefix);
 }
 
 static uint64_t f_scalar(size_t i) { return (uint64_t)i * (uint64_t)i + 1; }
@@ -641,9 +637,8 @@ static void quiesce_drives() {
 }
 
 static void cleanup_prefix(const std::string& prefix) {
-  const auto& ssds = GetSSDList();
-  for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+  // Both backends: an example may have been run with --storage=memory.
+  plaid::cleanup_prefix(prefix);
 }
 
 static uint64_t a_at(size_t i) { return parlay::hash64(i); }
@@ -782,9 +777,8 @@ static void quiesce_drives() {
 }
 
 static void cleanup_prefix(const std::string& prefix) {
-  const auto& ssds = GetSSDList();
-  for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+  // Both backends: an example may have been run with --storage=memory.
+  plaid::cleanup_prefix(prefix);
 }
 
 static uint64_t elem_at(size_t i) { return (uint64_t)i; }
@@ -923,9 +917,8 @@ static void quiesce_drives() {
 }
 
 static void cleanup_prefix(const std::string& prefix) {
-  const auto& ssds = GetSSDList();
-  for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+  // Both backends: an example may have been run with --storage=memory.
+  plaid::cleanup_prefix(prefix);
 }
 
 static uint64_t elem_at(size_t i) { return parlay::hash64(i); }
@@ -1084,9 +1077,8 @@ static void quiesce_drives() {
 }
 
 static void cleanup_prefix(const std::string& prefix) {
-  const auto& ssds = GetSSDList();
-  for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+  // Both backends: an example may have been run with --storage=memory.
+  plaid::cleanup_prefix(prefix);
 }
 
 // group_by_index's BucketWriter creates one file per bucket (GetFileName(
@@ -1097,7 +1089,10 @@ static void cleanup_prefix(const std::string& prefix) {
 // SSD_COUNT files on every run.
 static void cleanup_bucket_prefix(const std::string& prefix,
                                   size_t num_buckets) {
-  for (size_t i = 0; i < num_buckets; i++) unlink(GetFileName(prefix, i).c_str());
+  for (size_t i = 0; i < num_buckets; i++) {
+    vio::unlink(GetFileName(prefix, i, plaid::storage::disk).c_str());
+    vio::unlink(GetFileName(prefix, i, plaid::storage::memory).c_str());
+  }
 }
 
 int run(int argc, char* argv[]) {
@@ -1274,9 +1269,8 @@ static void quiesce_drives() {
 }
 
 static void cleanup_prefix(const std::string& prefix) {
-  const auto& ssds = GetSSDList();
-  for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+  // Both backends: an example may have been run with --storage=memory.
+  plaid::cleanup_prefix(prefix);
 }
 
 static uint64_t id_at(size_t i) { return parlay::hash64(i) % NUM_BUCKETS; }
@@ -1465,10 +1459,10 @@ static std::vector<T> read_in_order(const chunk_seq& seq) {
   T* buf = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
   CHECK(buf != nullptr) << "read_in_order: buffer allocation failed";
   for (const chunk& c : seq.chunks) {
-    int fd = open(c.filename.c_str(), O_RDONLY | O_DIRECT);
+    int fd = vio::open(c.filename.c_str(), O_RDONLY | O_DIRECT);
     SYSCALL(fd);
-    SYSCALL(pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
-    close(fd);
+    SYSCALL(vio::pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
+    vio::close(fd);
     const size_t cnt = c.used / sizeof(T);
     out.insert(out.end(), buf, buf + cnt);
   }
@@ -1605,11 +1599,16 @@ int run(int argc, char* argv[]) {
   // sweep points).
   const auto& ssds = GetSSDList();
   for (size_t d = 0; d < ssds.size(); d++) {
-    const std::string f = GetFileName(in_prefix, d);
-    unlink(f.c_str());
-    unlink((f + "_cut_start").c_str());
-    unlink((f + "_cut_end").c_str());
-    unlink(GetFileName("cut_out", d).c_str());
+    // The seam scratch names are built by concatenation onto a chunk's own
+    // filename, so they carry whichever backend that chunk lives in.
+    for (plaid::storage st : {plaid::storage::disk, plaid::storage::memory}) {
+      const std::string f = GetFileName(in_prefix, d, st);
+      vio::unlink(f.c_str());
+      vio::unlink((f + "_cut_start").c_str());
+      vio::unlink((f + "_cut_end").c_str());
+    }
+    vio::unlink(GetFileName("cut_out", d, plaid::storage::disk).c_str());
+    vio::unlink(GetFileName("cut_out", d, plaid::storage::memory).c_str());
   }
   return agree ? 0 : 1;
 }
@@ -1943,9 +1942,8 @@ static void quiesce_drives() {
 }
 
 static void cleanup_prefix(const std::string& prefix) {
-  const auto& ssds = GetSSDList();
-  for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+  // Both backends: an example may have been run with --storage=memory.
+  plaid::cleanup_prefix(prefix);
 }
 
 int run(int argc, char* argv[]) {

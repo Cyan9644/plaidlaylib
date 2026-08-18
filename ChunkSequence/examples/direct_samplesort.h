@@ -434,6 +434,12 @@ template <typename T = uint64_t, typename Less = std::less<>>
 chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
                              const std::string& prefix = "dss",
                              size_t disk_span = 1) {
+  // Disk-only: this routine drives its own io_uring rings and opens the chunk
+  // files directly, bypassing utils/vio.h, so a memory-backed sequence would
+  // read as zeros here rather than failing.  Refuse it outright instead.
+  CHECK(seq.mode() == plaid::storage::disk)
+      << "direct_sample_sort: memory-backed sequences are not supported "
+         "(this code path bypasses the vio layer); run it on disk.";
     namespace ds = direct_ss;
     static_assert(CHUNK_SIZE % sizeof(T) == 0, "sizeof(T) must divide CHUNK_SIZE");
 

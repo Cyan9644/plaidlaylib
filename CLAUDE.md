@@ -5,7 +5,8 @@ filter, scan, flat-tabulate, find_if, …) for data stored across many SSDs.  Da
 is too large for DRAM; all I/O goes through `io_uring` with `O_DIRECT`.
 The primary goal of the project/library is to demonstrate that multi-SSD programming can be made relatively ergonomic with carefully chosen abstractions, while maintaining parallelism to rival in memory parallel algorithm implementations via techniques such as delaying to reduce IO trips. Examples are free to make calls into the reader and writer but these should be temporary solutions to reveal what abstractions are later needed; the ultimate goal is a useable set of abstractions that avoid burdening the user with the drive setup itself.
 
-The library is deliberately small: **five headers**, nine test binaries, twelve
+The library is deliberately small: **five headers** (plus `utils/vio.h`, the
+I/O indirection they all bottom out in), eleven test binaries, twelve
 example binaries.  It reached that size through a whitelist cleanup that dropped
 the accumulated experimental surface (parked research, superseded alternates,
 head-to-head comparison drivers); a handful of pieces (`reverse`,
@@ -69,7 +70,12 @@ configs.h                     machine knobs (SSD_COUNT, SSD_ROOT, O_DIRECT_MULTI
 Makefile  shell.nix  .envrc  README.md  CLAUDE.md
 utils/                        non-chunk-aware plumbing
   file_utils.{h,cpp}            paths, O_DIRECT alignment, fd/memlock limits,
-                                SYSCALL/ASSERT + InitLogger, ParseGlobalArguments
+                                SYSCALL/ASSERT + InitLogger, ParseGlobalArguments,
+                                GetFileName(prefix, i, storage), cleanup_prefix
+  vio.{h,cpp}                   the virtual I/O layer: every open/pread/pwrite/
+                                io_uring call in Primitives/ routes through here
+                                and lands either on a drive or in DRAM (see
+                                "Storage backends" below)
   trace_marker.h                PLAID_TRACE phase markers (read by io_trace.py)
   bench_drives.h                shared benchmark/test drive helpers (clear_drives, …)
 ChunkSequence/
@@ -109,7 +115,14 @@ ChunkSequence/
                                 pass), so a graph larger than DRAM never needs
                                 to be built there just to hand bellman_ford a
                                 chunk_csr
-  tests/                      nine binaries, each exiting 0 on PASS
+  tests/                      eleven binaries, each exiting 0 on PASS
+    vio_test.cpp                the memory-backed storage in utils/vio.h on its
+                                own -- sparse holes, block-straddling requests,
+                                truncation, unlink-while-open, concurrency,
+                                and that resident_bytes() returns to zero
+    storage_mode_test.cpp       every primitive run in BOTH storage modes over
+                                identical input, compared element-wise AND on
+                                chunk layout
     primitives_test.cpp         every case for chunk_seq.h/primitives.h/sort.h
     delayed_test.cpp            the delayed layer
     kmp_test.cpp  rabin_karp_test.cpp  bigint_add_test.cpp  convex_hull_test.cpp
@@ -149,9 +162,11 @@ results/                      timestamped benchmark output; gitignored
 
 ## Tests
 
-`make test` builds and runs all seven binaries, continuing past a failure and
-exiting non-zero if any failed.  `TEST_ARGS` is forwarded to every binary
-(`make test TEST_ARGS=8000000`); a case with no argument uses its own default.
+`make test` builds and runs all eleven binaries, continuing past a failure and
+exiting non-zero if any failed.  `vioTest` and `storageModeTest` run first
+(cheapest, and they cover the substrate everything else sits on).  `TEST_ARGS`
+is forwarded to every binary (`make test TEST_ARGS=8000000`); a case with no
+argument uses its own default.
 
 `bin/primitivesTest` holds seventeen cases — iota, map, reduce, scan,
 segmented_reduce, find_if, histogram, scalar, filter, flat_tabulate, flat_map,
@@ -430,6 +445,97 @@ once at the largest n where its own in-mem baseline still fits DRAM.  Its
 `SUMMARY_ENTRIES` asserts both alphabetical order and membership in
 `run_benches.EXAMPLES`, so the two files must be edited together.
 
+## Storage backends  (`utils/vio.h`)
+
+A `chunk_seq` can be backed either by the SSDs or by DRAM, chosen **per
+sequence at runtime**.  The same primitive code runs in both cases: everything
+above the I/O layer -- buffer pools, thread counts, ring depths, chunk layout,
+O_DIRECT alignment, the balls-in-bins drive assignment -- is identical, and only
+the bottom of each call changes.
+
+Two reasons it exists.  The library becomes usable in-memory as well as
+out-of-core, so the abstractions demonstrably describe *structure* rather than
+disks.  And it splits the gap the examples already report: their DRAM baseline
+is a different algorithm (upstream parlaylib, or a hand-written reference), so
+the gap conflates the I/O with the cost of the out-of-core restructuring.
+Running the *same* chunk code in memory separates the two --
+`baseline -> memory mode` is the restructuring cost, `memory mode -> disk` is
+the I/O.
+
+```bash
+PLAID_STORAGE=memory bin/kmpExample 2000000 64   # whole binary
+bin/samplesortExample --storage=memory 1000000   # same, as a flag
+```
+```cpp
+auto a = plaid::tabulate<uint64_t>(n, "a", f, /*io_threads=*/0,
+                                   plaid::storage::memory);
+auto b = plaid::ChunkMap<uint64_t>(a, "b", g);   // inherits: also in memory
+```
+
+**How the mode travels.**  The *filename* is the source of truth: a
+memory-backed sequence's files carry a `mem:` prefix
+(`GetFileName(prefix, i, storage::memory)`), and every shim keys on that.
+`chunk_seq::mode()` derives the mode back out of `chunks[0].filename` rather
+than storing it, which is what lets every producer that builds a `chunk_seq` by
+copying headers -- `flatten`, `fuse`, `cut_by_chunk`, `prepend_zero_chunks`,
+`count_sort`'s shard carving, the delayed layer's synthetic read plans -- carry
+the mode with no code of its own.  The sentinel is a *prefix* so that names
+built by concatenation (`filename + "_cut_start"`) inherit it too.  Producers
+that hold an input derive from it (`seq.mode()`); the root creators (`tabulate`,
+`iota`, `from_file`, `to_chunk_seq`, `ChunkFlatTabulate`, …) take an optional
+trailing `storage` argument defaulting to `plaid::default_storage()`, which is
+set by `PLAID_STORAGE` / `--storage=`.  Because the decision is per file, a
+mixed pipeline -- `zip(delay(mem_seq), delay(disk_seq))` -- works with no extra
+plumbing: one reader, one fd map, the choice made per descriptor.
+
+**The shim.**  `vio::{open,close,pread,pwrite,fallocate,ftruncate,unlink}`
+mirror their libc originals, and `vio::Ring`/`Sqe`/`Cqe` mirror the liburing
+call sequence, so a call site differs from the original by its qualification
+alone.  A `Ring` creates its real `io_uring` **lazily**, on the first submit
+carrying a real descriptor, so a memory-only pass never enters the kernel at
+all.  Submission is deferred: `get_sqe`/`prep_*` record the request and
+`submit()` either memcpys it or replays it into the real ring; completions drain
+from a software queue first, then the kernel's.  Measured cost in disk mode is
+under 1% (min-of-8 on `delayedCompare`, medians favouring the shim).
+
+Memory-backed files are sparse: 64 KiB blocks carved from 16 MiB slabs,
+materialized on write, reading as zeros where nothing was written.  The block is
+**much smaller than CHUNK_SIZE on purpose** -- `group_by_index` keeps one file
+per bucket and a few hundred buckets is ordinary, so CHUNK_SIZE granularity
+would cost 4 MiB apiece (gigabytes total) for files holding a few KiB on disk.
+
+**Cap.**  `PLAID_MEMORY_CAP_BYTES` (default half of physical RAM) is enforced
+with a `CHECK` naming the prefix being grown -- the actionable part, since it
+points at the leaking intermediate.  It covers file storage only: the reader's
+process-wide buffer pool (never freed by design) and `process_inplace`'s
+per-worker staging buffers are additional, and a memory-mode `sample_sort` peaks
+well above 3n.  `plaid::vio::resident_bytes()` reports the current total and is
+asserted back to zero by the tests.
+
+**Cleanup matters more here.**  The library has never unlinked anything itself;
+drivers clear their own intermediates.  On disk a missed one leaves a file on a
+drive, but in DRAM it accumulates until the cap trips, so
+`plaid::cleanup_prefix(prefix)` (`utils/file_utils.h`) clears both backends and
+every driver's local `cleanup_prefix` now forwards to it.  Intermediates whose
+names carry a run tag (`sample_sort`'s `ss_bucket_*`) need
+`plaid::vio::release_prefix(prefix)`, which matches by substring.
+
+**Disk-only paths.**  `chunk_fft.h` (`ChunkFFT`, incl. its `RandomRing`),
+`examples/direct_samplesort.h`, and `helper/graph_utils/external_rmat.h` drive
+their own io_uring rings and open chunk files directly, bypassing this layer, so
+`fft`, `fft_transpose`, `bellman_ford` and `external_rmat` are disk-only.  Each
+`CHECK`s its input's mode at entry and refuses loudly rather than reading zeros.
+The tests are likewise disk-only by design -- several verify by `pread`ing chunk
+files directly -- except `vioTest` and `storageModeTest`, which exercise the
+backends deliberately.
+
+**Known behaviour differences, both expected.**  `process_inplace`'s three-stage
+read/compute/write pipeline collapses to a serialized memcpy in memory mode,
+because `submit()` is synchronous; and `PersistentChunkSequenceReader`, which
+exists solely to amortize ring setup, should converge with the plain reader
+where there is no ring.  Both are correct; neither number should be read as if
+the two modes ran the same pipeline.
+
 ## Data model
 
 ```cpp
@@ -671,3 +777,10 @@ offsets + total; pass 2 is a lazy `scan_node`.  `force` writes one file per driv
 | `SSD_ROOT` | `/mnt/ssd%lu` | mount-path printf template |
 | `O_DIRECT_MULTIPLE` | 4096 | alignment for O_DIRECT buffers and offsets |
 | `CHUNK_SIZE` | 4 MB | size of one chunk (`configs.h`; override `-DCHUNK_SIZE_BYTES=N`) |
+
+Environment / flags (not `configs.h`):
+
+| knob | default | meaning |
+|---|---|---|
+| `PLAID_STORAGE` / `--storage=` | `disk` | backend a root creator uses when the caller names none (`memory`/`disk`) |
+| `PLAID_MEMORY_CAP_BYTES` | RAM/2 | ceiling on memory-backed file storage; exceeding it is a `CHECK` failure |

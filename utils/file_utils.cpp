@@ -186,6 +186,28 @@ std::string GetFileName(const std::string& prefix, size_t file_number) {
   return ssd_list[ssd_number] + "/" + prefix + std::to_string(file_number);
 }
 
+namespace plaid {
+void cleanup_prefix(const std::string& prefix) {
+  const std::vector<std::string> ssds = GetSSDList();
+  for (size_t d = 0; d < ssds.size(); d++) {
+    vio::unlink(GetFileName(prefix, d, storage::disk).c_str());
+    vio::unlink(GetFileName(prefix, d, storage::memory).c_str());
+  }
+}
+}  // namespace plaid
+
+std::string GetFileName(const std::string& prefix, size_t file_number,
+                        plaid::storage st) {
+  std::string path = GetFileName(prefix, file_number);
+  // Memory-backed sequences keep the drive-derived name -- the balls-in-bins
+  // spread across SSD_COUNT "drives" is preserved even though no drive is
+  // touched -- so that a memory run and a disk run produce the same chunk
+  // layout and stay comparable.
+  if (st == plaid::storage::memory)
+    return std::string(plaid::vio::kMemPathPrefix) + path;
+  return path;
+}
+
 /**
  * Read O_DIRECT_MULTIPLE bytes starting from the specified offset of the file
  *
@@ -337,7 +359,8 @@ void ParseGlobalArguments(int& argc, char** argv) {
   std::map<std::string, std::string> arguments = {
       {"num_ssd", std::to_string(SSD_COUNT)},
       {"ssd_selection", "s"},
-      {"ssd", ""}};
+      {"ssd", ""},
+      {"storage", ""}};
 
   int argument_index = 1;
   for (; argument_index < argc; argument_index++) {
@@ -388,6 +411,22 @@ void ParseGlobalArguments(int& argc, char** argv) {
   } else {
     PopulateSSDList(std::atoi(arguments["num_ssd"].c_str()),
                     arguments["ssd_selection"] != "s", verbose);
+  }
+  // --storage=memory|disk sets the default only for sequences whose creator
+  // was not given an explicit mode; anything derived from an existing sequence
+  // still inherits that sequence's own mode.  Matches PLAID_STORAGE, and wins
+  // over it when both are given.
+  if (!arguments["storage"].empty()) {
+    const std::string& v = arguments["storage"];
+    if (v == "memory") {
+      plaid::set_default_storage(plaid::storage::memory);
+    } else if (v == "disk") {
+      plaid::set_default_storage(plaid::storage::disk);
+    } else {
+      LOG(FATAL) << "--storage must be \"memory\" or \"disk\", got \"" << v
+                 << "\"";
+    }
+    if (verbose) LOG(INFO) << "default storage: " << v;
   }
   if (argument_index == 1) {
     return;

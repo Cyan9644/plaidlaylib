@@ -311,7 +311,8 @@ struct FlatBatch {
  * @tparam F  Callable: (size_t start, size_t end) -> parlay::sequence<R>
  */
 template <typename R, typename F>
-chunk_seq ChunkFlatTabulate(size_t n, const std::string& result_prefix, F f) {
+chunk_seq ChunkFlatTabulate(size_t n, const std::string& result_prefix, F f,
+                            plaid::storage st = plaid::default_storage()) {
   if (n == 0) return {};
 
   const size_t epct = CHUNK_SIZE / sizeof(R);
@@ -334,7 +335,8 @@ chunk_seq ChunkFlatTabulate(size_t n, const std::string& result_prefix, F f) {
                             },
                             /*granularity=*/1);
                         return batch;
-                      });
+                      },
+                      st);
 }
 
 }  // namespace plaid

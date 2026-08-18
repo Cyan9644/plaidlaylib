@@ -26,6 +26,7 @@
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "configs.h"
+#include "utils/vio.h"
 
 // ============================================================================
 // FileInfo
@@ -207,7 +208,28 @@ void PopulateSSDList();
 void PopulateSSDList(size_t count, bool random, bool verbose);
 void PopulateSSDList(const std::vector<int>& ssd_numbers, bool verbose);
 std::string GetFileName(const std::string& prefix, size_t file_number);
+
+// The same name, tagged for the storage backend that will hold it.  A
+// memory-backed name carries vio's "mem:" sentinel, which is what every I/O
+// shim keys on -- so the filename, not a field on chunk_seq, is the single
+// source of truth for where a chunk lives.  The sentinel is a *prefix* so that
+// callers building a name by concatenation (e.g. filename + "_cut_start") keep
+// the mode without knowing it exists.
+std::string GetFileName(const std::string& prefix, size_t file_number,
+                        plaid::storage st);
+
 std::vector<std::string> GetSSDList();
+
+namespace plaid {
+// Remove every per-drive file a sequence with this prefix could own, in both
+// storage backends.
+//
+// Drivers have always cleared their own intermediates -- the library never
+// unlinks anything itself -- and on disk a missed one merely leaves a file on
+// a drive.  In memory it would instead sit in DRAM until the process exits or
+// the cap trips, so the same cleanup call now has to reach both backends.
+void cleanup_prefix(const std::string& prefix);
+}  // namespace plaid
 
 void MakeFileEndMarker(unsigned char* buffer, size_t size, size_t real_size);
 

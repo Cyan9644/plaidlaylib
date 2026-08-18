@@ -259,6 +259,12 @@ inline void fft_inplace(cd* a, const FFTPlan& p) {
 // ---- stage 1: streaming length-A block FFTs (reuse ExternalTransform) -------
 inline chunk_seq stage1_rows(const chunk_seq& input, const Dims& d,
                              const std::string& prefix) {
+  // Disk-only: this routine drives its own io_uring rings and opens the chunk
+  // files directly, bypassing utils/vio.h, so a memory-backed sequence would
+  // read as zeros here rather than failing.  Refuse it outright instead.
+  CHECK(input.mode() == plaid::storage::disk)
+      << "ChunkFFT::stage1_rows: memory-backed sequences are not supported "
+         "(this code path bypasses the vio layer); run it on disk.";
   const size_t A = d.A;
   FFTPlan planA;
   planA.init(A);  // shared read-only across workers

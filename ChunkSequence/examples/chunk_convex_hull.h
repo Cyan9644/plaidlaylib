@@ -87,9 +87,7 @@ inline std::atomic<size_t>& prefix_counter() {
 
 // Remove the one-file-per-drive scratch left by a ChunkFilter under `prefix`.
 inline void cleanup_prefix(const std::string& prefix) {
-  const auto& ssds = GetSSDList();
-  for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+  plaid::cleanup_prefix(prefix);
 }
 
 // Max-by-(area, idx) reduction returning the winning point (identity loses via

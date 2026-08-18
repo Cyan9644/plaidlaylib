@@ -64,34 +64,22 @@ static double to_gb(size_t bytes) {
 }
 
 static void cleanup_prefix(const std::string& prefix) {
-  const auto& ssds = GetSSDList();
-  for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+  // Both backends: an example may have been run with --storage=memory.
+  plaid::cleanup_prefix(prefix);
 }
 
 // Element-wise check of an out-of-core uint64_t result against the in-mem
-// baseline's sequence: read each output chunk back off the drives in index
-// order and compare every value.  Only called when the baseline ran, so
-// `expected` fits in RAM by construction.
+// baseline's sequence.  Reading through chunk_seq::to_vector rather than
+// opening the chunk files directly keeps the check working whichever backend
+// the sequence lives in.  Only called when the baseline ran, so `expected`
+// fits in RAM by construction.
 template <typename Seq>
 static bool contents_equal(const chunk_seq& cs, const Seq& expected) {
-  void* buf = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
-  CHECK(buf != nullptr);
-  bool ok = true;
-  size_t j = 0;
-  for (const chunk& c : cs.chunks) {
-    if (!ok || c.used == 0) continue;
-    int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
-    SYSCALL(fd);
-    SYSCALL(pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
-    close(fd);
-    const uint64_t* elems = reinterpret_cast<const uint64_t*>(buf);
-    const size_t cnt = c.used / sizeof(uint64_t);
-    for (size_t i = 0; i < cnt && ok; i++, j++)
-      ok = j < expected.size() && elems[i] == (uint64_t)expected[j];
-  }
-  free(buf);
-  return ok && j == expected.size();
+  const auto got = cs.to_vector<uint64_t>();
+  if (got.size() != expected.size()) return false;
+  for (size_t i = 0; i < got.size(); i++)
+    if (got[i] != (uint64_t)expected[i]) return false;
+  return true;
 }
 
 // Deterministic 4-letter text: char i of the text, computable anywhere.

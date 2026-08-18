@@ -40,13 +40,15 @@ ABSL_LIBDIR := $(firstword $(wildcard deps/abseil-cpp/install/lib deps/abseil-cp
 ABSL_LIBS   := $(shell find $(ABSL_LIBDIR) -name '*.a' 2>/dev/null | sort)
 
 # Vendored shared utilities (utils/), compiled into this repo's $(OBJDIR).
-UTIL_OBJS := $(OBJDIR)/file_utils.o
+UTIL_OBJS := $(OBJDIR)/file_utils.o $(OBJDIR)/vio.o
 
 # ChunkSequence correctness tests (each exits 0 on PASS, non-zero on FAIL).
 # primitivesTest covers everything in Primitives/{chunk_seq,primitives,sort}.h;
 # delayedTest covers Primitives/delayed.h; the rest are the four examples that
 # carry a correctness test.
-TEST_BINARIES := $(BINDIR)/primitivesTest $(BINDIR)/delayedTest \
+TEST_BINARIES := $(BINDIR)/vioTest $(BINDIR)/storageModeTest \
+                 $(BINDIR)/primitivesTest \
+                 $(BINDIR)/delayedTest \
                  $(BINDIR)/kmpTest $(BINDIR)/rabinKarpTest \
                  $(BINDIR)/bigintAddTest $(BINDIR)/convexHullTest \
                  $(BINDIR)/kthSmallestTest $(BINDIR)/bellmanFordTest \
@@ -206,6 +208,16 @@ $(BINDIR)/primitivesTest: ChunkSequence/tests/primitives_test.cpp $(UTIL_OBJS)
 	$(LINKD)
 
 $(BINDIR)/delayedTest: ChunkSequence/tests/delayed_test.cpp $(UTIL_OBJS)
+	$(LINKD)
+
+# vioTest exercises the memory-backed storage in utils/vio.h directly, with no
+# chunk_seq involved -- it is the substrate every other test sits on.
+$(BINDIR)/vioTest: ChunkSequence/tests/vio_test.cpp $(UTIL_OBJS)
+	$(LINKD)
+
+# storageModeTest runs each primitive in both storage modes over identical
+# input and requires the results -- and the chunk layout -- to agree.
+$(BINDIR)/storageModeTest: ChunkSequence/tests/storage_mode_test.cpp $(UTIL_OBJS)
 	$(LINKD)
 
 $(BINDIR)/kmpTest: ChunkSequence/tests/kmp_test.cpp $(UTIL_OBJS)

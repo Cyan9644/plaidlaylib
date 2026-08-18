@@ -105,9 +105,7 @@ inline std::atomic<size_t>& kth_smallest_prefix_counter() {
 // Remove the one-file-per-drive scratch a ChunkPartition call left under
 // `prefix` once every bucket it produced has been fully consumed.
 inline void kth_smallest_cleanup_prefix(const std::string& prefix) {
-  const auto& ssds = GetSSDList();
-  for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+  plaid::cleanup_prefix(prefix);
 }
 
 // randomized ~O(n) algorithm

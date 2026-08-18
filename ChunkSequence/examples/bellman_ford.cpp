@@ -139,9 +139,8 @@ static double to_gb(size_t bytes) {
 }
 
 static void cleanup_prefix(const std::string& prefix) {
-  const auto& ssds = GetSSDList();
-  for (size_t d = 0; d < ssds.size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+  // Both backends: an example may have been run with --storage=memory.
+  plaid::cleanup_prefix(prefix);
 }
 
 // The two implementations use different sentinel encodings for "unreached":

@@ -51,6 +51,7 @@
 #include "parlay/primitives.h"
 #include "parlay/sequence.h"
 #include "utils/file_utils.h"
+#include "utils/vio.h"
 
 // ChunkSegmentedReduce
 //
@@ -277,7 +278,8 @@ chunk_seq pack(const chunk_seq& seq, const std::string& result_prefix,
         /*granularity=*/1);
 
     return batch;
-  });
+  },
+      seq.mode());
 }
 
 /**
@@ -388,7 +390,8 @@ chunk_seq pack(const chunk_seq& seq, const std::string& result_prefix,
     for (const auto& e : bc) flag_reader.allocator.Free(e.buf);
 
     return batch;
-  });
+  },
+      seq.mode());
 }
 
 /**
@@ -495,7 +498,8 @@ chunk_seq pack_if(const chunk_seq& seq, const std::string& result_prefix,
     for (const auto& e : kc) keep_reader.allocator.Free(e.buf);
 
     return batch;
-  });
+  },
+      seq.mode());
 }
 
 /**
@@ -566,7 +570,8 @@ chunk_seq pack_value(const chunk_seq& seq, const std::string& result_prefix,
         /*granularity=*/1);
 
     return batch;
-  });
+  },
+      seq.mode());
 }
 
 }  // namespace plaid
@@ -836,6 +841,7 @@ std::vector<chunk_seq> ChunkPartition(const chunk_seq& seq, size_t num_buckets,
   std::vector<chunk_seq> out(num_buckets);
   if (seq.chunks.empty()) return out;
 
+  const plaid::storage st = seq.mode();
   const size_t ept = CHUNK_SIZE / sizeof(T);
   const size_t num_drives = GetSSDList().size();
 
@@ -843,10 +849,10 @@ std::vector<chunk_seq> ChunkPartition(const chunk_seq& seq, size_t num_buckets,
   // stale data from a prior run (the writer opens O_CREAT but not O_TRUNC).
   std::vector<std::string> filenames(num_drives);
   for (size_t d = 0; d < num_drives; d++) {
-    filenames[d] = GetFileName(result_prefix, d);
-    int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    filenames[d] = GetFileName(result_prefix, d, st);
+    int fd = vio::open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     SYSCALL(fd);
-    SYSCALL(close(fd));
+    SYSCALL(vio::close(fd));
   }
 
   UnorderedWriterConfig wcfg;
@@ -1132,14 +1138,14 @@ parlay::sequence<T> sequential_materialize(const chunk_seq& seq) {
     if (c->used == 0) continue;
     auto [it, inserted] = fd_cache.emplace(c->filename, -1);
     if (inserted) {
-      it->second = open(c->filename.c_str(), O_RDONLY | O_DIRECT);
+      it->second = vio::open(c->filename.c_str(), O_RDONLY | O_DIRECT);
       SYSCALL(it->second);
     }
-    SYSCALL(pread(it->second, buf, AlignUp(c->used), (off_t)c->begin_addr));
+    SYSCALL(vio::pread(it->second, buf, AlignUp(c->used), (off_t)c->begin_addr));
     std::memcpy(out.data() + elem_offset[i], buf, c->used);
   }
 
-  for (auto& [name, fd] : fd_cache) close(fd);
+  for (auto& [name, fd] : fd_cache) vio::close(fd);
   free(buf);
   return out;
 }
@@ -1305,7 +1311,24 @@ inline const std::string& zero_chunk_prefix() {
 }
 
 // Write one zero-filled CHUNK_SIZE block per drive (idempotent for the run).
-inline void ensure_zero_chunks() {
+inline void ensure_zero_chunks(plaid::storage st) {
+  // A memory-backed file reads as zeros wherever nothing was written, so the
+  // blocks never have to exist -- the chunk headers below can point at a file
+  // that is registered but empty.  Only the disk path has to materialize them.
+  if (st == plaid::storage::memory) {
+    static std::once_flag once_mem;
+    std::call_once(once_mem, [] {
+      const size_t nd = GetSSDList().size();
+      for (size_t d = 0; d < nd; d++) {
+        const std::string fn =
+            GetFileName(zero_chunk_prefix(), d, plaid::storage::memory);
+        int fd = vio::open(fn.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        SYSCALL(fd);
+        vio::close(fd);
+      }
+    });
+    return;
+  }
   static std::once_flag once;
   std::call_once(once, [] {
     const size_t nd = GetSSDList().size();
@@ -1313,21 +1336,23 @@ inline void ensure_zero_chunks() {
     CHECK(buf != nullptr) << "ensure_zero_chunks: buffer allocation failed";
     memset(buf, 0, CHUNK_SIZE);
     for (size_t d = 0; d < nd; d++) {
-      const std::string fn = GetFileName(zero_chunk_prefix(), d);
-      int fd = open(fn.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0644);
+      const std::string fn =
+          GetFileName(zero_chunk_prefix(), d, plaid::storage::disk);
+      int fd = vio::open(fn.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0644);
       SYSCALL(fd);
-      SYSCALL(pwrite(fd, buf, CHUNK_SIZE, (off_t)0));
-      close(fd);
+      SYSCALL(vio::pwrite(fd, buf, CHUNK_SIZE, (off_t)0));
+      vio::close(fd);
     }
     free(buf);
   });
 }
 
 // One chunk header aliasing drive d's shared zero block, exposing `used` bytes.
-inline chunk zero_chunk_header(size_t d, size_t used, size_t index) {
-  ensure_zero_chunks();
+inline chunk zero_chunk_header(size_t d, size_t used, size_t index,
+                               plaid::storage st = plaid::default_storage()) {
+  ensure_zero_chunks(st);
   const size_t nd = GetSSDList().size();
-  return {GetFileName(zero_chunk_prefix(), d % nd), 0, used, index};
+  return {GetFileName(zero_chunk_prefix(), d % nd, st), 0, used, index};
 }
 
 // seq * base^(k * ELEMS_PER_CHUNK), as pure metadata: prepend k full zero
@@ -1340,7 +1365,7 @@ inline chunk_seq prepend_zero_chunks(const chunk_seq& seq, size_t k) {
   chunk_seq out;
   out.chunks.reserve(k + seq.chunks.size());
   for (size_t j = 0; j < k; j++)
-    out.chunks.push_back(zero_chunk_header(j, CHUNK_SIZE, j));
+    out.chunks.push_back(zero_chunk_header(j, CHUNK_SIZE, j, seq.mode()));
   for (const chunk& c : seq.chunks) {
     chunk nc = c;
     nc.index = out.chunks.size();
@@ -1355,8 +1380,8 @@ inline chunk_seq prepend_zero_chunks(const chunk_seq& seq, size_t k) {
 // to a chunk-aligned cut half whose top limb has its sign bit set.
 inline chunk_seq append_zero_chunk(const chunk_seq& seq, size_t used) {
   chunk_seq out = seq;
-  out.chunks.push_back(
-      zero_chunk_header(out.chunks.size(), used, out.chunks.size()));
+  out.chunks.push_back(zero_chunk_header(out.chunks.size(), used,
+                                         out.chunks.size(), seq.mode()));
   return out;
 }
 
@@ -1397,8 +1422,8 @@ chunk_seq sequential_cut_no_compression(const chunk_seq& seq,
   // we have now found the correct chunk for the start
   T* buff = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
   int fd1 =
-      open(seq.chunks[index_counter].filename.c_str(), O_RDONLY | O_DIRECT);
-  // A failed open() (e.g. EMFILE under fd pressure) must not silently flow into
+      vio::open(seq.chunks[index_counter].filename.c_str(), O_RDONLY | O_DIRECT);
+  // A failed vio::open() (e.g. EMFILE under fd pressure) must not silently flow into
   // the pread below as fd == -1 -- SYSCALL only logs, it isn't fatal, so that
   // used to corrupt this chunk's size/offset bookkeeping instead of failing
   // loudly here.
@@ -1409,7 +1434,7 @@ chunk_seq sequential_cut_no_compression(const chunk_seq& seq,
   // in the block - the expected start position of the first index we want to
   // see, which means we need to read size of the difference between the two to
   // get all the data from start to end
-  SYSCALL(pread(fd1, buff, AlignUp(seq.chunks[index_counter].used),
+  SYSCALL(vio::pread(fd1, buff, AlignUp(seq.chunks[index_counter].used),
                 (off_t)seq.chunks[index_counter].begin_addr));
   memmove(buff, buff + tracker,
           (seq.chunks[index_counter].used / sizeof(T) - tracker) * sizeof(T));
@@ -1420,21 +1445,21 @@ chunk_seq sequential_cut_no_compression(const chunk_seq& seq,
   std::string start_cut = seq.chunks[index_counter].filename + "_cut_start";
 
   int fd1_filename1 =
-      open(start_cut.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
+      vio::open(start_cut.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
   // we know that the O_DIRECT alignment below us is already full of the
   // original data, so we're trying the one above
-  //  SYSCALL(pwrite(fd1_filename,buff,
+  //  SYSCALL(vio::pwrite(fd1_filename,buff,
   //  (seq.chunks[index_counter].used/sizeof(T)-tracker) * sizeof(T),
   //  (off_t)(AlignUp(seq.chunks[index_counter].begin_addr +
   //  tracker*sizeof(T)))));
-  SYSCALL(
-      pwrite(fd1_filename1, buff,
-             AlignUp((seq.chunks[index_counter].used / sizeof(T) - tracker) *
-                     sizeof(T)),
-             (off_t)0));
+  SYSCALL(vio::pwrite(
+      fd1_filename1, buff,
+      AlignUp((seq.chunks[index_counter].used / sizeof(T) - tracker) *
+              sizeof(T)),
+      (off_t)0));
 
-  close(fd1);
-  close(fd1_filename1);
+  vio::close(fd1);
+  vio::close(fd1_filename1);
   chunk start_chunk;
   // start_chunk.filename = seq.chunks[index_counter].filename;
   // start_chunk.begin_addr =(AlignUp(seq.chunks[index_counter].begin_addr +
@@ -1466,29 +1491,29 @@ chunk_seq sequential_cut_no_compression(const chunk_seq& seq,
   // chunks things to be in a parallel do
   T* buf = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
   int fd =
-      open(seq.chunks[index_counter].filename.c_str(), O_RDONLY | O_DIRECT);
+      vio::open(seq.chunks[index_counter].filename.c_str(), O_RDONLY | O_DIRECT);
   CHECK(fd >= 0) << "sequential_cut_no_compression: open failed for "
                  << seq.chunks[index_counter].filename << ": "
                  << std::strerror(errno);
 
-  // SYSCALL(pread(fd, buf, AlignUp(seq.chunks[index_counter].used/sizeof(T) -
+  // SYSCALL(vio::pread(fd, buf, AlignUp(seq.chunks[index_counter].used/sizeof(T) -
   // tracker) * sizeof(T), (off_t) (seq.chunks[index_counter].begin_addr +
-  // tracker*sizeof(T)))); SYSCALL(pread(fd, buf,
+  // tracker*sizeof(T)))); SYSCALL(vio::pread(fd, buf,
   // AlignUp(seq.chunks[index_counter].used/sizeof(T) - tracker) * sizeof(T),
   // (off_t) AlignDown((seq.chunks[index_counter].begin_addr +
   // tracker*sizeof(T)))));
-  SYSCALL(pread(fd, buf, AlignUp(tracker * sizeof(T)),
+  SYSCALL(vio::pread(fd, buf, AlignUp(tracker * sizeof(T)),
                 (off_t)seq.chunks[index_counter].begin_addr));
 
   std::string end_cut = seq.chunks[index_counter].filename + "_cut_end";
-  int fd_filename = open(end_cut.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
-  // SYSCALL(pwrite(fd_filename,buf,
+  int fd_filename = vio::open(end_cut.c_str(), O_WRONLY | O_DIRECT | O_CREAT, 0644);
+  // SYSCALL(vio::pwrite(fd_filename,buf,
   // (seq.chunks[index_counter].used/sizeof(T)-tracker) * sizeof(T),
   // (off_t)(AlignUp(seq.chunks[index_counter].begin_addr +
   // tracker*sizeof(T)))));
-  SYSCALL(pwrite(fd_filename, buf, AlignUp(tracker * sizeof(T)), (off_t)0));
-  close(fd);
-  close(fd_filename);
+  SYSCALL(vio::pwrite(fd_filename, buf, AlignUp(tracker * sizeof(T)), (off_t)0));
+  vio::close(fd);
+  vio::close(fd_filename);
   chunk end_chunk;
   end_chunk.filename = end_cut;
   end_chunk.begin_addr = 0;
@@ -1499,7 +1524,8 @@ chunk_seq sequential_cut_no_compression(const chunk_seq& seq,
 
   // maybe don't return a local variable
   chunk_seq sequence =
-      from_chunks(chunk_headers);  // use the constructor for the chunk
+      from_chunks(chunk_headers, "cut_out",
+                  seq.mode());  // use the constructor for the chunk
                                    // sequence, doesn't exist yet
   free(buf);
   free(buff);
@@ -1525,13 +1551,13 @@ void reverse_chunk_contents(const chunk& c) {
   if (n < 2) return;
   T* buf = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
   CHECK(buf != nullptr) << "reverse: buffer allocation failed";
-  int fd = open(c.filename.c_str(), O_RDWR | O_DIRECT);
+  int fd = vio::open(c.filename.c_str(), O_RDWR | O_DIRECT);
   CHECK(fd >= 0) << "reverse: open failed for " << c.filename << ": "
                  << std::strerror(errno);
-  SYSCALL(pread(fd, buf, CHUNK_SIZE, (off_t)c.begin_addr));
+  SYSCALL(vio::pread(fd, buf, CHUNK_SIZE, (off_t)c.begin_addr));
   for (size_t i = 0, j = n - 1; i < j; i++, j--) std::swap(buf[i], buf[j]);
-  SYSCALL(pwrite(fd, buf, CHUNK_SIZE, (off_t)c.begin_addr));
-  close(fd);
+  SYSCALL(vio::pwrite(fd, buf, CHUNK_SIZE, (off_t)c.begin_addr));
+  vio::close(fd);
   free(buf);
 }
 
@@ -1603,10 +1629,10 @@ T scan_find(const chunk_seq& seq, const parlay::sequence<size_t>& pseq,
 
   char* buf = (char*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, read_len);
   CHECK(buf != nullptr) << "allocation wrong";
-  int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+  int fd = vio::open(c.filename.c_str(), O_DIRECT | O_RDONLY);
   SYSCALL(fd);
-  SYSCALL(pread(fd, buf, read_len, (off_t)aligned_off));
-  close(fd);
+  SYSCALL(vio::pread(fd, buf, read_len, (off_t)aligned_off));
+  vio::close(fd);
   T val;
   std::memcpy(&val, buf + delta, sizeof(T));
   free(buf);
@@ -1625,7 +1651,7 @@ T scan_find(const chunk_seq& seq, const parlay::sequence<size_t>& pseq,
 // size_t top = seq.chunks.size();
 // for(int i = 0; i < top; i++){
 //     if(index < seq.chunks[i].used){
-//         int filedes = open(seq.chunks[i].filename.c_str(), O_DIRECT |
+//         int filedes = vio::open(seq.chunks[i].filename.c_str(), O_DIRECT |
 //         O_RDONLY); T* buffer = calloc(seq.chunks[i].used * sizeof(T));
 //         lseek(filedes, seq.chunks[i].begin_addr, SEEK_SET);
 //         read(filedes, buffer, seq.chunks[i].used);
@@ -1644,10 +1670,10 @@ T find(const chunk_seq& seq, size_t g) {
     if (g < cnt) {
       T* buf = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
       CHECK(buf != nullptr) << "allocation wrong";
-      int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+      int fd = vio::open(c.filename.c_str(), O_DIRECT | O_RDONLY);
       SYSCALL(fd);
-      SYSCALL(pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
-      close(fd);
+      SYSCALL(vio::pread(fd, buf, AlignUp(c.used), (off_t)c.begin_addr));
+      vio::close(fd);
       T val = buf[g];
       free(buf);
       return val;

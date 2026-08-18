@@ -57,8 +57,8 @@ static double to_gb(size_t bytes) {
 }
 
 static void cleanup_prefix(const std::string& prefix) {
-  for (size_t d = 0; d < GetSSDList().size(); d++)
-    unlink(GetFileName(prefix, d).c_str());
+  // Both backends: an example may have been run with --storage=memory.
+  plaid::cleanup_prefix(prefix);
 }
 
 static void print_row(const std::string& label, size_t in_bytes, double secs) {

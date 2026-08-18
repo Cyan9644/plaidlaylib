@@ -168,6 +168,13 @@ inline chunk_csr external_rmat_symmetric_graph(size_t n_req, size_t m_req,
                                                long double minw,
                                                long double maxw, double a = .5,
                                                double b = .15, double c = .15) {
+  // Disk-only: generation runs through direct_sample_sort, which drives its
+  // own io_uring rings outside utils/vio.h.  It builds its sequences from
+  // scratch rather than taking one, so the process default is what decides.
+  CHECK(plaid::default_storage() == plaid::storage::disk)
+      << "external_rmat_symmetric_graph: memory-backed storage is not "
+         "supported (RMAT generation bypasses the vio layer); run with "
+         "--storage=disk.";
   const int logn = (int)std::round(std::log2((double)n_req));
   const size_t n = size_t{1} << logn;
   const size_t m_gen = m_req / 2;

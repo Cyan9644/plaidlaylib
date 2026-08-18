@@ -57,6 +57,7 @@
 #include "parlay/sequence.h"
 #include "parlay/utilities.h"
 #include "utils/file_utils.h"
+#include "utils/vio.h"
 
 // ============================================================================
 // SimpleQueue -- bounded blocking queue
@@ -189,11 +190,12 @@ class UnorderedFileWriter {
   }
 
   void Start(const std::string& prefix,
-             const UnorderedWriterConfig& config = UnorderedWriterConfig()) {
+             const UnorderedWriterConfig& config = UnorderedWriterConfig(),
+             plaid::storage st = plaid::default_storage()) {
     file_name_prefix = prefix;
     std::vector<std::string> file_names;
     for (size_t i = 0; i < config.num_files; i++) {
-      file_names.push_back(GetFileName(prefix, i));
+      file_names.push_back(GetFileName(prefix, i, st));
     }
     Start(file_names, config);
   }
@@ -203,6 +205,12 @@ class UnorderedFileWriter {
     wait_queue.SetSizeLimit(config.queue_size);
     num_files = file_names.size();
     allow_expand = config.allow_expand;
+    // Names arrive already tagged for their backend, so the mode is read back
+    // off them; only the expand path, which has to synthesize new names, has
+    // to remember it.
+    expand_storage = (!file_names.empty() && vio::is_mem_path(file_names[0]))
+                         ? plaid::storage::memory
+                         : plaid::storage::disk;
     CHECK(num_files > 0);
     if (num_files < config.num_threads) {
       [[unlikely]] LOG(WARNING) << "Writing to " << num_files << " files with "
@@ -287,13 +295,15 @@ class UnorderedFileWriter {
     CHECK(this->num_files < new_num_files);
     while (this->global_files.size() < new_num_files) {
       global_files.push_back(
-          new OpenedFile(GetFileName(file_name_prefix, global_files.size())));
+          new OpenedFile(GetFileName(file_name_prefix, global_files.size(),
+                                     expand_storage)));
     }
     num_files = global_files.size();
   }
 
  private:
   bool allow_expand = false;
+  plaid::storage expand_storage = plaid::storage::disk;
   size_t num_files = 0;
   std::vector<std::unique_ptr<std::thread>> worker_threads;
   SimpleQueue<WriteRequest*> wait_queue;
@@ -331,11 +341,11 @@ class UnorderedFileWriter {
     size_t bytes_written = 0;
 
     explicit OpenedFile(const std::string& name) {
-      fd = open(name.c_str(), O_DIRECT | O_WRONLY | O_CREAT, 0644);
+      fd = vio::open(name.c_str(), O_DIRECT | O_WRONLY | O_CREAT, 0644);
       SYSCALL(fd);
     }
 
-    ~OpenedFile() { SYSCALL(close(fd)); }
+    ~OpenedFile() { SYSCALL(vio::close(fd)); }
   };
 
   enum Phase { NORMAL = 0, WAITING_FOR_COMPLETION = 1, ALL_DONE = 2 };
@@ -344,9 +354,9 @@ class UnorderedFileWriter {
                                   const std::vector<OpenedFile*> files,
                                   const size_t io_uring_size) {
     CHECK(!files.empty());
-    struct io_uring ring;
+    vio::Ring ring;
     SYSCALL(
-        InitIoUringWithRetry(io_uring_size, &ring, IORING_SETUP_SINGLE_ISSUER));
+        vio::queue_init(io_uring_size, &ring, IORING_SETUP_SINGLE_ISSUER));
 
     size_t current_file = 0;
     size_t outstanding_request = 0;
@@ -358,21 +368,21 @@ class UnorderedFileWriter {
     while (phase != ALL_DONE) {
       // reap io_uring result
       while (outstanding_request > 0) {
-        struct io_uring_cqe* cqe;
-        int wait_result = io_uring_peek_cqe(&ring, &cqe);
+        vio::Cqe* cqe;
+        int wait_result = vio::peek_cqe(&ring, &cqe);
         if (wait_result != 0) {
           if (outstanding_request >= max_outstanding_requests ||
               phase == WAITING_FOR_COMPLETION) {
-            wait_result = io_uring_wait_cqe(&ring, &cqe);
+            wait_result = vio::wait_cqe(&ring, &cqe);
           }
         }
         if (wait_result == 0) {
           SYSCALL(cqe->res);
-          auto* request = (WriteRequest*)io_uring_cqe_get_data(cqe);
+          auto* request = (WriteRequest*)vio::cqe_get_data(cqe);
           auto* file = request->file;
           file->bytes_written += request->size * sizeof(T);
 
-          io_uring_cqe_seen(&ring, cqe);
+          vio::cqe_seen(&ring, cqe);
           outstanding_request--;
           delete request;
         } else {
@@ -395,9 +405,9 @@ class UnorderedFileWriter {
           break;
         }
         // submit this IO request to ring
-        struct io_uring_sqe* sqe;
+        vio::Sqe* sqe;
         while (true) {
-          sqe = io_uring_get_sqe(&ring);
+          sqe = vio::get_sqe(&ring);
           if (sqe == nullptr) {
             [[unlikely]];
             sqe_unavailable_count++;
@@ -428,16 +438,16 @@ class UnorderedFileWriter {
         if (request->file_offset != (size_t)-1) {
           offset = request->file_offset;
         }
-        io_uring_prep_write(sqe, file->fd, request->data.get(), num_bytes,
+        vio::prep_write(sqe, file->fd, request->data.get(), num_bytes,
                             offset);
         file->bytes_issued += num_bytes;
-        io_uring_sqe_set_data(sqe, request);
+        vio::sqe_set_data(sqe, request);
         submit_write = true;
         outstanding_request++;
         requests_in_queue++;
       }
       if (submit_write) {
-        SYSCALL(io_uring_submit(&ring));
+        SYSCALL(vio::submit(&ring));
       }
       requests_in_queue = 0;
     }
@@ -447,7 +457,7 @@ class UnorderedFileWriter {
                    << sqe_unavailable_count << " times. "
                    << "Consider expanding the ring buffer.";
     }
-    io_uring_queue_exit(&ring);
+    vio::queue_exit(&ring);
   }
 };
 
@@ -473,12 +483,28 @@ struct chunk_seq {
   // this vector is ordered by index
   std::vector<chunk> chunks;
 
+  // Where this sequence's bytes live.  Derived from the chunk names rather
+  // than stored, which is what lets every producer that builds a chunk_seq by
+  // copying headers -- flatten, fuse, cut_by_chunk, prepend_zero_chunks,
+  // count_sort's shard carving, the delayed layer's synthetic read plans --
+  // carry the mode with no code of its own.  An empty sequence has no names to
+  // read, so it reports the process default.
+  //
+  // Callers use it to decide where a *derived* sequence should be written; the
+  // I/O layer itself never consults it, keying on each filename instead, so a
+  // sequence whose chunks somehow disagreed would still read correctly.
+  plaid::storage mode() const {
+    if (chunks.empty()) return plaid::default_storage();
+    return vio::is_mem_path(chunks[0].filename) ? plaid::storage::memory
+                                                : plaid::storage::disk;
+  }
+
   // Read all chunks in index order and write them contiguously to output_path.
   // Intended for local-filesystem output; reads from SSDs use O_DIRECT but the
   // output file is opened with ordinary (buffered) I/O so no alignment is
   // needed on the write side.
   void consolidate(const std::string& output_path) const {
-    int out_fd = open(output_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int out_fd = vio::open(output_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     SYSCALL(out_fd);
 
     // Process chunks in logical index order regardless of vector ordering.
@@ -498,16 +524,16 @@ struct chunk_seq {
       if (c->used == 0) continue;
       auto [it, inserted] = fd_cache.emplace(c->filename, -1);
       if (inserted) {
-        it->second = open(c->filename.c_str(), O_DIRECT | O_RDONLY);
+        it->second = vio::open(c->filename.c_str(), O_DIRECT | O_RDONLY);
         SYSCALL(it->second);
       }
-      SYSCALL(pread(it->second, buf, AlignUp(c->used), (off_t)c->begin_addr));
+      SYSCALL(vio::pread(it->second, buf, AlignUp(c->used), (off_t)c->begin_addr));
       SYSCALL(write(out_fd, buf, c->used));
     }
 
     free(buf);
-    for (auto& [name, fd] : fd_cache) close(fd);
-    close(out_fd);
+    for (auto& [name, fd] : fd_cache) vio::close(fd);
+    vio::close(out_fd);
   }
   const size_t headers_size() { return this->chunks.size(); }
 
@@ -527,7 +553,7 @@ struct chunk_seq {
   //   * one shared read-only fd PER DISTINCT FILE, opened once up front
   //   (O_DIRECT
   //     reads carry an explicit offset, so a single fd is safe to share),
-  //     instead of open()/close() per chunk.
+  //     instead of vio::open()/vio::close() per chunk.
   template <typename T = uint64_t>
   std::vector<T> to_vector() const {
     // Process chunks in logical index order regardless of vector ordering.
@@ -555,7 +581,7 @@ struct chunk_seq {
     std::map<std::string, int> fds;
     for (const chunk* c : ordered)
       if (c->used && fds.find(c->filename) == fds.end()) {
-        int fd = open(c->filename.c_str(), O_DIRECT | O_RDONLY);
+        int fd = vio::open(c->filename.c_str(), O_DIRECT | O_RDONLY);
         SYSCALL(fd);
         fds[c->filename] = fd;
       }
@@ -576,7 +602,7 @@ struct chunk_seq {
           }
           // O_DIRECT needs an aligned buffer and an aligned read length; the
           // trailing padding beyond c->used is read but not copied out.
-          SYSCALL(pread(fds.at(c->filename), wbuf[w], AlignUp(c->used),
+          SYSCALL(vio::pread(fds.at(c->filename), wbuf[w], AlignUp(c->used),
                         (off_t)c->begin_addr));
           memcpy(out.data() + offset[i], wbuf[w], c->used);
         },
@@ -584,7 +610,7 @@ struct chunk_seq {
 
     for (T* b : wbuf)
       if (b) free(b);
-    for (auto& [name, fd] : fds) close(fd);
+    for (auto& [name, fd] : fds) vio::close(fd);
 
     return out;
   }
@@ -616,12 +642,12 @@ struct chunk_seq {
 
     void* buf = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, O_DIRECT_MULTIPLE);
     CHECK(buf != nullptr) << "operator[]: buffer allocation failed";
-    int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+    int fd = vio::open(c.filename.c_str(), O_DIRECT | O_RDONLY);
     SYSCALL(fd);
-    SYSCALL(pread(fd, buf, O_DIRECT_MULTIPLE, (off_t)block));
+    SYSCALL(vio::pread(fd, buf, O_DIRECT_MULTIPLE, (off_t)block));
     T value;
     memcpy(&value, (char*)buf + (byte - block), sizeof(T));
-    close(fd);
+    vio::close(fd);
     free(buf);
     return value;
   }
@@ -645,12 +671,12 @@ struct chunk_seq {
 
       void* buf = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, O_DIRECT_MULTIPLE);
       CHECK(buf != nullptr) << "push_back: buffer allocation failed";
-      int fd = open(last.filename.c_str(), O_DIRECT | O_RDWR);
+      int fd = vio::open(last.filename.c_str(), O_DIRECT | O_RDWR);
       SYSCALL(fd);
-      SYSCALL(pread(fd, buf, O_DIRECT_MULTIPLE, (off_t)block));
+      SYSCALL(vio::pread(fd, buf, O_DIRECT_MULTIPLE, (off_t)block));
       memcpy((char*)buf + (byte - block), &value, sizeof(T));
-      SYSCALL(pwrite(fd, buf, O_DIRECT_MULTIPLE, (off_t)block));
-      close(fd);
+      SYSCALL(vio::pwrite(fd, buf, O_DIRECT_MULTIPLE, (off_t)block));
+      vio::close(fd);
       free(buf);
       last.used += sizeof(T);
       return;
@@ -673,18 +699,18 @@ struct chunk_seq {
     const size_t begin_addr = slot * CHUNK_SIZE;
 
     // Grow the file to cover the new slot (matches tabulate's allocation).
-    int fd = open(filename.c_str(), O_DIRECT | O_RDWR);
+    int fd = vio::open(filename.c_str(), O_DIRECT | O_RDWR);
     SYSCALL(fd);
     const size_t file_size = (slot + 1) * CHUNK_SIZE;
-    if (fallocate(fd, 0, 0, (off_t)file_size) != 0)
-      SYSCALL(ftruncate(fd, (off_t)file_size));
+    if (vio::fallocate(fd, 0, 0, (off_t)file_size) != 0)
+      SYSCALL(vio::ftruncate(fd, (off_t)file_size));
 
     void* buf = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, O_DIRECT_MULTIPLE);
     CHECK(buf != nullptr) << "push_back: buffer allocation failed";
     memset(buf, 0, O_DIRECT_MULTIPLE);
     memcpy(buf, &value, sizeof(T));
-    SYSCALL(pwrite(fd, buf, O_DIRECT_MULTIPLE, (off_t)begin_addr));
-    close(fd);
+    SYSCALL(vio::pwrite(fd, buf, O_DIRECT_MULTIPLE, (off_t)begin_addr));
+    vio::close(fd);
     free(buf);
 
     chunks.push_back({filename, begin_addr, sizeof(T), chunks.size()});
@@ -707,7 +733,8 @@ namespace plaid {
  */
 template <typename T = uint64_t, typename F>
 chunk_seq tabulate(size_t n, const std::string& result_prefix, F f,
-                   size_t io_threads = 0) {
+                   size_t io_threads = 0,
+                   plaid::storage st = plaid::default_storage()) {
   static_assert(CHUNK_SIZE % sizeof(T) == 0,
                 "sizeof(T) must divide CHUNK_SIZE for O_DIRECT alignment");
   const size_t ept = CHUNK_SIZE / sizeof(T);
@@ -749,16 +776,16 @@ chunk_seq tabulate(size_t n, const std::string& result_prefix, F f,
   parlay::parallel_for(
       0, num_drives,
       [&](size_t d) {
-        filenames[d] = GetFileName(result_prefix, d);
+        filenames[d] = GetFileName(result_prefix, d, st);
         const size_t file_size = drive_chunks[d].size() * CHUNK_SIZE;
         if (file_size == 0) return;
-        int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int fd = vio::open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         SYSCALL(fd);
         // fallocate guarantees contiguous allocation; fall back to ftruncate
         // on filesystems that don't support it (e.g. tmpfs).
-        if (fallocate(fd, 0, 0, (off_t)file_size) != 0)
-          SYSCALL(ftruncate(fd, (off_t)file_size));
-        SYSCALL(close(fd));
+        if (vio::fallocate(fd, 0, 0, (off_t)file_size) != 0)
+          SYSCALL(vio::ftruncate(fd, (off_t)file_size));
+        SYSCALL(vio::close(fd));
       },
       /*granularity=*/1);
 
@@ -815,8 +842,9 @@ chunk_seq tabulate(size_t n, const std::string& result_prefix, F f,
   return {chunks};
 }
 
-chunk_seq iota(size_t n) {
-  return tabulate<uint64_t>(n, "iota", [](size_t i) { return (uint64_t)i; });
+chunk_seq iota(size_t n, plaid::storage st = plaid::default_storage()) {
+  return tabulate<uint64_t>(
+      n, "iota", [](size_t i) { return (uint64_t)i; }, /*io_threads=*/0, st);
 }
 
 /**
@@ -836,15 +864,16 @@ chunk_seq iota(size_t n) {
  */
 template <typename T = uint64_t>
 chunk_seq from_file(const std::string& input_path,
-                    const std::string& result_prefix = "chunkseq") {
+                    const std::string& result_prefix = "chunkseq",
+                    plaid::storage st = plaid::default_storage()) {
   static_assert(CHUNK_SIZE % sizeof(T) == 0,
                 "sizeof(T) must divide CHUNK_SIZE for O_DIRECT alignment");
 
-  int in_fd = open(input_path.c_str(), O_RDONLY);
+  int in_fd = vio::open(input_path.c_str(), O_RDONLY);
   SYSCALL(in_fd);
-  struct stat st;
-  SYSCALL(fstat(in_fd, &st));
-  const size_t nbytes = (size_t)st.st_size;
+  struct stat in_st;
+  SYSCALL(fstat(in_fd, &in_st));
+  const size_t nbytes = (size_t)in_st.st_size;
   CHECK(nbytes % sizeof(T) == 0)
       << "from_file: file size " << nbytes << " not a multiple of sizeof(T)";
   const size_t n = nbytes / sizeof(T);
@@ -852,7 +881,7 @@ chunk_seq from_file(const std::string& input_path,
   const size_t ept = CHUNK_SIZE / sizeof(T);
   const size_t num_chunks = (n + ept - 1) / ept;
   if (num_chunks == 0) {
-    close(in_fd);
+    vio::close(in_fd);
     return {};
   }
   const size_t num_drives = GetSSDList().size();
@@ -877,14 +906,14 @@ chunk_seq from_file(const std::string& input_path,
   parlay::parallel_for(
       0, num_drives,
       [&](size_t d) {
-        filenames[d] = GetFileName(result_prefix, d);
+        filenames[d] = GetFileName(result_prefix, d, st);
         const size_t file_size = drive_chunks[d].size() * CHUNK_SIZE;
         if (file_size == 0) return;
-        int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int fd = vio::open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         SYSCALL(fd);
-        if (fallocate(fd, 0, 0, (off_t)file_size) != 0)
-          SYSCALL(ftruncate(fd, (off_t)file_size));
-        SYSCALL(close(fd));
+        if (vio::fallocate(fd, 0, 0, (off_t)file_size) != 0)
+          SYSCALL(vio::ftruncate(fd, (off_t)file_size));
+        SYSCALL(vio::close(fd));
       },
       /*granularity=*/1);
 
@@ -924,7 +953,7 @@ chunk_seq from_file(const std::string& input_path,
           CHECK(buf != nullptr) << "from_file: buffer allocation failed";
           size_t got = 0;
           while (got < bytes) {
-            ssize_t r = pread(in_fd, (char*)buf + got, bytes - got,
+            ssize_t r = vio::pread(in_fd, (char*)buf + got, bytes - got,
                               (off_t)(start * sizeof(T) + got));
             SYSCALL(r);
             CHECK(r > 0) << "from_file: unexpected EOF reading " << input_path;
@@ -940,7 +969,7 @@ chunk_seq from_file(const std::string& input_path,
       /*granularity=*/1);
 
   writer.Wait();
-  close(in_fd);
+  vio::close(in_fd);
   return {chunks};
 }
 
@@ -957,11 +986,12 @@ chunk_seq from_file(const std::string& input_path,
 template <typename Range>
 chunk_seq to_chunk_seq(const Range& seq,
                        const std::string& result_prefix = "chunkseq",
-                       size_t io_threads = 0) {
+                       size_t io_threads = 0,
+                       plaid::storage st = plaid::default_storage()) {
   using T = typename Range::value_type;
   return tabulate<T>(
       seq.size(), result_prefix, [&seq](size_t i) { return seq[i]; },
-      io_threads);
+      io_threads, st);
 }
 
 /**
@@ -979,7 +1009,8 @@ chunk_seq to_chunk_seq(const Range& seq,
  * back to back.
  */
 template <typename T = uint64_t, typename F>
-chunk_seq sequential_tabulate(size_t n, const std::string& result_prefix, F f) {
+chunk_seq sequential_tabulate(size_t n, const std::string& result_prefix, F f,
+                             plaid::storage st = plaid::default_storage()) {
   static_assert(CHUNK_SIZE % sizeof(T) == 0,
                 "sizeof(T) must divide CHUNK_SIZE for O_DIRECT alignment");
   const size_t ept = CHUNK_SIZE / sizeof(T);
@@ -1007,13 +1038,13 @@ chunk_seq sequential_tabulate(size_t n, const std::string& result_prefix, F f) {
     const std::vector<size_t>& mine = drive_chunks[d];
     if (mine.empty()) continue;
 
-    const std::string filename = GetFileName(result_prefix, d);
+    const std::string filename = GetFileName(result_prefix, d, st);
     int fd =
-        open(filename.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0644);
+        vio::open(filename.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0644);
     SYSCALL(fd);
     const size_t file_size = mine.size() * CHUNK_SIZE;
-    if (fallocate(fd, 0, 0, (off_t)file_size) != 0)
-      SYSCALL(ftruncate(fd, (off_t)file_size));
+    if (vio::fallocate(fd, 0, 0, (off_t)file_size) != 0)
+      SYSCALL(vio::ftruncate(fd, (off_t)file_size));
 
     // Slot s of this drive's file holds chunk mine[s], so every begin_addr is
     // CHUNK_SIZE-aligned exactly as in tabulate.
@@ -1023,10 +1054,10 @@ chunk_seq sequential_tabulate(size_t n, const std::string& result_prefix, F f) {
       const size_t count = std::min(ept, n - start);
       for (size_t j = 0; j < count; j++) buf[j] = f(start + j);
       if (count < ept) memset(buf + count, 0, (ept - count) * sizeof(T));
-      SYSCALL(pwrite(fd, buf, CHUNK_SIZE, (off_t)(s * CHUNK_SIZE)));
+      SYSCALL(vio::pwrite(fd, buf, CHUNK_SIZE, (off_t)(s * CHUNK_SIZE)));
       chunks[i] = {filename, s * CHUNK_SIZE, count * sizeof(T), i};
     }
-    close(fd);
+    vio::close(fd);
   }
 
   free(buf);
@@ -1041,10 +1072,11 @@ chunk_seq sequential_tabulate(size_t n, const std::string& result_prefix, F f) {
  */
 template <typename Range>
 chunk_seq sequential_to_chunk_seq(
-    const Range& seq, const std::string& result_prefix = "chunkseq") {
+    const Range& seq, const std::string& result_prefix = "chunkseq",
+    plaid::storage st = plaid::default_storage()) {
   using T = typename Range::value_type;
-  return sequential_tabulate<T>(seq.size(), result_prefix,
-                                [&seq](size_t i) { return seq[i]; });
+  return sequential_tabulate<T>(
+      seq.size(), result_prefix, [&seq](size_t i) { return seq[i]; }, st);
 }
 
 // Total number of *elements* (not chunks) in the sequence.  O(1): every chunk
@@ -1070,7 +1102,8 @@ size_t size(const chunk_seq& seq) {
 // chunk may be partial, so this does NOT re-densify and does NOT verify the
 // every-chunk-but-last-full invariant).  Reads and writes are O_DIRECT.
 inline chunk_seq from_chunks(const parlay::sequence<chunk>& headers,
-                             const std::string& result_prefix = "cut_out") {
+                             const std::string& result_prefix = "cut_out",
+                             plaid::storage st = plaid::default_storage()) {
   const size_t num_chunks = headers.size();
   if (num_chunks == 0) return {};
   const size_t num_drives = GetSSDList().size();
@@ -1097,14 +1130,14 @@ inline chunk_seq from_chunks(const parlay::sequence<chunk>& headers,
   parlay::parallel_for(
       0, num_drives,
       [&](size_t d) {
-        filenames[d] = GetFileName(result_prefix, d);
+        filenames[d] = GetFileName(result_prefix, d, st);
         const size_t file_size = drive_chunks[d].size() * CHUNK_SIZE;
         if (file_size == 0) return;
-        int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int fd = vio::open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         SYSCALL(fd);
-        if (fallocate(fd, 0, 0, (off_t)file_size) != 0)
-          SYSCALL(ftruncate(fd, (off_t)file_size));
-        SYSCALL(close(fd));
+        if (vio::fallocate(fd, 0, 0, (off_t)file_size) != 0)
+          SYSCALL(vio::ftruncate(fd, (off_t)file_size));
+        SYSCALL(vio::close(fd));
       },
       /*granularity=*/1);
 
@@ -1123,16 +1156,16 @@ inline chunk_seq from_chunks(const parlay::sequence<chunk>& headers,
         const chunk& src = headers[i];
         void* buf = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
         CHECK(buf != nullptr) << "from_chunks: buffer allocation failed";
-        int rfd = open(src.filename.c_str(), O_RDONLY | O_DIRECT);
+        int rfd = vio::open(src.filename.c_str(), O_RDONLY | O_DIRECT);
         SYSCALL(rfd);
-        SYSCALL(pread(rfd, buf, AlignUp(src.used), (off_t)src.begin_addr));
-        close(rfd);
+        SYSCALL(vio::pread(rfd, buf, AlignUp(src.used), (off_t)src.begin_addr));
+        vio::close(rfd);
         if (src.used < CHUNK_SIZE)
           memset((char*)buf + src.used, 0, CHUNK_SIZE - src.used);
-        int wfd = open(filenames[drive_of[i]].c_str(), O_WRONLY | O_DIRECT);
+        int wfd = vio::open(filenames[drive_of[i]].c_str(), O_WRONLY | O_DIRECT);
         SYSCALL(wfd);
-        SYSCALL(pwrite(wfd, buf, CHUNK_SIZE, (off_t)(slot_of[i] * CHUNK_SIZE)));
-        close(wfd);
+        SYSCALL(vio::pwrite(wfd, buf, CHUNK_SIZE, (off_t)(slot_of[i] * CHUNK_SIZE)));
+        vio::close(wfd);
         free(buf);
       },
       /*granularity=*/1);
@@ -1248,7 +1281,7 @@ class ChunkSequenceReader {
     is_open = false;
     Wait();
     // Workers have all joined; no further reads can reference these fds.
-    for (auto& [name, fd] : shared_fds) close(fd);
+    for (auto& [name, fd] : shared_fds) vio::close(fd);
     shared_fds.clear();
   }
 
@@ -1275,7 +1308,7 @@ class ChunkSequenceReader {
     // which is what caused EMFILE under highly-parallel recursive sorts.
     for (const chunk& c : chunks) {
       if (shared_fds.find(c.filename) == shared_fds.end()) {
-        int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+        int fd = vio::open(c.filename.c_str(), O_DIRECT | O_RDONLY);
         SYSCALL(fd);
         shared_fds[c.filename] = fd;
       }
@@ -1324,9 +1357,9 @@ class ChunkSequenceReader {
 
   static void Worker(ChunkSequenceReader* self, std::vector<chunk> work,
                      size_t queue_depth, size_t max_requests) {
-    struct io_uring ring;
+    vio::Ring ring;
     SYSCALL(
-        InitIoUringWithRetry(queue_depth, &ring, IORING_SETUP_SINGLE_ISSUER));
+        vio::queue_init(queue_depth, &ring, IORING_SETUP_SINGLE_ISSUER));
 
     // fds are opened once in Start() and shared read-only across workers;
     // the map is not mutated after Start(), so lookups here need no lock.
@@ -1347,23 +1380,23 @@ class ChunkSequenceReader {
     while ((completed < total) && self->is_open) {
       // Non-blocking reap of completed reads.
       while (outstanding > 0) {
-        struct io_uring_cqe* cqe;
-        if (io_uring_peek_cqe(&ring, &cqe) != 0) break;
+        vio::Cqe* cqe;
+        if (vio::peek_cqe(&ring, &cqe) != 0) break;
         SYSCALL(cqe->res);
-        auto* req = (ReadRequest*)io_uring_cqe_get_data(cqe);
+        auto* req = (ReadRequest*)vio::cqe_get_data(cqe);
         self->buffer_queue.Push(
             {req->data, req->used_bytes / sizeof(T), req->chunk_index});
         free_pool.push_back(req);
         outstanding--;
         completed++;
-        io_uring_cqe_seen(&ring, cqe);
+        vio::cqe_seen(&ring, cqe);
       }
 
       // Submit new reads while we have capacity and pending chunks.
       bool submitted = false;
       while (!free_pool.empty() && !pending.empty() &&
              outstanding < max_requests) {
-        struct io_uring_sqe* sqe = io_uring_get_sqe(&ring);
+        vio::Sqe* sqe = vio::get_sqe(&ring);
         if (sqe == nullptr) break;
 
         const chunk c =
@@ -1378,33 +1411,33 @@ class ChunkSequenceReader {
 
         // O_DIRECT requires the read size to be page-aligned.
         size_t read_size = AlignUp(c.used);
-        io_uring_prep_read(sqe, get_fd(c.filename), req->data, read_size,
+        vio::prep_read(sqe, get_fd(c.filename), req->data, read_size,
                            c.begin_addr);
-        io_uring_sqe_set_data(sqe, req);
+        vio::sqe_set_data(sqe, req);
         outstanding++;
         submitted = true;
       }
 
-      if (submitted) SYSCALL(io_uring_submit(&ring));
+      if (submitted) SYSCALL(vio::submit(&ring));
 
       // If the ring is full and there's nothing more to submit, wait
       // for at least one completion before looping.
       if (outstanding > 0 && (pending.empty() || free_pool.empty()) &&
           !submitted) {
-        struct io_uring_cqe* cqe;
-        SYSCALL(io_uring_wait_cqe(&ring, &cqe));
+        vio::Cqe* cqe;
+        SYSCALL(vio::wait_cqe(&ring, &cqe));
         SYSCALL(cqe->res);
-        auto* req = (ReadRequest*)io_uring_cqe_get_data(cqe);
+        auto* req = (ReadRequest*)vio::cqe_get_data(cqe);
         self->buffer_queue.Push(
             {req->data, req->used_bytes / sizeof(T), req->chunk_index});
         free_pool.push_back(req);
         outstanding--;
         completed++;
-        io_uring_cqe_seen(&ring, cqe);
+        vio::cqe_seen(&ring, cqe);
       }
     }
 
-    io_uring_queue_exit(&ring);
+    vio::queue_exit(&ring);
     free(pool);
     // Shared fds are closed once in ~ChunkSequenceReader, not per worker.
 
@@ -1472,7 +1505,7 @@ class PersistentChunkSequenceReader {
     // fd per distinct file, shared read-only across all worker threads.
     for (const chunk& c : seq.chunks) {
       if (shared_fds.find(c.filename) == shared_fds.end()) {
-        int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
+        int fd = vio::open(c.filename.c_str(), O_DIRECT | O_RDONLY);
         SYSCALL(fd);
         shared_fds[c.filename] = fd;
       }
@@ -1523,7 +1556,7 @@ class PersistentChunkSequenceReader {
     cv.notify_all();
     for (auto& t : worker_threads)
       if (t->joinable()) t->join();
-    for (auto& [name, fd] : shared_fds) close(fd);
+    for (auto& [name, fd] : shared_fds) vio::close(fd);
     shared_fds.clear();
   }
 
@@ -1555,9 +1588,9 @@ class PersistentChunkSequenceReader {
   static void Worker(PersistentChunkSequenceReader* self,
                      std::vector<chunk> work, size_t queue_depth,
                      size_t max_requests) {
-    struct io_uring ring;
+    vio::Ring ring;
     SYSCALL(
-        InitIoUringWithRetry(queue_depth, &ring, IORING_SETUP_SINGLE_ISSUER));
+        vio::queue_init(queue_depth, &ring, IORING_SETUP_SINGLE_ISSUER));
 
     // fds are opened once in Start() and shared read-only across workers
     // and rounds; the map is not mutated after Start(), so lookups here
@@ -1596,23 +1629,23 @@ class PersistentChunkSequenceReader {
       while (completed < total) {
         // Non-blocking reap of completed reads.
         while (outstanding > 0) {
-          struct io_uring_cqe* cqe;
-          if (io_uring_peek_cqe(&ring, &cqe) != 0) break;
+          vio::Cqe* cqe;
+          if (vio::peek_cqe(&ring, &cqe) != 0) break;
           SYSCALL(cqe->res);
-          auto* req = (ReadRequest*)io_uring_cqe_get_data(cqe);
+          auto* req = (ReadRequest*)vio::cqe_get_data(cqe);
           self->buffer_queue.Push(
               {req->data, req->used_bytes / sizeof(T), req->chunk_index});
           free_pool.push_back(req);
           outstanding--;
           completed++;
-          io_uring_cqe_seen(&ring, cqe);
+          vio::cqe_seen(&ring, cqe);
         }
 
         // Submit new reads while we have capacity and pending chunks.
         bool submitted = false;
         while (!free_pool.empty() && !pending.empty() &&
                outstanding < max_requests) {
-          struct io_uring_sqe* sqe = io_uring_get_sqe(&ring);
+          vio::Sqe* sqe = vio::get_sqe(&ring);
           if (sqe == nullptr) break;
 
           const chunk c =
@@ -1627,35 +1660,35 @@ class PersistentChunkSequenceReader {
 
           // O_DIRECT requires the read size to be page-aligned.
           size_t read_size = AlignUp(c.used);
-          io_uring_prep_read(sqe, get_fd(c.filename), req->data, read_size,
+          vio::prep_read(sqe, get_fd(c.filename), req->data, read_size,
                              c.begin_addr);
-          io_uring_sqe_set_data(sqe, req);
+          vio::sqe_set_data(sqe, req);
           outstanding++;
           submitted = true;
         }
 
-        if (submitted) SYSCALL(io_uring_submit(&ring));
+        if (submitted) SYSCALL(vio::submit(&ring));
 
         // If the ring is full and there's nothing more to submit,
         // wait for at least one completion before looping.
         if (outstanding > 0 && (pending.empty() || free_pool.empty()) &&
             !submitted) {
-          struct io_uring_cqe* cqe;
-          SYSCALL(io_uring_wait_cqe(&ring, &cqe));
+          vio::Cqe* cqe;
+          SYSCALL(vio::wait_cqe(&ring, &cqe));
           SYSCALL(cqe->res);
-          auto* req = (ReadRequest*)io_uring_cqe_get_data(cqe);
+          auto* req = (ReadRequest*)vio::cqe_get_data(cqe);
           self->buffer_queue.Push(
               {req->data, req->used_bytes / sizeof(T), req->chunk_index});
           free_pool.push_back(req);
           outstanding--;
           completed++;
-          io_uring_cqe_seen(&ring, cqe);
+          vio::cqe_seen(&ring, cqe);
         }
       }
       // Round done; loop back to wait for the next StartRound().
     }
 
-    io_uring_queue_exit(&ring);
+    vio::queue_exit(&ring);
     free(pool);
     // Shared fds are closed once in Shutdown(), not per worker.
   }
@@ -1770,6 +1803,9 @@ template <typename T, typename R = T, typename Body>
 chunk_seq ExternalTransform(const chunk_seq& seq,
                             const std::string& result_prefix, Body body,
                             size_t max_out_per_input = 1, bool compact = true) {
+  // Derived, not passed: the output of a transform belongs wherever its input
+  // lives, and deriving it means no caller has to thread the mode through.
+  const plaid::storage st = seq.mode();
   const size_t num_drives = GetSSDList().size();
 
   // Create/truncate one output file per drive.  The writer opens files with
@@ -1778,10 +1814,10 @@ chunk_seq ExternalTransform(const chunk_seq& seq,
   parlay::parallel_for(
       0, num_drives,
       [&](size_t d) {
-        filenames[d] = GetFileName(result_prefix, d);
-        int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        filenames[d] = GetFileName(result_prefix, d, st);
+        int fd = vio::open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         SYSCALL(fd);
-        SYSCALL(close(fd));
+        SYSCALL(vio::close(fd));
       },
       /*granularity=*/1);
 
@@ -1909,7 +1945,8 @@ struct DensePackRun {
  */
 template <typename R, typename ProduceBatch>
 chunk_seq DensePack(size_t num_virtual, const std::string& result_prefix,
-                    ProduceBatch produce) {
+                    ProduceBatch produce,
+                    plaid::storage st = plaid::default_storage()) {
   if (num_virtual == 0) return {};
 
   const size_t epct = CHUNK_SIZE / sizeof(R);  // elements per output chunk
@@ -1921,10 +1958,10 @@ chunk_seq DensePack(size_t num_virtual, const std::string& result_prefix,
   parlay::parallel_for(
       0, num_drives,
       [&](size_t d) {
-        filenames[d] = GetFileName(result_prefix, d);
-        int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        filenames[d] = GetFileName(result_prefix, d, st);
+        int fd = vio::open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         SYSCALL(fd);
-        SYSCALL(close(fd));
+        SYSCALL(vio::close(fd));
       },
       /*granularity=*/1);
 
@@ -2078,6 +2115,7 @@ template <typename T, typename R, typename Body>
 chunk_seq DensePackStream(const chunk_seq& seq,
                           const std::string& result_prefix, size_t halo,
                           Body body) {
+  const plaid::storage st = seq.mode();
   const size_t n_in = seq.chunks.size();
   if (n_in == 0) return {};
 
@@ -2096,10 +2134,10 @@ chunk_seq DensePackStream(const chunk_seq& seq,
   parlay::parallel_for(
       0, num_drives,
       [&](size_t d) {
-        filenames[d] = GetFileName(result_prefix, d);
-        int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        filenames[d] = GetFileName(result_prefix, d, st);
+        int fd = vio::open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         SYSCALL(fd);
-        SYSCALL(close(fd));
+        SYSCALL(vio::close(fd));
       },
       /*granularity=*/1);
 
@@ -2547,7 +2585,8 @@ class BucketWriter {
   // drive instead of a single one).  Default 1 reproduces the original
   // one-file-per-bucket layout exactly.
   BucketWriter(const std::string& prefix, size_t num_buckets,
-               size_t disk_span = 1)
+               size_t disk_span = 1,
+               plaid::storage st = plaid::default_storage())
       : num_buckets_(num_buckets),
         disk_span_(disk_span),
         buckets_(num_buckets * disk_span),
@@ -2562,8 +2601,8 @@ class BucketWriter {
       for (size_t s = 0; s < disk_span; s++) {
         const size_t i = b * disk_span_ + s;
         Bucket& bk = buckets_[i];
-        results_[i].filename = GetFileName(prefix, i);
-        bk.fd = open(results_[i].filename.c_str(),
+        results_[i].filename = GetFileName(prefix, i, st);
+        bk.fd = vio::open(results_[i].filename.c_str(),
                      O_WRONLY | O_DIRECT | O_CREAT | O_TRUNC, 0644);
         SYSCALL(bk.fd);
         bk.cur = NewRequest(bk.fd, 0);
@@ -2573,15 +2612,15 @@ class BucketWriter {
 
   ~BucketWriter() {
     for (Bucket& bk : buckets_)
-      if (bk.fd >= 0) close(bk.fd);
+      if (bk.fd >= 0) vio::close(bk.fd);
   }
 
   // Drains `pending_` until it is closed.  Run on kWriterIoThreads parlay
   // workers alongside the scatter workers.
   void RunIoThread() {
-    struct io_uring ring;
-    SYSCALL(InitIoUringWithRetry(kWriterRingDepth, &ring,
-                                 IORING_SETUP_SINGLE_ISSUER));
+    vio::Ring ring;
+    SYSCALL(vio::queue_init(kWriterRingDepth, &ring,
+                            IORING_SETUP_SINGLE_ISSUER));
     size_t in_ring = 0;
     bool more = true;
 
@@ -2595,36 +2634,36 @@ class BucketWriter {
           if (code == QueueCode::FINISH) more = false;
           break;
         }
-        struct io_uring_sqe* sqe = io_uring_get_sqe(&ring);
+        vio::Sqe* sqe = vio::get_sqe(&ring);
         CHECK(sqe != nullptr) << "BucketWriter: writer ring out of sqes";
-        io_uring_prep_writev(sqe, r->fd, r->iov, r->n, r->offset);
-        io_uring_sqe_set_data(sqe, r);
+        vio::prep_writev(sqe, r->fd, r->iov, r->n, r->offset);
+        vio::sqe_set_data(sqe, r);
         in_ring++;
         submitted = true;
       }
-      if (submitted) SYSCALL(io_uring_submit(&ring));
+      if (submitted) SYSCALL(vio::submit(&ring));
 
       bool must_reap =
           in_ring > 0 && (in_ring >= kWriterRingDepth || !more || !submitted);
       while (in_ring > 0) {
-        struct io_uring_cqe* cqe;
+        vio::Cqe* cqe;
         if (must_reap) {
-          SYSCALL(io_uring_wait_cqe(&ring, &cqe));
-        } else if (io_uring_peek_cqe(&ring, &cqe) != 0) {
+          SYSCALL(vio::wait_cqe(&ring, &cqe));
+        } else if (vio::peek_cqe(&ring, &cqe) != 0) {
           break;
         }
         SYSCALL(cqe->res);
-        Request* r = (Request*)io_uring_cqe_get_data(cqe);
+        Request* r = (Request*)vio::cqe_get_data(cqe);
         CHECK((size_t)cqe->res == r->bytes)
             << "BucketWriter: short write (" << cqe->res << " of " << r->bytes
             << ")";
-        io_uring_cqe_seen(&ring, cqe);
+        vio::cqe_seen(&ring, cqe);
         in_ring--;
         must_reap = false;
         Recycle(r);
       }
     }
-    io_uring_queue_exit(&ring);
+    vio::queue_exit(&ring);
   }
 
   // Takes ownership of `buf` (a bucket_allocator block); `count` is its live
@@ -2709,7 +2748,7 @@ class BucketWriter {
   // Called after the I/O threads have joined: every write has landed.
   void CloseFiles() {
     for (Bucket& bk : buckets_) {
-      if (bk.fd >= 0) SYSCALL(close(bk.fd));
+      if (bk.fd >= 0) SYSCALL(vio::close(bk.fd));
       bk.fd = -1;
     }
   }

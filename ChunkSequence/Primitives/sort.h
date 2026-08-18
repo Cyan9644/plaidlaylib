@@ -53,6 +53,7 @@
 #include "configs.h"
 #include "parlay/parallel.h"
 #include "utils/file_utils.h"
+#include "utils/vio.h"
 
 // ============================================================================
 // process_inplace / sort_inplace
@@ -90,14 +91,14 @@ constexpr size_t kBucketPipelineStaggerUs = 5000;
 // technique as direct_samplesort.h's WorkerOnlyPhase2 / Peter's
 // ScatterGather.  A sequence's chunks are grouped into maximal contiguous
 // runs (same filename, back-to-back begin_addr) before I/O is issued: one
-// open(), one read SQE, one write SQE per run, instead of per chunk.  With a
+// vio::open(), one read SQE, one write SQE per run, instead of per chunk.  With a
 // single-shard (single-file) sequence this collapses to exactly one run,
 // matching direct_samplesort.h's single open/read/write per bucket; a
 // sequence spanning multiple files (e.g. a drive-striped count_sort, one file
 // per shard) degrades to one run per shard.  Each run's fd is opened O_RDWR
 // once and reused for both its read and its write (closed only after the
 // write completes), rather than reopened per direction, halving the
-// open()/close() syscalls on top of the run-coalescing itself.
+// vio::open()/vio::close() syscalls on top of the run-coalescing itself.
 //
 // `buf` is chunk-slotted: chunk ci's bytes always live at buf[ci*ept],
 // padded out to a full CHUNK_SIZE regardless of how many are actually live
@@ -142,11 +143,11 @@ void process_inplace(std::vector<chunk_seq>& seqs, Processor processor) {
       [&](size_t) {
         usleep(detail::kBucketPipelineStaggerUs * parlay::worker_id());
 
-        struct io_uring read_ring, write_ring;
-        SYSCALL(InitIoUringWithRetry(ring_depth, &read_ring,
-                                     IORING_SETUP_SINGLE_ISSUER));
-        SYSCALL(InitIoUringWithRetry(ring_depth, &write_ring,
-                                     IORING_SETUP_SINGLE_ISSUER));
+        vio::Ring read_ring, write_ring;
+        SYSCALL(vio::queue_init(ring_depth, &read_ring,
+                                IORING_SETUP_SINGLE_ISSUER));
+        SYSCALL(vio::queue_init(ring_depth, &write_ring,
+                                IORING_SETUP_SINGLE_ISSUER));
 
         // A maximal run of consecutive chunks sharing one file at
         // back-to-back offsets, read/written with a single SQE.
@@ -176,10 +177,10 @@ void process_inplace(std::vector<chunk_seq>& seqs, Processor processor) {
           // each run pays one open/close pair instead of two.
           if (reap_read) {
             for (size_t ri = 0; ri < current.runs.size(); ri++) {
-              struct io_uring_cqe* cqe;
-              SYSCALL(io_uring_wait_cqe(&read_ring, &cqe));
+              vio::Cqe* cqe;
+              SYSCALL(vio::wait_cqe(&read_ring, &cqe));
               SYSCALL(cqe->res);
-              io_uring_cqe_seen(&read_ring, cqe);
+              vio::cqe_seen(&read_ring, cqe);
             }
             process = true;
           } else {
@@ -225,13 +226,13 @@ void process_inplace(std::vector<chunk_seq>& seqs, Processor processor) {
                 const size_t read_bytes =
                     (count - 1) * CHUNK_SIZE + AlignUp(last.used);
 
-                int fd = open(first.filename.c_str(), O_RDWR | O_DIRECT);
+                int fd = vio::open(first.filename.c_str(), O_RDWR | O_DIRECT);
                 SYSCALL(fd);
-                struct io_uring_sqe* sqe = io_uring_get_sqe(&read_ring);
+                vio::Sqe* sqe = vio::get_sqe(&read_ring);
                 CHECK(sqe != nullptr)
                     << "process_inplace: read ring out of sqes";
-                io_uring_prep_read(sqe, fd, next.buf + start * ept, read_bytes,
-                                   (off_t)first.begin_addr);
+                vio::prep_read(sqe, fd, next.buf + start * ept, read_bytes,
+                               (off_t)first.begin_addr);
                 next.runs.push_back(Run{fd, start, count, read_bytes});
               }
               for (const chunk& c : bs.chunks) nelem += c.used / sizeof(T);
@@ -247,7 +248,7 @@ void process_inplace(std::vector<chunk_seq>& seqs, Processor processor) {
                 CHECK(next.compact != nullptr)
                     << "process_inplace: compact alloc failed";
               }
-              SYSCALL(io_uring_submit(&read_ring));
+              SYSCALL(vio::submit(&read_ring));
             }
           }
           reap_read = submit_read;
@@ -293,11 +294,11 @@ void process_inplace(std::vector<chunk_seq>& seqs, Processor processor) {
           // Reap the write submitted last round (it drained `previous`).
           if (reap_write) {
             for (size_t ri = 0; ri < previous.runs.size(); ri++) {
-              struct io_uring_cqe* cqe;
-              SYSCALL(io_uring_wait_cqe(&write_ring, &cqe));
+              vio::Cqe* cqe;
+              SYSCALL(vio::wait_cqe(&write_ring, &cqe));
               SYSCALL(cqe->res);
-              io_uring_cqe_seen(&write_ring, cqe);
-              close(previous.runs[ri].fd);
+              vio::cqe_seen(&write_ring, cqe);
+              vio::close(previous.runs[ri].fd);
             }
             free(previous.buf);
             free(previous.compact);
@@ -307,20 +308,20 @@ void process_inplace(std::vector<chunk_seq>& seqs, Processor processor) {
           if (submit_write) {
             const chunk_seq& bs = seqs[current.bucket];
             for (const Run& run : current.runs) {
-              struct io_uring_sqe* sqe = io_uring_get_sqe(&write_ring);
+              vio::Sqe* sqe = vio::get_sqe(&write_ring);
               CHECK(sqe != nullptr)
                   << "process_inplace: write ring out of sqes";
-              io_uring_prep_write(sqe, run.fd, current.buf + run.start_ci * ept,
-                                  run.count * CHUNK_SIZE,
-                                  (off_t)bs.chunks[run.start_ci].begin_addr);
+              vio::prep_write(sqe, run.fd, current.buf + run.start_ci * ept,
+                              run.count * CHUNK_SIZE,
+                              (off_t)bs.chunks[run.start_ci].begin_addr);
             }
-            SYSCALL(io_uring_submit(&write_ring));
+            SYSCALL(vio::submit(&write_ring));
           }
           reap_write = submit_write;
         }
 
-        io_uring_queue_exit(&read_ring);
-        io_uring_queue_exit(&write_ring);
+        vio::queue_exit(&read_ring);
+        vio::queue_exit(&write_ring);
       },
       /*granularity=*/1);
 }
@@ -539,10 +540,10 @@ void count_sort_by_key(const chunk_seq& seq, size_t num_buckets,
 
   std::vector<std::string> filenames(num_drives);
   for (size_t d = 0; d < num_drives; d++) {
-    filenames[d] = GetFileName(result_prefix, d);
-    int fd = open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    filenames[d] = GetFileName(result_prefix, d, seq.mode());
+    int fd = vio::open(filenames[d].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     SYSCALL(fd);
-    SYSCALL(close(fd));
+    SYSCALL(vio::close(fd));
   }
 
   UnorderedWriterConfig wcfg;
@@ -626,7 +627,10 @@ void count_sort(const D& dseq, size_t num_buckets,
   constexpr size_t kBufElems = SAMPLE_SORT_BUCKET_SIZE / sizeof(T);
   constexpr size_t kWriterIoThreads = 2;
 
-  BucketWriter<T> writer(result_prefix, num_buckets, disk_span);
+  // count_sort's input is a delayed node, not a chunk_seq: a tree built only
+  // from generators names no backend, so it falls back to the default.
+  const plaid::storage st = dseq.mode().value_or(plaid::default_storage());
+  BucketWriter<T> writer(result_prefix, num_buckets, disk_span, st);
 
   // INVARIANT: every thread that touches bucket_allocator must be a parlay
   // worker.  bucket_allocator is backed by parlay::internal::block_allocator,
@@ -802,7 +806,8 @@ std::vector<chunk_seq> group_by_index(const chunk_seq& seq, size_t num_buckets,
   constexpr size_t kBufElems = SAMPLE_SORT_BUCKET_SIZE / sizeof(T);
   constexpr size_t kWriterIoThreads = 2;
 
-  BucketWriter<T> writer(result_prefix, num_buckets);
+  BucketWriter<T> writer(result_prefix, num_buckets, /*disk_span=*/1,
+                         seq.mode());
 
   // INVARIANT: every thread that touches bucket_allocator must be a parlay
   // worker.  bucket_allocator is backed by parlay::internal::block_allocator,
