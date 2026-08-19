@@ -2671,7 +2671,15 @@ int run(int argc, char* argv[]) {
   // more than one wave across the 6 buckets built below, without ever
   // tripping process_inplace_budgeted's own-bucket-too-big CHECK (each
   // bucket alone is well under this budget).
-  const size_t small_budget = bucket_bytes + bucket_bytes / 2;  // 1.5 buckets
+  //
+  // PROCESS_INPLACE_BUDGET_BYTES is the *nominal* budget: the engine divides
+  // it by kProcessInplacePipelineMultiplier to pack waves against real peak
+  // RSS instead of the raw bucket-byte sum (sort.h).  Scale up by the same
+  // factor so the budget the engine actually packs against is the 1.5 buckets
+  // this test intends -- otherwise the effective budget lands at half a
+  // bucket and the own-bucket-too-big CHECK aborts the run.
+  const size_t small_budget = (bucket_bytes + bucket_bytes / 2) *
+                              plaid::kProcessInplacePipelineMultiplier;
 
   std::cout << "elems_per_bucket=" << elems_per_bucket
             << " bucket_bytes=" << bucket_bytes

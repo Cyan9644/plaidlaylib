@@ -145,6 +145,30 @@ static void check(const std::string& name, const std::vector<digit>& a,
          "got " + vec_head(gotref) + " want " + vec_head(expected));
 }
 
+// Narrow-limb case: `b`'s limbs all fit in 32 bits, so b is stored as a
+// uint32_t chunk_seq -- half the bytes, and (the point of the case) a chunk
+// partition that does NOT line up with a's uint64_t one, since a 4 MiB chunk
+// holds CHUNK_SIZE/4 narrow limbs against CHUNK_SIZE/8 wide ones.  The result
+// must match the identical add with b stored wide.
+static void check_narrow(const std::string& name, const std::vector<digit>& a,
+                         const std::vector<uint32_t>& b32,
+                         bool extra_one = false) {
+  std::vector<digit> b(b32.begin(), b32.end());  // same number, wide storage
+  const std::vector<digit> expected = ref_add(a, b, extra_one);
+
+  chunk_seq A = make_seq(a, "btn_a");
+  chunk_seq B32 = plaid::tabulate<uint32_t>(
+      b32.size(), "btn_b32", [&b32](size_t i) { return b32[i]; });
+  chunk_seq S = plaid::ChunkBigIntAddNarrow(A, B32, "btn_out", extra_one);
+  const std::vector<digit> got = materialize(S);
+  report(name + " [narrow u32 operand]", got == expected,
+         "got " + vec_head(got) + " want " + vec_head(expected));
+
+  cleanup_prefix("btn_a");
+  cleanup_prefix("btn_b32");
+  cleanup_prefix("btn_out");
+}
+
 // ── cases
 // ─────────────────────────────────────────────────────────────────────
 static std::vector<digit> filled(size_t n, digit v) {
@@ -180,6 +204,26 @@ int main(int argc, char* argv[]) {
   check("nb == 0 (b empty)", {1, 2, 3}, {});
   check("both empty", {}, {});
   check("single limb each", {42}, {58});
+
+  // mixed-width storage: b in 32-bit limbs, a in 64-bit limbs, so the two
+  // operands' chunk partitions disagree and zip must re-grid.
+  std::cout << "  mixed-width limb storage\n";
+  {
+    std::mt19937_64 rng(9001);
+    auto rnd32 = [&rng](size_t n) {
+      std::vector<uint32_t> v(n);
+      for (auto& x : v) x = (uint32_t)rng();
+      return v;
+    };
+    check_narrow("tiny narrow b", {5, 0, 0}, {7});
+    check_narrow("narrow b, carry avalanche", filled(E + 3, MAX), {1});
+    check_narrow("narrow b spanning >1 narrow chunk", random_limbs(5 * E, 11),
+                 rnd32(2 * E + 17));
+    check_narrow("narrow b, equal element counts", random_limbs(2 * E + 9, 12),
+                 rnd32(2 * E + 9));
+    check_narrow("narrow b + extra_one", random_limbs(E + 1, 13), rnd32(E - 5),
+                 true);
+  }
 
   // unequal lengths, sign-extension of the shorter (negative) operand
   std::cout << "  unequal lengths / sign-extension\n";

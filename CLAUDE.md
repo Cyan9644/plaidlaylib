@@ -603,15 +603,24 @@ chunk_seq z   = d::force(d::zip(d::delay(a), d::delay(b), pad), "out");
 A delayed sequence is a **recursive tree of value-type nodes**, each templated
 (no `std::function`) so the fused chain inlines.  Every node exposes:
 
-- `length()` / `num_chunks()` / `chunk_len(i)` — sizing over the `ELEMS_PER_CHUNK`
-  grid.
+- `length()` / `num_chunks()` / `chunk_start(i)` / `chunk_len(i)` — the node's
+  **own** partition of `[0, length)`.  It is *not* one global grid:
+  `leaf_source<T>`/`cut_source<T>` partition on `epc = CHUNK_SIZE/sizeof(T)`, a
+  ragged `leaf_source` on its source's actual per-chunk `used`, and
+  `leaf_index`/`filter_node` on `ELEMS_PER_CHUNK`.
+- `uniform_grid(&epc)` — true when the partition is the closed form `i*epc`.
+  `zip` uses it to decide whether it can share its children's grid.
 - `plan(i, planner)` — register the physical reads logical chunk `i` needs
   (leaves call `planner.need(src, chunks[i])`; internal nodes forward to children
   left-to-right).
-- `build(i, resolver)` — construct the fused forward-iterator for chunk `i`,
-  pulling each leaf's buffer from `resolver.next()` in the same order `plan`
-  registered them (the positional match is the core invariant; `build` must visit
-  children in `plan`'s order).
+- `build(i, skip, resolver)` — construct the fused forward-iterator for chunk
+  `i`, already advanced `skip` elements, pulling each leaf's buffer from
+  `resolver.next()` in the same order `plan` registered them (the positional
+  match is the core invariant; `build` must visit children in `plan`'s order and
+  consume one `next()` per registered read even when `skip` steps past it).
+  `skip` lets a parent address a sub-range of a child's chunk; every node
+  absorbs it in O(1) except `scan_node`, which must fold the skipped elements
+  to reach the right accumulator.
 
 Node kinds and the combinators that build them:
 
@@ -621,22 +630,43 @@ Node kinds and the combinators that build them:
 | `leaf_index<F>` | `tabulate(n,f)` | none (generated) | counting iterator over `f` |
 | `map_node` | `map(d,g)` | forward to child | wrap child in `map_iter` |
 | `scan_node` | `scan(d,m)` | forward to child | seed `scan_iter` with the chunk's offset |
-| `zip_node` | `zip(a,b[,pad])` | union of both children | pad each child, `zip_iter` → `std::pair` |
+| `zip_node` | `zip(a,b[,pad[,padB]])` | union of both children | pad each child, `zip_iter` → `std::pair` |
 
 Because `plan`/`build` just recurse, **zip composes arbitrarily**:
 `zip(zip(A,B),C)` (N-ary via nesting), `zip(A, map(B))`, and
 `zip(A, scan(map(zip(A,B),f)))` (the out-of-core carry-lookahead **big-integer
 add** shape) all work.  `zip(a,b)` requires equal length; `zip(a,b,pad)` pads the
-shorter side with a runtime fill value.  Padding lives in `zip_node`: it wraps
+shorter side with a runtime fill value; `zip(a,b,padA,padB)` does the same when
+the operands' element types differ.  Padding lives in `zip_node`: it wraps
 each child in a `pad_iter` to that child's real element count for the chunk, so a
 shorter operand emits `pad` past its end and a child with no chunk at `i`
 contributes no read.
+
+**Operands need not share a chunk partition.**  They disagree whenever one is
+ragged (a partial chunk anywhere but the end — `flatten`/`sample_sort`,
+`reverse`, `group_by_index` with `disk_span > 1`, a narrowing `ChunkMap`) or
+when they store different element widths (a `uint32_t` sequence holds
+`CHUNK_SIZE/4` elements per chunk against a `uint64_t`'s `CHUNK_SIZE/8`).  When
+they disagree, `zip` **re-grids** onto the union of both children's boundaries
+(a `zip_piece` table), addressing each child by *its own* chunk index plus an
+element offset, so no repacking pass is needed.  When they already agree — every
+all-8-byte dense chain, i.e. every pre-existing call site — no table is built
+and the closed-form path is unchanged.  A child chunk straddling two pieces is
+referenced twice but **read once**: `detail::plan_chunks` dedups reads across
+logical chunks and refcounts the buffer so it lives until the last consumer is
+done.  `examples/chunk_bigint_add.h`'s `ChunkBigIntAddNarrow` is the worked
+example (a `uint32_t`-limb operand added to a `uint64_t`-limb one).
 
 ### Drivers and terminals
 
 Two drivers execute a tree; both plan each chunk with a `Planner` that **dedups
 reads by source** — a `chunk_seq` appearing in several leaves of one chunk (e.g.
-A,B in both `zip(A,B)` and a scan of it) is read once, not per occurrence:
+A,B in both `zip(A,B)` and a scan of it) is read once, not per occurrence — and
+`detail::plan_chunks` then dedups **across** chunks too, refcounting each buffer
+so one physical chunk shared by several logical chunks (a re-gridding `zip`, a
+`cut_source` seam, `filter_node`'s predecessor run) is read once and held until
+its last consumer finishes.  Sharing is capped at a `FILTER_BATCH_SIZE`
+lookback window, which is what bounds live buffers:
 
 - **`for_each_chunk`** (streaming; used by `reduce`, `scan` pass-1, `force`):
   **one** long-lived `ChunkSequenceReader` for the whole pass, a dispatcher
@@ -656,9 +686,14 @@ offsets + total; pass 2 is a lazy `scan_node`.  `force` writes one file per driv
 
 ### Constraints
 
-- **≤8-byte on-disk elements**: the chunk grid assumes 8-byte elements, so
-  `force`/`filter` `static_assert` `sizeof(R) ≤ 8`.  `zip`'s `std::pair` elements
-  are transient inside the fused pass; map them to a scalar before `force`.
+- **One logical chunk must fit one physical chunk**: `force` writes one output
+  chunk per logical chunk, so it `CHECK`s `chunk_len(i)*sizeof(R) ≤ CHUNK_SIZE`
+  at run time (`filter`, which re-densifies to `R`'s own grid, still
+  `static_assert`s `sizeof(R) ≤ 8`).  `zip`'s `std::pair` elements are transient
+  inside the fused pass; map them to a scalar before `force`.  A *narrower* `R`
+  than the grid it was sized on is fine — the output is then ragged, which
+  `delay<R>()` reads back correctly (it takes the partition from each chunk's
+  own `used`); it only costs disk.
 - **Lifetime**: every source `chunk_seq` (both operands of a zip) must outlive
   every terminal call on a sequence derived from it.
 

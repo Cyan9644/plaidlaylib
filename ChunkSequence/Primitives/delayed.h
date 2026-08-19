@@ -5,8 +5,10 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <list>
 #include <map>
 #include <memory>
@@ -52,8 +54,16 @@ static constexpr size_t FILTER_BATCH_SIZE = DENSE_PACK_BATCH_SIZE;
 // including nested/N-ary zips and zips of maps/scans:
 //
 //   size_t length()      const;             // logical element count
-//   size_t num_chunks()  const;             // ceil(length / ELEMS_PER_CHUNK)
+//   size_t num_chunks()  const;             // number of logical chunks
+//   size_t chunk_start(i) const;            // global element offset of chunk i
 //   size_t chunk_len(i)  const;             // elements in logical chunk i
+//
+// Together these four describe the node's *own* partition of [0, length).  It
+// is NOT necessarily the global ELEMS_PER_CHUNK grid: leaf_source<T> and
+// cut_source<T> partition on their own epc = CHUNK_SIZE/sizeof(T), so a chain
+// over 4-byte or 32-byte elements has chunks of a different element count than
+// one over uint64_t.  A node that combines children (zip_node) must therefore
+// reconcile two partitions rather than assume they agree.
 //
 //   // (1) READ PLAN: register the physical reads this node needs for logical
 //   //     chunk i via Planner::need (keyed by source chunk_seq*, so a source
@@ -63,15 +73,21 @@ static constexpr size_t FILTER_BATCH_SIZE = DENSE_PACK_BATCH_SIZE;
 //   template<class Planner> void plan(size_t i, Planner& p) const;
 //
 //   // (2) BUILD: construct the fused forward-iterator for logical chunk i,
-//   //     pulling each in-range leaf's buffer from Resolver::next.  build()
-//   MUST
-//   //     visit children in the SAME left-to-right order as plan() so the
-//   //     resolver lines up with the reads plan() registered.  For i beyond
-//   this
-//   //     node's range it returns a dummy iterator (consuming no buffer); such
-//   //     an iterator is always wrapped by an enclosing pad_iter with
-//   //     remaining==0, so it is never dereferenced.
-//   template<class Resolver> auto build(size_t i, Resolver& r) const;
+//   //     already advanced `skip` elements past that chunk's start, pulling
+//   //     each in-range leaf's buffer from Resolver::next.  build() MUST
+//   //     visit children in the SAME left-to-right order as plan(), and must
+//   //     consume exactly one next() per need() plan() registered -- including
+//   //     buffers that `skip` steps past -- so the positional resolver lines
+//   //     up.  For i beyond this node's range it returns a dummy iterator
+//   //     (consuming no buffer); such an iterator is always wrapped by an
+//   //     enclosing pad_iter with remaining==0, so it is never dereferenced.
+//   //
+//   //     `skip` exists so a parent may re-grid onto a partition finer than
+//   //     this node's own and still address a sub-range of one of its chunks.
+//   //     Every node absorbs it in O(1) except scan_node, which must fold the
+//   //     skipped elements to reach the right accumulator (O(skip)).
+//   template<class Resolver> auto build(size_t i, size_t skip, Resolver& r)
+//       const;
 //
 // One logical chunk of a *leaf* is one physical read (a chunk_seq stores each
 // logical chunk as one contiguous region on one drive).  The "one logical chunk
@@ -89,10 +105,12 @@ static constexpr size_t FILTER_BATCH_SIZE = DENSE_PACK_BATCH_SIZE;
 // Everything is templated (no std::function) so the fused chain inlines.
 //
 // LIFETIME: a leaf_source holds a pointer to its chunk_seq; every source in the
-// tree must outlive every terminal call.  force on a sequence whose value_type
-// exceeds 8 B is unsupported (the on-disk grid assumes ≤8 B elements) — zip's
-// std::pair elements stay transient and are meant to be map-ed to a scalar
-// before force.
+// tree must outlive every terminal call.  force writes one output chunk per
+// logical chunk, so it requires only that a logical chunk's elements fit one
+// CHUNK_SIZE chunk (checked at run time) — zip's std::pair elements are still
+// meant to stay transient and be map-ed to a scalar before force, but a
+// *narrower* R than the grid it was sized on is fine: the output is then
+// ragged, and delay<R>() reads it back correctly.
 // ─────────────────────────────────────────────────────────────────────────────
 
 namespace plaid {
@@ -254,15 +272,26 @@ inline size_t grid_chunk_len(size_t len, size_t i) {
 inline size_t grid_num_chunks(size_t len) {
   return (len + ELEMS_PER_CHUNK - 1) / ELEMS_PER_CHUNK;
 }
+inline size_t grid_chunk_start(size_t i) { return i * ELEMS_PER_CHUNK; }
 
 // Leaf backed by a materialized chunk_seq on SSD (from `delay`).  One logical
 // chunk == one physical read (chunks[i]); a chunk_seq stores each logical chunk
 // contiguously on one drive.  T is the stored element type.
+//
+// The partition follows the source's actual per-chunk `used`, so a *ragged*
+// chunk_seq -- one with a partial chunk anywhere but the end, as produced by
+// plaid::flatten, plaid::reverse, or a narrowing ChunkMap -- is a valid source.
+// `starts` is null for the overwhelmingly common dense-except-last case, where
+// the partition is the closed form i*epc and no table is built; see `delay`.
 template <class T>
 struct leaf_source {
   using value_type = T;
   const chunk_seq* src;
   size_t len;  // total element count
+  size_t nc;   // number of chunks (== src->chunks.size())
+  // null  => dense: chunk i starts at i*epc.
+  // set   => ragged: exclusive prefix of per-chunk element counts, size nc+1.
+  std::shared_ptr<const std::vector<size_t>> starts;
 
   // Elements a full physical CHUNK_SIZE chunk holds for this T -- see
   // cut_source::epc; using the global (uint64_t-sized) ELEMS_PER_CHUNK here
@@ -270,22 +299,36 @@ struct leaf_source {
   static constexpr size_t epc = CHUNK_SIZE / sizeof(T);
 
   size_t length() const { return len; }
-  size_t num_chunks() const { return (len + epc - 1) / epc; }
+  size_t num_chunks() const { return nc; }
+  size_t chunk_start(size_t i) const {
+    return starts ? (*starts)[std::min(i, nc)] : i * epc;
+  }
+  // See the uniform_grid contract in the header comment: a dense source is the
+  // closed form i*epc, a ragged one is not.
+  bool uniform_grid(size_t* epc_out) const {
+    *epc_out = epc;
+    return starts == nullptr;
+  }
   size_t chunk_len(size_t i) const {
+    if (i >= nc) return 0;
+    if (starts) return (*starts)[i + 1] - (*starts)[i];
     const size_t base = i * epc;
     return base >= len ? 0 : std::min(epc, len - base);
   }
 
   template <class Planner>
   void plan(size_t i, Planner& p) const {
-    if (i < num_chunks())           // index-ordered: chunks[i].index == i
-      p.need(src, src->chunks[i]);  // one read (shared if the src repeats)
-  }  // else padded/out-of-range: no read
+    // A ragged source may carry an empty chunk; it contributes no elements, so
+    // skip its read entirely.  build() tests the same condition, keeping the
+    // positional resolver in step.
+    if (i < nc && chunk_len(i) > 0)  // index-ordered: chunks[i].index == i
+      p.need(src, src->chunks[i]);   // one read (shared if the src repeats)
+  }  // else padded/out-of-range/empty: no read
   template <class Resolver>
-  const T* build(size_t i, Resolver& r) const {
-    if (i >= num_chunks())
+  const T* build(size_t i, size_t skip, Resolver& r) const {
+    if (i >= nc || chunk_len(i) == 0)
       return nullptr;  // dummy; enclosing pad never derefs it
-    return reinterpret_cast<const T*>(r.next());
+    return reinterpret_cast<const T*>(r.next()) + skip;
   }
 };
 
@@ -299,6 +342,16 @@ struct cut_iter {
   const T* lo;
   size_t lo_remaining;
   const T* hi;
+  // Advance `s` elements without touching memory: consume the `lo` segment
+  // first, then spill into `hi` (the build-time `skip` a re-gridding parent
+  // asks for).
+  cut_iter& skip_ahead(size_t s) {
+    const size_t from_lo = std::min(s, lo_remaining);
+    lo += from_lo;
+    lo_remaining -= from_lo;
+    hi += s - from_lo;
+    return *this;
+  }
   T operator*() const { return lo_remaining ? *lo : *hi; }
   cut_iter& operator++() {
     if (lo_remaining) {
@@ -336,6 +389,11 @@ struct cut_source {
 
   size_t length() const { return len; }
   size_t num_chunks() const { return (len + epc - 1) / epc; }
+  size_t chunk_start(size_t i) const { return i * epc; }
+  bool uniform_grid(size_t* epc_out) const {
+    *epc_out = epc;
+    return true;
+  }
   size_t chunk_len(size_t i) const {
     const size_t base = i * epc;
     return base >= len ? 0 : std::min(epc, len - base);
@@ -379,14 +437,16 @@ struct cut_source {
              src->chunks[s.phys_hi]);
   }
   template <class Resolver>
-  cut_iter<T> build(size_t i, Resolver& r) const {
+  cut_iter<T> build(size_t i, size_t skip, Resolver& r) const {
     if (i >= num_chunks()) return {nullptr, 0, nullptr};
     Seg s = segments(i);
     const T* lo = reinterpret_cast<const T*>(r.next()) + s.offset_lo;
     const T* hi = (s.phys_hi != (size_t)-1)
                       ? reinterpret_cast<const T*>(r.next())
                       : nullptr;
-    return {lo, s.take_lo, hi};
+    // Both reads are consumed regardless of `skip`, since plan() registered
+    // both -- the resolver is positional, so build must not skip a next().
+    return cut_iter<T>{lo, s.take_lo, hi}.skip_ahead(skip);
   }
 };
 
@@ -400,13 +460,19 @@ struct leaf_index {
 
   size_t length() const { return n; }
   size_t num_chunks() const { return grid_num_chunks(n); }
+  size_t chunk_start(size_t i) const { return grid_chunk_start(i); }
+  bool uniform_grid(size_t* epc_out) const {
+    *epc_out = ELEMS_PER_CHUNK;
+    return true;
+  }
   size_t chunk_len(size_t i) const { return grid_chunk_len(n, i); }
 
   template <class Planner>
   void plan(size_t, Planner&) const {}  // no reads
   template <class Resolver>
-  auto build(size_t i, Resolver&) const {
-    return make_counting(i * ELEMS_PER_CHUNK, f);  // padded if out-of-range
+  auto build(size_t i, size_t skip, Resolver&) const {
+    // Skipping is free here: just start counting further in.
+    return make_counting(chunk_start(i) + skip, f);  // padded if out-of-range
   }
 };
 
@@ -420,6 +486,8 @@ struct map_node {
 
   size_t length() const { return d.length(); }
   size_t num_chunks() const { return d.num_chunks(); }
+  size_t chunk_start(size_t i) const { return d.chunk_start(i); }
+  bool uniform_grid(size_t* epc_out) const { return d.uniform_grid(epc_out); }
   size_t chunk_len(size_t i) const { return d.chunk_len(i); }
 
   template <class Planner>
@@ -427,8 +495,9 @@ struct map_node {
     d.plan(i, p);
   }
   template <class Resolver>
-  auto build(size_t i, Resolver& r) const {
-    return make_map_iter(d.build(i, r), g);
+  auto build(size_t i, size_t skip, Resolver& r) const {
+    return make_map_iter(d.build(i, skip, r),
+                         g);  // skip is elementwise: forward
   }
 };
 
@@ -443,6 +512,8 @@ struct scan_node {
 
   size_t length() const { return d.length(); }
   size_t num_chunks() const { return d.num_chunks(); }
+  size_t chunk_start(size_t i) const { return d.chunk_start(i); }
+  bool uniform_grid(size_t* epc_out) const { return d.uniform_grid(epc_out); }
   size_t chunk_len(size_t i) const { return d.chunk_len(i); }
 
   template <class Planner>
@@ -450,16 +521,81 @@ struct scan_node {
     d.plan(i, p);
   }
   template <class Resolver>
-  auto build(size_t i, Resolver& r) const {
+  auto build(size_t i, size_t skip, Resolver& r) const {
     value_type seed = (i < offsets->size()) ? (*offsets)[i] : m.identity;
-    return make_scan_iter(d.build(i, r), m, seed);
+    auto it = make_scan_iter(d.build(i, 0, r), m, seed);
+    // A scan cannot skip cheaply: the accumulator at chunk-relative position
+    // `skip` is the fold of the preceding `skip` elements, so it must walk
+    // them.  O(skip) -- the one real cost of a parent re-gridding onto a
+    // finer partition than this node's own (see zip_node).
+    for (size_t j = 0; j < skip; j++) ++it;
+    return it;
   }
 };
+
+// One logical chunk of a re-gridding zip: a maximal run of elements lying
+// inside a single chunk of A *and* a single chunk of B.  `ai`/`bi` are the
+// child chunk indices (== that child's num_chunks() when the run is past the
+// child's end, i.e. pure padding), `skipA`/`skipB` the element offsets into
+// them.
+struct zip_piece {
+  size_t start, len;
+  size_t ai, skipA;
+  size_t bi, skipB;
+};
+
+// Partition [0, len) at the union of A's and B's chunk boundaries -- the
+// coarsest partition that still lands every piece inside one chunk of each
+// child.  Past a child's end that child contributes no boundaries, so the
+// padded tail is cut by the surviving side alone.
+template <class DA, class DB>
+inline std::vector<zip_piece> build_zip_pieces(const DA& a, const DB& b,
+                                               size_t len) {
+  std::vector<zip_piece> out;
+  const size_t nA = a.num_chunks(), nB = b.num_chunks();
+  size_t ai = 0, bi = 0, pos = 0;
+  while (pos < len) {
+    // Advance past chunks ending at or before pos.  This also steps over empty
+    // chunks, which a ragged source may contain.
+    while (ai < nA && a.chunk_start(ai) + a.chunk_len(ai) <= pos) ai++;
+    while (bi < nB && b.chunk_start(bi) + b.chunk_len(bi) <= pos) bi++;
+    size_t end = len;
+    if (ai < nA) end = std::min(end, a.chunk_start(ai) + a.chunk_len(ai));
+    if (bi < nB) end = std::min(end, b.chunk_start(bi) + b.chunk_len(bi));
+    CHECK(end > pos) << "zip: child partition does not tile [0, length)";
+    zip_piece pc;
+    pc.start = pos;
+    pc.len = end - pos;
+    // A child already exhausted is addressed out of range, so it plans no read
+    // and the enclosing pad_iter supplies its value instead.
+    pc.ai = (ai < nA && a.chunk_start(ai) <= pos) ? ai : nA;
+    pc.skipA = (pc.ai < nA) ? pos - a.chunk_start(pc.ai) : 0;
+    pc.bi = (bi < nB && b.chunk_start(bi) <= pos) ? bi : nB;
+    pc.skipB = (pc.bi < nB) ? pos - b.chunk_start(pc.bi) : 0;
+    out.push_back(pc);
+    pos = end;
+  }
+  return out;
+}
 
 // Element-wise pairing of two child nodes; element i = {A[i], B[i]}.  The
 // shorter child is padded with its pad value up to len = max(lenA, lenB).
 // Nesting (zip(zip(A,B), C)) and delayed operands (zip(map(A), scan(...))) work
 // because plan/build simply recurse into the children.
+//
+// The two children need not agree on a chunk partition -- they disagree
+// whenever one is ragged, or when they store different element widths (a
+// uint32_t leaf holds twice as many elements per CHUNK_SIZE chunk as a
+// uint64_t one).  When they disagree this node re-grids onto the union of
+// their boundaries (`pieces`), addressing each child by that child's own chunk
+// index plus an element offset.  A child chunk straddling two pieces is then
+// referenced twice; the drivers dedup those references so it is still read
+// once (see detail::plan_chunks).
+//
+// When both children already partition on the same closed-form grid -- every
+// all-8-byte, dense chain -- `pieces` is null and this node behaves exactly as
+// it did before re-gridding existed: no table is built (it would cost tens of
+// MB on a multi-TB sequence) and no lookup enters the path.
 template <class DA, class DB>
 struct zip_node {
   using value_type =
@@ -469,28 +605,60 @@ struct zip_node {
   typename DA::value_type padA;
   typename DB::value_type padB;
   size_t lenA, lenB, len;
+  size_t uepc;  // the shared grid divisor, used when pieces == nullptr
+  std::shared_ptr<const std::vector<zip_piece>> pieces;
 
   size_t length() const { return len; }
-  size_t num_chunks() const { return grid_num_chunks(len); }
-  size_t chunk_len(size_t i) const { return grid_chunk_len(len, i); }
+  size_t num_chunks() const {
+    return pieces ? pieces->size() : (len + uepc - 1) / uepc;
+  }
+  size_t chunk_start(size_t i) const {
+    if (!pieces) return i * uepc;
+    return i < pieces->size() ? (*pieces)[i].start : len;
+  }
+  bool uniform_grid(size_t* epc_out) const {
+    *epc_out = uepc;
+    return pieces == nullptr;
+  }
+  size_t chunk_len(size_t i) const {
+    if (pieces) return i < pieces->size() ? (*pieces)[i].len : 0;
+    const size_t base = i * uepc;
+    return base >= len ? 0 : std::min(uepc, len - base);
+  }
 
   template <class Planner>
   void plan(size_t i, Planner& p) const {
-    a.plan(i, p);  // union of children's reads,
-    b.plan(i, p);  // left-to-right (matches build)
+    if (i >= num_chunks()) return;  // padded/out-of-range: no reads
+    if (pieces) {
+      const zip_piece& pc = (*pieces)[i];
+      a.plan(pc.ai, p);  // union of children's reads,
+      b.plan(pc.bi, p);  // left-to-right (matches build)
+      return;
+    }
+    a.plan(i, p);
+    b.plan(i, p);
   }
   template <class Resolver>
-  auto build(size_t i, Resolver& r) const {
-    const size_t eb = i * ELEMS_PER_CHUNK;
-    const size_t n = grid_chunk_len(len, i);
+  auto build(size_t i, size_t skip, Resolver& r) const {
+    size_t ai = i, bi = i, sa = skip, sb = skip;
+    const size_t cl = chunk_len(i);
+    const size_t eb = chunk_start(i) + skip;
+    const size_t n = cl - std::min(skip, cl);
+    if (pieces && i < pieces->size()) {
+      const zip_piece& pc = (*pieces)[i];
+      ai = pc.ai;
+      bi = pc.bi;
+      sa = pc.skipA + skip;
+      sb = pc.skipB + skip;
+    }
     const size_t rA =
         eb >= lenA ? 0 : std::min(n, lenA - eb);  // A's real count
     const size_t rB =
         eb >= lenB ? 0 : std::min(n, lenB - eb);  // B's real count
     // Sequence the two child builds explicitly: both advance the resolver,
     // and C++ leaves function-argument evaluation order unspecified.
-    auto ia = a.build(i, r);
-    auto ib = b.build(i, r);
+    auto ia = a.build(ai, sa, r);
+    auto ib = b.build(bi, sb, r);
     return make_zip_iter(make_pad_iter(ia, rA, padA),
                          make_pad_iter(ib, rB, padB));
   }
@@ -512,6 +680,11 @@ struct filter_node {
 
   size_t length() const { return total; }
   size_t num_chunks() const { return grid_num_chunks(total); }
+  size_t chunk_start(size_t i) const { return grid_chunk_start(i); }
+  bool uniform_grid(size_t* epc_out) const {
+    *epc_out = ELEMS_PER_CHUNK;
+    return true;
+  }
   size_t chunk_len(size_t i) const { return grid_chunk_len(total, i); }
 
   // Predecessor search: last physical (source) chunk index k with
@@ -525,25 +698,25 @@ struct filter_node {
   void plan(size_t i, Planner& p) const {
     const size_t n = chunk_len(i);
     if (n == 0) return;
-    const size_t g_lo = i * ELEMS_PER_CHUNK;
+    const size_t g_lo = chunk_start(i);
     const size_t src_lo = locate(g_lo);
     const size_t src_hi = locate(g_lo + n - 1);
     for (size_t k = src_lo; k <= src_hi; k++) d.plan(k, p);
   }
 
   template <class Resolver>
-  auto build(size_t i, Resolver& r) const {
+  auto build(size_t i, size_t skip, Resolver& r) const {
     const size_t n = chunk_len(i);
     auto buf = std::make_shared<std::vector<value_type>>();
     if (n > 0) {
       buf->reserve(n);
-      const size_t g_lo = i * ELEMS_PER_CHUNK;
+      const size_t g_lo = chunk_start(i);
       const size_t src_lo = locate(g_lo);
       // Mirrors plan()'s [src_lo, locate(g_lo+n-1)] range exactly: since
       // `offsets` is the exact survivor-count prefix sum, this loop always
       // stops with k == locate(g_lo+n-1), never overshooting past it.
       for (size_t k = src_lo; buf->size() < n; k++) {
-        auto it = d.build(k, r);
+        auto it = d.build(k, 0, r);
         const size_t src_n = d.chunk_len(k);
         size_t skip = (k == src_lo) ? (g_lo - (*offsets)[k]) : 0;
         for (size_t j = 0; j < src_n && buf->size() < n; j++, ++it) {
@@ -556,7 +729,9 @@ struct filter_node {
         }
       }
     }
-    return materialized_iter<value_type>{buf, 0};
+    // The whole chunk is materialized regardless (plan() registered its full
+    // read set); `skip` is just the start offset into that buffer.
+    return materialized_iter<value_type>{buf, skip};
   }
 };
 
@@ -573,9 +748,33 @@ template <class T = uint64_t>
 auto delay(const chunk_seq& seq) {
   const size_t nc = seq.chunks.size();
   constexpr size_t epc = CHUNK_SIZE / sizeof(T);
-  const size_t len =
-      nc == 0 ? 0 : (nc - 1) * epc + seq.chunks[nc - 1].used / sizeof(T);
-  return leaf_source<T>{&seq, len};
+  if (nc == 0) return leaf_source<T>{&seq, 0, 0, nullptr};
+
+  // Fast path: dense-except-last, so the partition is the closed form and no
+  // per-chunk table is needed.  Worth detecting -- a multi-TB sequence has
+  // millions of chunks, and a table would cost tens of MB per leaf.
+  bool dense = true;
+  for (size_t i = 0; i + 1 < nc; i++)
+    if (seq.chunks[i].used != epc * sizeof(T)) {
+      dense = false;
+      break;
+    }
+  if (dense)
+    return leaf_source<T>{&seq,
+                          (nc - 1) * epc + seq.chunks[nc - 1].used / sizeof(T),
+                          nc, nullptr};
+
+  // Ragged: take the partition from each chunk's own `used`.  This is what
+  // makes flatten/reverse output usable as a delayed source, and it is also
+  // what makes delay<R> correct over a sequence written on a *different*
+  // element grid -- a narrowing ChunkMap (u64 -> u32) or a force() whose node
+  // grid divisor is not sizeof(R) leaves every chunk uniformly partly full,
+  // which the closed form would over-count.
+  auto starts = std::make_shared<std::vector<size_t>>(nc + 1, 0);
+  for (size_t i = 0; i < nc; i++)
+    (*starts)[i + 1] = (*starts)[i] + seq.chunks[i].used / sizeof(T);
+  const size_t len = (*starts)[nc];
+  return leaf_source<T>{&seq, len, nc, std::move(starts)};
 }
 
 // A delayed [start_index, end_index) slice of an on-SSD chunk_seq, re-indexed
@@ -611,15 +810,38 @@ auto map(D d, G g) {
   return map_node<D, G>{d, g};
 }
 
+// Shared by every zip overload: take the closed-form fast path when both
+// children already partition on one grid, else build the re-gridding table.
+template <class DA, class DB>
+auto make_zip_node(DA a, DB b, typename DA::value_type padA,
+                   typename DB::value_type padB) {
+  const size_t lenA = a.length(), lenB = b.length();
+  const size_t len = std::max(lenA, lenB);
+  size_t ea = ELEMS_PER_CHUNK, eb = ELEMS_PER_CHUNK;
+  const bool ua = a.uniform_grid(&ea);
+  const bool ub = b.uniform_grid(&eb);
+  if (ua && ub && ea == eb)
+    return zip_node<DA, DB>{a, b, padA, padB, lenA, lenB, len, ea, nullptr};
+  return zip_node<DA, DB>{a,
+                          b,
+                          padA,
+                          padB,
+                          lenA,
+                          lenB,
+                          len,
+                          ea,
+                          std::make_shared<const std::vector<zip_piece>>(
+                              build_zip_pieces(a, b, len))};
+}
+
 // Strict zip: element i = {a[i], b[i]}.  Both operands must have equal length.
 template <class DA, class DB>
 auto zip(DA a, DB b) {
   const size_t lenA = a.length(), lenB = b.length();
   CHECK(lenA == lenB) << "zip: length mismatch " << lenA << " vs " << lenB
                       << " (use zip(a, b, pad) to pad the shorter side)";
-  return zip_node<DA, DB>{
-      a,    b,    typename DA::value_type{}, typename DB::value_type{},
-      lenA, lenB, std::max(lenA, lenB)};
+  return make_zip_node(a, b, typename DA::value_type{},
+                       typename DB::value_type{});
 }
 
 // Padded zip: if operands differ in length the shorter is padded with `pad` up
@@ -631,10 +853,139 @@ auto zip(DA a, DB b, Pad pad) {
   static_assert(std::is_same_v<VA, VB>,
                 "zip(a, b, pad): a single pad value requires both operands to "
                 "share a value_type");
-  const size_t lenA = a.length(), lenB = b.length();
-  return zip_node<DA, DB>{
-      a, b, (VA)pad, (VB)pad, lenA, lenB, std::max(lenA, lenB)};
+  return make_zip_node(a, b, (VA)pad, (VB)pad);
 }
+
+// Padded zip with a per-operand pad value, for operands whose element types
+// differ -- e.g. zipping a uint32_t-limb sequence against a uint64_t-limb one,
+// where no single pad value has a type common to both.
+template <class DA, class DB, class PadA, class PadB>
+auto zip(DA a, DB b, PadA padA, PadB padB) {
+  return make_zip_node(a, b, (typename DA::value_type)padA,
+                       (typename DB::value_type)padB);
+}
+
+namespace detail {
+
+// Presents chunks [base, base+w) of `d` as a 0..w-1 sequence, so
+// for_each_window can plan a window through the same plan_chunks that
+// for_each_chunk uses (plan_chunks only ever calls plan()).
+template <class D>
+struct WindowView {
+  const D* d;
+  size_t base, w;
+  template <class Planner>
+  void plan(size_t i, Planner& p) const {
+    d->plan(base + i, p);
+  }
+};
+
+// Shared by for_each_chunk's overloads and PersistentReadContext's
+// constructor: plan every chunk of `d` up front (metadata only, no I/O) into
+// the deduped-reads + per-chunk buffer/slot bookkeeping for_each_chunk needs.
+// A (chunk, slot) pair that consumes one physical read.
+using ReadConsumer = std::pair<uint32_t, uint32_t>;
+
+template <class D>
+struct PlannedChunks {
+  std::vector<chunk> refs;  // deduped reads; .index = global read-id
+  // read-id -> every (chunk, slot) that consumes it.  Usually one entry; more
+  // when several logical chunks live inside one physical chunk, which is what
+  // a re-gridding zip produces.  Recording them all is what turns "referenced
+  // k times" into "read once, held until the k-th consumer is done".
+  std::vector<std::vector<ReadConsumer>> consumers;
+  std::vector<size_t> refcnt;                 // read-id -> #consuming chunks
+  std::vector<size_t> remaining;              // chunk -> reads not yet landed
+  std::vector<std::vector<char*>> cbufs;      // per-chunk buffers (slot order)
+  std::vector<std::vector<uint32_t>> crids;   // per-chunk slot -> read-id
+  std::vector<std::vector<uint32_t>> cslots;  // per-chunk leaf_slots
+};
+
+// Plan every chunk up front (metadata only, no I/O), deduping identical
+// physical reads *across* chunks -- not just within one, as Planner does.
+//
+// Dedup is capped at a `lookback` window of logical chunks: a read is only
+// merged into an existing one when the chunk that last referenced it is at
+// most `lookback` chunks back.  Sharing beyond that would keep a buffer alive
+// arbitrarily long, so the cap is what bounds live buffers.  It never binds in
+// practice: the partitions that share a physical chunk (a re-gridding zip, a
+// cut_source seam, filter_node's predecessor run) only ever share it between
+// *consecutive* logical chunks.
+// Dedup key: the physical chunk, identified as (source, chunk index) -- the
+// same key Planner uses within a chunk.
+using ReadKey = std::pair<const void*, size_t>;
+struct ReadKeyHash {
+  size_t operator()(const ReadKey& k) const {
+    const size_t h = std::hash<const void*>{}(k.first);
+    return h ^ (k.second * 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
+  }
+};
+// value: {read-id, logical chunk that last referenced it}
+using ReadSeen =
+    std::unordered_map<ReadKey, std::pair<uint32_t, size_t>, ReadKeyHash>;
+
+template <class D>
+PlannedChunks<D> plan_chunks(const D& d, size_t nc,
+                             size_t lookback = FILTER_BATCH_SIZE) {
+  PlannedChunks<D> pc;
+  pc.remaining.resize(nc);
+  pc.cbufs.resize(nc);
+  pc.crids.resize(nc);
+  pc.cslots.resize(nc);
+
+  // Two generations of the dedup map, rotated every `lookback` chunks and the
+  // stale one dropped.  Without this the map would grow to one entry per
+  // physical chunk in the whole sequence (millions on a multi-TB run); with
+  // it, it holds only what the live window can still match against.
+  ReadSeen cur, prev;
+  size_t gen_start = 0;
+
+  for (size_t ci = 0; ci < nc; ci++) {
+    if (ci - gen_start >= lookback) {
+      prev.swap(cur);
+      cur.clear();
+      gen_start = ci;
+    }
+    Planner pl;
+    d.plan(ci, pl);
+    const size_t k = pl.unique_reads.size();
+    pc.remaining[ci] = k;
+    pc.cbufs[ci].assign(k, nullptr);
+    pc.crids[ci].resize(k);
+    pc.cslots[ci] = std::move(pl.leaf_slots);
+    for (size_t sl = 0; sl < k; sl++) {
+      chunk c = pl.unique_reads[sl];
+      const ReadKey key{(const void*)pl.src_of[sl], c.index};
+
+      uint32_t rid = (uint32_t)-1;
+      auto hit = cur.find(key);
+      if (hit == cur.end()) {
+        auto ph = prev.find(key);
+        // Promote a live hit out of the older generation so it stays matchable.
+        if (ph != prev.end() && ci - ph->second.second <= lookback)
+          hit = cur.emplace(key, ph->second).first;
+      }
+      if (hit != cur.end() && ci - hit->second.second <= lookback) {
+        rid = hit->second.first;
+        hit->second.second = ci;
+        pc.refcnt[rid]++;
+      }
+
+      if (rid == (uint32_t)-1) {
+        rid = (uint32_t)pc.refs.size();
+        cur[key] = {rid, ci};
+        c.index = rid;  // the reader keys completions by this
+        pc.refs.push_back(std::move(c));
+        pc.refcnt.push_back(1);
+        pc.consumers.emplace_back();
+      }
+      pc.crids[ci][sl] = rid;
+      pc.consumers[rid].push_back({(uint32_t)ci, (uint32_t)sl});
+    }
+  }
+  return pc;
+}
+}  // namespace detail
 
 // ── drivers ──────────────────────────────────────────────────────────────────
 //
@@ -662,29 +1013,19 @@ void for_each_window(const D& d, WindowBody&& wbody,
   for (size_t base = 0; base < nc; base += FILTER_BATCH_SIZE) {
     const size_t w = std::min(FILTER_BATCH_SIZE, nc - base);
 
-    // Plan each chunk (deduped) into the window's flat read list.
-    std::vector<chunk> refs;                   // .index = window read-id
-    std::vector<uint32_t> owner;               // read-id -> local chunk b
-    std::vector<std::vector<char*>> cbufs(w);  // per-chunk buffers (slot order)
-    std::vector<std::vector<uint32_t>> cslots(w);  // per-chunk leaf_slots
-    std::vector<size_t> first(w);  // chunk b -> first window read-id
-    for (size_t b = 0; b < w; b++) {
-      Planner pl;
-      d.plan(base + b, pl);
-      first[b] = refs.size();
-      cbufs[b].assign(pl.unique_reads.size(), nullptr);
-      cslots[b] = std::move(pl.leaf_slots);
-      for (chunk& c : pl.unique_reads) {
-        c.index = refs.size();
-        refs.push_back(c);
-        owner.push_back((uint32_t)b);
-      }
-    }
+    // Plan each chunk of the window into one flat read list, deduped both
+    // within a chunk (by Planner) and across the window's chunks (by
+    // plan_chunks), so a physical chunk several logical chunks share is read
+    // once and its buffer held for all of them.
+    auto wp = detail::plan_chunks(detail::WindowView<D>{&d, base, w}, w);
+    std::vector<chunk>& refs = wp.refs;
+    std::vector<std::vector<char*>>& cbufs = wp.cbufs;
+    std::vector<std::vector<uint32_t>>& cslots = wp.cslots;
     const size_t total = refs.size();
 
     auto build_chunk = [&](size_t b) {
       Resolver r{&cbufs[b], &cslots[b], 0};
-      return d.build(base + b, r);
+      return d.build(base + b, 0, r);
     };
 
     if (total == 0) {
@@ -697,59 +1038,24 @@ void for_each_window(const D& d, WindowBody&& wbody,
     ChunkSequenceReader<char> reader;
     reader.PrepChunks(rs);
     reader.Start(reader_threads, 32, 16);
+    std::vector<char*> bufs(total, nullptr);
     for (size_t k = 0; k < total; k++) {  // completions arrive out of order
       auto [buf, n, rid] = reader.Poll();
       (void)n;
       CHECK(buf != nullptr) << "delayed: short read";
-      const size_t b = owner[rid];
-      cbufs[b][rid - first[b]] = buf;  // slot = offset from chunk's first read
+      bufs[rid] = buf;
+      for (const detail::ReadConsumer& u : wp.consumers[rid])
+        cbufs[u.first][u.second] = buf;
     }
 
     wbody(base, w, build_chunk);
 
-    for (size_t b = 0; b < w; b++)
-      for (char* p : cbufs[b])
-        if (p) reader.allocator.Free(p);
+    // Free once per read, not once per reference -- a shared buffer appears in
+    // several chunks' slot lists.
+    for (char* p : bufs)
+      if (p) reader.allocator.Free(p);
   }
 }
-
-namespace detail {
-// Shared by for_each_chunk's overloads and PersistentReadContext's
-// constructor: plan every chunk of `d` up front (metadata only, no I/O) into
-// the deduped-reads + per-chunk buffer/slot bookkeeping for_each_chunk needs.
-template <class D>
-struct PlannedChunks {
-  std::vector<chunk> refs;                    // .index = global read-id
-  std::vector<uint32_t> owner;                // read-id -> chunk
-  std::vector<size_t> first;                  // chunk -> first read-id
-  std::vector<size_t> remaining;              // reads not yet landed
-  std::vector<std::vector<char*>> cbufs;      // per-chunk buffers (slot order)
-  std::vector<std::vector<uint32_t>> cslots;  // per-chunk leaf_slots
-};
-
-template <class D>
-PlannedChunks<D> plan_chunks(const D& d, size_t nc) {
-  PlannedChunks<D> pc;
-  pc.first.resize(nc);
-  pc.remaining.resize(nc);
-  pc.cbufs.resize(nc);
-  pc.cslots.resize(nc);
-  for (size_t ci = 0; ci < nc; ci++) {
-    Planner pl;
-    d.plan(ci, pl);
-    pc.first[ci] = pc.refs.size();
-    pc.remaining[ci] = pl.unique_reads.size();
-    pc.cbufs[ci].assign(pl.unique_reads.size(), nullptr);
-    pc.cslots[ci] = std::move(pl.leaf_slots);
-    for (chunk& c : pl.unique_reads) {
-      c.index = pc.refs.size();
-      pc.refs.push_back(c);
-      pc.owner.push_back((uint32_t)ci);
-    }
-  }
-  return pc;
-}
-}  // namespace detail
 
 // Streaming: one read pass over the whole sequence with per-chunk async
 // release. A dispatcher thread assembles chunks from the reader's out-of-order
@@ -773,8 +1079,6 @@ void for_each_chunk(const D& d, Body&& body, size_t reader_threads = 10,
   // Plan every chunk up front (metadata only): deduped reads + per-chunk state.
   auto pc = detail::plan_chunks(d, nc);
   std::vector<chunk>& refs = pc.refs;
-  std::vector<uint32_t>& owner = pc.owner;
-  std::vector<size_t>& first = pc.first;
   std::vector<size_t>& remaining = pc.remaining;
   std::vector<std::vector<char*>>& cbufs = pc.cbufs;
   std::vector<std::vector<uint32_t>>& cslots = pc.cslots;
@@ -782,7 +1086,7 @@ void for_each_chunk(const D& d, Body&& body, size_t reader_threads = 10,
 
   auto run_chunk = [&](size_t ci) {
     Resolver r{&cbufs[ci], &cslots[ci], 0};
-    auto it = d.build(ci, r);
+    auto it = d.build(ci, 0, r);
     body(ci, d.chunk_len(ci), it);
   };
 
@@ -800,11 +1104,26 @@ void for_each_chunk(const D& d, Body&& body, size_t reader_threads = 10,
   SimpleQueue<size_t> ready;  // ready chunk ids (bounded backlog)
   ready.SetSizeLimit(FILTER_BATCH_SIZE);
 
+  // A read shared by several logical chunks is issued once; the buffer lives
+  // until the last of them is done with it, so workers release by refcount
+  // rather than unconditionally.
+  std::unique_ptr<std::atomic<size_t>[]> refcnt(new std::atomic<size_t>[total]);
+  for (size_t k = 0; k < total; k++)
+    refcnt[k].store(pc.refcnt[k], std::memory_order_relaxed);
+  auto release = [&](size_t ci) {
+    for (size_t sl = 0; sl < pc.crids[ci].size(); sl++) {
+      char* p = cbufs[ci][sl];
+      if (p == nullptr) continue;
+      if (refcnt[pc.crids[ci][sl]].fetch_sub(1, std::memory_order_acq_rel) == 1)
+        reader.allocator.Free(p);
+    }
+  };
+
   // Dispatcher: assemble chunks from out-of-order completions; release each the
-  // moment its last read lands.  Single-threaded assembly ⇒ no atomics; the
-  // ready queue's push/poll gives workers the happens-before on cbufs[ci].
-  // When `ready` is full it blocks here, which back-pressures the reader, so
-  // live buffers stay bounded (no window, but a budget).
+  // moment its last read lands.  Single-threaded assembly ⇒ no atomics on
+  // `remaining`; the ready queue's push/poll gives workers the happens-before
+  // on cbufs[ci].  When `ready` is full it blocks here, which back-pressures
+  // the reader, so live buffers stay bounded (no window, but a budget).
   std::thread dispatcher([&] {
     for (size_t ci = 0; ci < nc; ci++)  // chunks needing no reads (e.g. a
       if (remaining[ci] == 0)
@@ -813,14 +1132,15 @@ void for_each_chunk(const D& d, Body&& body, size_t reader_threads = 10,
       auto [buf, n, rid] = reader.Poll();
       (void)n;
       CHECK(buf != nullptr) << "delayed: short read";
-      const size_t ci = owner[rid];
-      cbufs[ci][rid - first[ci]] = buf;
-      if (--remaining[ci] == 0) ready.Push(ci);
+      for (const detail::ReadConsumer& u : pc.consumers[rid]) {
+        cbufs[u.first][u.second] = buf;
+        if (--remaining[u.first] == 0) ready.Push(u.first);
+      }
     }
     ready.Close();
   });
 
-  // Workers: build + compute each ready chunk, then free its buffers.
+  // Workers: build + compute each ready chunk, then release its buffers.
   parlay::parallel_for(
       0, compute_workers,
       [&](size_t) {
@@ -828,8 +1148,7 @@ void for_each_chunk(const D& d, Body&& body, size_t reader_threads = 10,
           auto [ci, code] = ready.Poll((size_t)0);
           if (code == QueueCode::FINISH) break;
           run_chunk(ci);
-          for (char* p : cbufs[ci])
-            if (p) reader.allocator.Free(p);
+          release(ci);
         }
       },
       1);
@@ -955,7 +1274,7 @@ void sequential_for_each_chunk(const D& d, SequentialReadContext& ctx,
     }
 
     Resolver r{&ctx.buf_pool, &pl.leaf_slots, 0};
-    auto it = d.build(ci, r);
+    auto it = d.build(ci, 0, r);
     body(ci, d.chunk_len(ci), it);  // buffers are ctx-owned: reused by the next
   }  // chunk/call, not freed here.
 }
@@ -1046,8 +1365,6 @@ void for_each_chunk(const D& d, Body&& body, PersistentReadContext<D>& ctx,
 
   auto pc = detail::plan_chunks(d, nc);
   std::vector<chunk>& refs = pc.refs;
-  std::vector<uint32_t>& owner = pc.owner;
-  std::vector<size_t>& first = pc.first;
   std::vector<size_t>& remaining = pc.remaining;
   std::vector<std::vector<char*>>& cbufs = pc.cbufs;
   std::vector<std::vector<uint32_t>>& cslots = pc.cslots;
@@ -1066,7 +1383,7 @@ void for_each_chunk(const D& d, Body&& body, PersistentReadContext<D>& ctx,
 
   auto run_chunk = [&](size_t ci) {
     Resolver r{&cbufs[ci], &cslots[ci], 0};
-    auto it = d.build(ci, r);
+    auto it = d.build(ci, 0, r);
     body(ci, d.chunk_len(ci), it);
   };
 
@@ -1080,6 +1397,19 @@ void for_each_chunk(const D& d, Body&& body, PersistentReadContext<D>& ctx,
   SimpleQueue<size_t> ready;
   ready.SetSizeLimit(FILTER_BATCH_SIZE);
 
+  // Same shared-read refcounting as the plain overload.
+  std::unique_ptr<std::atomic<size_t>[]> refcnt(new std::atomic<size_t>[total]);
+  for (size_t k = 0; k < total; k++)
+    refcnt[k].store(pc.refcnt[k], std::memory_order_relaxed);
+  auto release = [&](size_t ci) {
+    for (size_t sl = 0; sl < pc.crids[ci].size(); sl++) {
+      char* p = cbufs[ci][sl];
+      if (p == nullptr) continue;
+      if (refcnt[pc.crids[ci][sl]].fetch_sub(1, std::memory_order_acq_rel) == 1)
+        ctx.reader.allocator.Free(p);
+    }
+  };
+
   std::thread dispatcher([&] {
     for (size_t ci = 0; ci < nc; ci++)
       if (remaining[ci] == 0) ready.Push(ci);
@@ -1087,9 +1417,10 @@ void for_each_chunk(const D& d, Body&& body, PersistentReadContext<D>& ctx,
       auto [buf, n, rid] = ctx.reader.Poll();
       (void)n;
       CHECK(buf != nullptr) << "delayed: short read";
-      const size_t ci = owner[rid];
-      cbufs[ci][rid - first[ci]] = buf;
-      if (--remaining[ci] == 0) ready.Push(ci);
+      for (const detail::ReadConsumer& u : pc.consumers[rid]) {
+        cbufs[u.first][u.second] = buf;
+        if (--remaining[u.first] == 0) ready.Push(u.first);
+      }
     }
     ready.Close();
   });
@@ -1101,8 +1432,7 @@ void for_each_chunk(const D& d, Body&& body, PersistentReadContext<D>& ctx,
           auto [ci, code] = ready.Poll((size_t)0);
           if (code == QueueCode::FINISH) break;
           run_chunk(ci);
-          for (char* p : cbufs[ci])
-            if (p) ctx.reader.allocator.Free(p);
+          release(ci);
         }
       },
       1);
@@ -1327,10 +1657,6 @@ chunk_seq force(const D& d, const std::string& result_prefix) {
   using R = typename D::value_type;
   static_assert(CHUNK_SIZE % sizeof(R) == 0,
                 "sizeof(R) must divide CHUNK_SIZE for O_DIRECT alignment");
-  static_assert(
-      sizeof(R) <= sizeof(uint64_t),
-      "force: the on-disk chunk grid assumes <=8B elements; map wider values "
-      "(e.g. zip's std::pair) down to a scalar before force");
 
   const size_t nc = d.num_chunks();
   if (nc == 0) return {};
@@ -1369,10 +1695,26 @@ chunk_seq force(const D& d, const std::string& result_prefix) {
       /*granularity=*/1);
 
   // Output chunk descriptors are fully determined up front (index-ordered).
+  // One output chunk per logical chunk of `d`, holding chunk_len(i) elements of
+  // R -- so `used` is only CHUNK_SIZE when d's partition happens to be R's own
+  // grid.  Otherwise the output is *ragged*, which delay<R>() reads back
+  // correctly (it takes the partition from each chunk's `used`); it just costs
+  // disk.  The only hard requirement is that a logical chunk's elements fit one
+  // physical chunk -- which is what used to be spelled sizeof(R) <= 8, and is
+  // still what stops a caller forcing zip's 16-byte std::pair off an 8-byte
+  // grid.
   std::vector<chunk> out_chunks(nc);
-  for (size_t i = 0; i < nc; i++)
-    out_chunks[i] = {filenames[drive_of[i]], slot_of[i] * CHUNK_SIZE,
-                     d.chunk_len(i) * sizeof(R), i};
+  for (size_t i = 0; i < nc; i++) {
+    const size_t nbytes = d.chunk_len(i) * sizeof(R);
+    CHECK(nbytes <= CHUNK_SIZE)
+        << "force: logical chunk " << i << " holds " << d.chunk_len(i)
+        << " elements of " << sizeof(R) << " bytes (" << nbytes
+        << "), which exceeds CHUNK_SIZE " << CHUNK_SIZE
+        << " -- map wider values (e.g. zip's std::pair) down to a narrower "
+           "scalar before force";
+    out_chunks[i] = {filenames[drive_of[i]], slot_of[i] * CHUNK_SIZE, nbytes,
+                     i};
+  }
 
   UnorderedWriterConfig wcfg;
   wcfg.num_threads = num_drives;

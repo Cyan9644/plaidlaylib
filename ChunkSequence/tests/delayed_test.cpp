@@ -871,6 +871,358 @@ static void run_persistent_context() {
   cleanup_prefix("iota");
 }
 
+// ── ragged sources ───────────────────────────────────────────────────────────
+// Every other case in this file feeds the delayed layer a dense-except-last
+// chunk_seq (plaid::iota / plaid::tabulate).  These cases feed it a *ragged*
+// one -- a partial chunk in the middle -- which the layer used to mis-size,
+// because delay() reconstructed length as (nc-1)*epc + last.used/sizeof(T).
+//
+// plaid::flatten concatenates chunk_seqs by pure header reindexing, so each
+// part's trailing partial chunk lands mid-sequence: exactly the shape
+// sample_sort, Permutation::Run and plaid::reverse produce.
+static chunk_seq make_ragged(const std::vector<size_t>& parts,
+                             const std::string& prefix,
+                             std::vector<uint64_t>* expect) {
+  std::vector<chunk_seq> pieces;
+  uint64_t base = 0;
+  for (size_t p = 0; p < parts.size(); p++) {
+    const uint64_t b = base;
+    pieces.push_back(
+        plaid::tabulate<uint64_t>(parts[p], prefix + std::to_string(p),
+                                  [b](size_t i) { return b + (uint64_t)i; }));
+    for (size_t i = 0; i < parts[p]; i++) expect->push_back(b + (uint64_t)i);
+    base += parts[p];
+  }
+  return plaid::flatten(pieces);
+}
+static void cleanup_ragged(const std::vector<size_t>& parts,
+                           const std::string& prefix) {
+  for (size_t p = 0; p < parts.size(); p++)
+    cleanup_prefix(prefix + std::to_string(p));
+}
+
+static void run_ragged() {
+  const size_t E = ELEMS_PER_CHUNK;
+  // Deliberately none of these is a whole number of chunks except the last,
+  // so the flattened sequence has three interior partial chunks.
+  const std::vector<size_t> parts = {E + 5, 7, 2 * E + 3, E};
+  std::vector<uint64_t> expect;
+  chunk_seq rag = make_ragged(parts, "dl_rag_p", &expect);
+  const size_t n = expect.size();
+  std::cout << "  ragged  (" << rag.chunks.size() << " chunks, " << n
+            << " elements, interior partials)\n";
+
+  // plaid::size must agree with the true element count, not the dense formula.
+  expect_scalar("ragged plaid::size", plaid::size<uint64_t>(rag), n);
+  expect_scalar("ragged delay().length()", cd::delay(rag).length(), n);
+  expect_scalar("ragged delay().num_chunks()", cd::delay(rag).num_chunks(),
+                rag.chunks.size());
+
+  // chunk_start/chunk_len must tile [0, n) exactly.
+  {
+    auto d = cd::delay(rag);
+    bool ok = d.chunk_start(0) == 0;
+    for (size_t i = 0; ok && i < d.num_chunks(); i++)
+      ok = ok && d.chunk_start(i) + d.chunk_len(i) == d.chunk_start(i + 1);
+    ok = ok && d.chunk_start(d.num_chunks()) == n;
+    report("ragged partition tiles [0,n)", ok);
+  }
+
+  {
+    expect_scalar("ragged reduce(sum)", cd::reduce(cd::delay(rag), SumMonoid{}),
+                  ref_reduce(expect, SumMonoid{}));
+  }
+
+  {
+    auto d = cd::map(cd::delay(rag), [](uint64_t x) { return 3 * x + 1; });
+    chunk_seq out = cd::force(d, "dl_rag_map");
+    expect_eq_vec<uint64_t>(
+        "ragged map->force", out,
+        ref_map(expect, [](uint64_t x) { return 3 * x + 1; }));
+    cleanup_prefix("dl_rag_map");
+  }
+
+  {
+    uint64_t total = 0;
+    auto [sc, tot] = cd::scan(cd::delay(rag), SumMonoid{});
+    chunk_seq out = cd::force(sc, "dl_rag_scan");
+    std::vector<uint64_t> rscan = ref_scan_excl(expect, SumMonoid{}, &total);
+    expect_eq_vec<uint64_t>("ragged scan->force", out, rscan);
+    expect_scalar("ragged scan total", tot, total);
+    cleanup_prefix("dl_rag_scan");
+  }
+
+  {
+    chunk_seq out = cd::filter(cd::delay(rag), "dl_rag_flt",
+                               [](uint64_t x) { return (x % 3) == 0; });
+    std::vector<uint64_t> rv;
+    for (uint64_t x : expect)
+      if (x % 3 == 0) rv.push_back(x);
+    expect_eq_vec<uint64_t>("ragged filter (re-densifies)", out, rv);
+    // filter's output is dense again, so the closed form and the sum agree.
+    expect_scalar("ragged filter output length", plaid::size<uint64_t>(out),
+                  rv.size());
+    cleanup_prefix("dl_rag_flt");
+  }
+
+  cleanup_ragged(parts, "dl_rag_p");
+}
+
+// A force() whose element type is narrower than the grid its node was sized on
+// writes every chunk uniformly partly full -- a ragged sequence by a different
+// route.  Reading it back with delay<uint32_t> used to report ~2n elements.
+static void run_narrow_roundtrip(size_t n) {
+  std::cout << "  narrow round-trip  (n=" << n << ")\n";
+  chunk_seq seq = plaid::iota(n);
+  auto d32 = cd::map(cd::delay(seq),
+                     [](uint64_t x) { return (uint32_t)(x & 0xFFFFFFFFu); });
+  chunk_seq out = cd::force(d32, "dl_nrt");
+
+  expect_scalar("narrow force: plaid::size<u32>", plaid::size<uint32_t>(out),
+                n);
+  auto back = cd::delay<uint32_t>(out);
+  expect_scalar("narrow force -> delay<u32> length", back.length(), n);
+
+  uint64_t want = 0;
+  for (size_t i = 0; i < n; i++) want += (uint64_t)(uint32_t)(i & 0xFFFFFFFFu);
+  expect_scalar(
+      "narrow force -> delay<u32> reduce",
+      cd::reduce(cd::map(back, [](uint32_t x) { return (uint64_t)x; }),
+                 SumMonoid{}),
+      want);
+
+  cleanup_prefix("iota");
+  cleanup_prefix("dl_nrt");
+}
+
+// ── re-gridding zip ──────────────────────────────────────────────────────────
+// Every zip case above has two operands on one grid, so zip takes its
+// closed-form fast path.  These cases force the *re-gridding* path, where the
+// operands' chunk boundaries genuinely disagree -- either because one side is
+// ragged, or because the two sides store different element widths (a uint32_t
+// chunk_seq holds twice as many elements per CHUNK_SIZE chunk as a uint64_t
+// one).  zip then partitions at the union of both sides' boundaries.
+static void run_zip_regrid() {
+  const size_t E = ELEMS_PER_CHUNK;
+  std::cout << "  zip re-grid\n";
+
+  // ---- ragged x dense, equal length ----
+  {
+    const std::vector<size_t> parts = {E + 5, 7, E + 3};
+    std::vector<uint64_t> av;
+    chunk_seq A = make_ragged(parts, "dl_zr_a", &av);
+    const size_t n = av.size();
+    chunk_seq B = plaid::tabulate<uint64_t>(
+        n, "dl_zr_b", [](size_t i) { return (uint64_t)(10 * i); });
+    std::vector<uint64_t> bv(n);
+    for (size_t i = 0; i < n; i++) bv[i] = 10 * (uint64_t)i;
+
+    auto z = cd::map(cd::zip(cd::delay(A), cd::delay(B)), add_pair);
+    chunk_seq out = cd::force(z, "dl_zr_o");
+    expect_eq_vec<uint64_t>("zip ragged x dense  map->force", out,
+                            ref_zip_add(av, bv, 0));
+    expect_scalar(
+        "zip ragged x dense  reduce",
+        cd::reduce(cd::map(cd::zip(cd::delay(A), cd::delay(B)), add_pair),
+                   SumMonoid{}),
+        ref_reduce(ref_zip_add(av, bv, 0), SumMonoid{}));
+    cleanup_prefix("dl_zr_o");
+    cleanup_prefix("dl_zr_b");
+    cleanup_ragged(parts, "dl_zr_a");
+  }
+
+  // ---- ragged x ragged, differently ragged, unequal length (padded) ----
+  {
+    const std::vector<size_t> pa = {E + 5, 7, E + 3};
+    const std::vector<size_t> pb = {3, 2 * E + 11, E - 4};
+    std::vector<uint64_t> av, bv;
+    chunk_seq A = make_ragged(pa, "dl_zrr_a", &av);
+    chunk_seq B = make_ragged(pb, "dl_zrr_b", &bv);
+    const uint64_t pad = 7;
+
+    auto z = cd::map(cd::zip(cd::delay(A), cd::delay(B), pad), add_pair);
+    chunk_seq out = cd::force(z, "dl_zrr_o");
+    expect_eq_vec<uint64_t>("zip ragged x ragged (padded)", out,
+                            ref_zip_add(av, bv, pad));
+    cleanup_prefix("dl_zrr_o");
+    cleanup_ragged(pa, "dl_zrr_a");
+    cleanup_ragged(pb, "dl_zrr_b");
+  }
+
+  // ---- ragged x tabulate (index leaf is on the global grid) ----
+  {
+    const std::vector<size_t> parts = {E + 5, 7, E + 3};
+    std::vector<uint64_t> av;
+    chunk_seq A = make_ragged(parts, "dl_zri_a", &av);
+    const size_t n = av.size();
+    std::vector<uint64_t> bv(n);
+    for (size_t i = 0; i < n; i++) bv[i] = 3 * (uint64_t)i + 1;
+
+    auto z = cd::map(
+        cd::zip(
+            cd::delay(A),
+            cd::tabulate(n, [](size_t i) { return (uint64_t)(3 * i + 1); })),
+        add_pair);
+    chunk_seq out = cd::force(z, "dl_zri_o");
+    expect_eq_vec<uint64_t>("zip ragged x tabulate", out,
+                            ref_zip_add(av, bv, 0));
+    cleanup_prefix("dl_zri_o");
+    cleanup_ragged(parts, "dl_zri_a");
+  }
+
+  // ---- mixed element width: uint32_t x uint64_t, equal length ----
+  {
+    const size_t n = 2 * E + 37;  // >1 chunk on both grids
+    chunk_seq A = plaid::tabulate<uint32_t>(
+        n, "dl_zw_a", [](size_t i) { return (uint32_t)(i * 7 + 1); });
+    chunk_seq B = plaid::tabulate<uint64_t>(
+        n, "dl_zw_b", [](size_t i) { return (uint64_t)(i * 100); });
+    std::vector<uint64_t> want(n);
+    for (size_t i = 0; i < n; i++)
+      want[i] = (uint64_t)(uint32_t)(i * 7 + 1) + (uint64_t)(i * 100);
+
+    auto a32 = cd::delay<uint32_t>(A);
+    auto b64 = cd::delay<uint64_t>(B);
+    expect_scalar("mixed-width: u32 leaf length", a32.length(), n);
+    expect_scalar("mixed-width: u64 leaf length", b64.length(), n);
+
+    auto z = cd::map(cd::zip(a32, b64), [](std::pair<uint32_t, uint64_t> p) {
+      return (uint64_t)p.first + p.second;
+    });
+    chunk_seq out = cd::force(z, "dl_zw_o");
+    expect_eq_vec<uint64_t>("zip u32 x u64  map->force", out, want);
+    expect_scalar("zip u32 x u64  reduce",
+                  cd::reduce(cd::map(cd::zip(cd::delay<uint32_t>(A),
+                                             cd::delay<uint64_t>(B)),
+                                     [](std::pair<uint32_t, uint64_t> p) {
+                                       return (uint64_t)p.first + p.second;
+                                     }),
+                             SumMonoid{}),
+                  ref_reduce(want, SumMonoid{}));
+    cleanup_prefix("dl_zw_o");
+    cleanup_prefix("dl_zw_a");
+    cleanup_prefix("dl_zw_b");
+  }
+
+  // ---- read accounting: a child chunk straddling two zip pieces must be
+  //      READ once and held, not read once per piece. ----
+  {
+    const size_t n = 2 * E + 37;
+    chunk_seq A = plaid::tabulate<uint32_t>(
+        n, "dl_zrc_a", [](size_t i) { return (uint32_t)i; });
+    chunk_seq B = plaid::tabulate<uint64_t>(
+        n, "dl_zrc_b", [](size_t i) { return (uint64_t)i; });
+    auto z = cd::zip(cd::delay<uint32_t>(A), cd::delay<uint64_t>(B));
+
+    // Naive accounting: what the planner would issue with per-chunk dedup
+    // only (one read per reference).
+    size_t naive = 0;
+    for (size_t i = 0; i < z.num_chunks(); i++) {
+      cd::Planner pl;
+      z.plan(i, pl);
+      naive += pl.unique_reads.size();
+    }
+    const size_t issued =
+        cd::detail::plan_chunks(z, z.num_chunks()).refs.size();
+    const size_t distinct = A.chunks.size() + B.chunks.size();
+
+    report("re-grid splits a chunk across pieces", naive > distinct,
+           "naive=" + std::to_string(naive) +
+               " distinct=" + std::to_string(distinct));
+    report("re-grid issues one read per physical chunk", issued == distinct,
+           "issued=" + std::to_string(issued) +
+               " distinct=" + std::to_string(distinct));
+    cleanup_prefix("dl_zrc_a");
+    cleanup_prefix("dl_zrc_b");
+  }
+
+  // ---- mixed element width, unequal length, per-operand pads ----
+  {
+    const size_t na = E + 9;       // u32 grid: fits in one 4-byte chunk
+    const size_t nb = 2 * E + 40;  // u64 grid: three chunks
+    chunk_seq A = plaid::tabulate<uint32_t>(
+        na, "dl_zwp_a", [](size_t i) { return (uint32_t)(i + 3); });
+    chunk_seq B = plaid::tabulate<uint64_t>(
+        nb, "dl_zwp_b", [](size_t i) { return (uint64_t)(i * 5); });
+    const uint32_t padA = 11;
+    const uint64_t padB = 0;
+    std::vector<uint64_t> want(std::max(na, nb));
+    for (size_t i = 0; i < want.size(); i++) {
+      const uint64_t x = i < na ? (uint64_t)(uint32_t)(i + 3) : (uint64_t)padA;
+      const uint64_t y = i < nb ? (uint64_t)(i * 5) : padB;
+      want[i] = x + y;
+    }
+
+    auto z = cd::map(
+        cd::zip(cd::delay<uint32_t>(A), cd::delay<uint64_t>(B), padA, padB),
+        [](std::pair<uint32_t, uint64_t> p) {
+          return (uint64_t)p.first + p.second;
+        });
+    chunk_seq out = cd::force(z, "dl_zwp_o");
+    expect_eq_vec<uint64_t>("zip u32 x u64 (per-operand pads)", out, want);
+    cleanup_prefix("dl_zwp_o");
+    cleanup_prefix("dl_zwp_a");
+    cleanup_prefix("dl_zwp_b");
+  }
+
+  // ---- mixed width under a scan: the big-integer carry shape, where the
+  //      re-gridded zip feeds a scan whose seed must land mid-chunk (the one
+  //      case that makes scan_node fold `skip` elements). ----
+  {
+    const size_t na = 2 * E + 13;
+    const size_t nb = E + 6;
+    chunk_seq A = plaid::tabulate<uint32_t>(
+        na, "dl_zws_a", [](size_t i) { return (uint32_t)(i % 5); });
+    chunk_seq B = plaid::tabulate<uint64_t>(
+        nb, "dl_zws_b", [](size_t i) { return (uint64_t)(i % 3); });
+    const size_t L = std::max(na, nb);
+    std::vector<uint64_t> sum(L);
+    for (size_t i = 0; i < L; i++)
+      sum[i] =
+          (i < na ? (uint64_t)(i % 5) : 0) + (i < nb ? (uint64_t)(i % 3) : 0);
+
+    auto pairs = cd::zip(cd::delay<uint32_t>(A), cd::delay<uint64_t>(B),
+                         (uint32_t)0, (uint64_t)0);
+    auto sums = cd::map(pairs, [](std::pair<uint32_t, uint64_t> p) {
+      return (uint64_t)p.first + p.second;
+    });
+    uint64_t rt = 0;
+    const std::vector<uint64_t> rscan = ref_scan_excl(sum, SumMonoid{}, &rt);
+    auto [sc, tot] = cd::scan(sums, SumMonoid{});
+    chunk_seq out = cd::force(sc, "dl_zws_o");
+    expect_eq_vec<uint64_t>("scan(zip u32 x u64) -> force", out, rscan);
+    expect_scalar("scan(zip u32 x u64) total", tot, rt);
+
+    // ...and re-zip the scan back against the original pair stream, so a
+    // re-gridded zip appears on both sides of the tree (the bigint shape).
+    auto [sc2, tot2] =
+        cd::scan(cd::map(cd::zip(cd::delay<uint32_t>(A), cd::delay<uint64_t>(B),
+                                 (uint32_t)0, (uint64_t)0),
+                         [](std::pair<uint32_t, uint64_t> p) {
+                           return (uint64_t)p.first + p.second;
+                         }),
+                 SumMonoid{});
+    (void)tot2;
+    auto both = cd::map(
+        cd::zip(cd::map(cd::zip(cd::delay<uint32_t>(A), cd::delay<uint64_t>(B),
+                                (uint32_t)0, (uint64_t)0),
+                        [](std::pair<uint32_t, uint64_t> p) {
+                          return (uint64_t)p.first + p.second;
+                        }),
+                sc2),
+        add_pair);
+    chunk_seq out2 = cd::force(both, "dl_zws_o2");
+    std::vector<uint64_t> want2(L);
+    for (size_t i = 0; i < L; i++) want2[i] = sum[i] + rscan[i];
+    expect_eq_vec<uint64_t>("zip(mixed, scan(mixed)) -> force", out2, want2);
+
+    cleanup_prefix("dl_zws_o");
+    cleanup_prefix("dl_zws_o2");
+    cleanup_prefix("dl_zws_a");
+    cleanup_prefix("dl_zws_b");
+  }
+}
+
 // ── main ─────────────────────────────────────────────────────────────────────
 int main(int argc, char* argv[]) {
   ParseGlobalArguments(argc, argv);
@@ -893,9 +1245,12 @@ int main(int argc, char* argv[]) {
   run_lazy_filter_multibatch();
   run_lazy_filter_sparse();
   run_lazy_filter_random_access();
+  run_ragged();
+  run_narrow_roundtrip(2 * ELEMS_PER_CHUNK + 37);
   run_zip_pad();
   run_zip_multibatch();
   run_zip_compose();
+  run_zip_regrid();
   run_bigint_add();
   run_sequential_context();
   run_persistent_context();

@@ -61,32 +61,16 @@ inline carry classify(double_digit a_val, double_digit b_val,
 
 inline carry carry_fn(carry a, carry b) { return (b == propagate) ? a : b; }
 
-}  // namespace bigint_detail
-
-// ── out-of-core: big-integer add on the delayed primitives ───────────────────
-// a + b (+ extra_one as a carry into limb 0).  The fused chain
+// The fused add itself, over any two delayed operands of `digit`:
 //   zip -> map(classify) -> scan(carry) -> zip -> map(add) -> force
-// never spills an intermediate to disk.  extra_one lets callers build
-// subtraction as add(a, ~b, /*extra_one=*/true).
-inline chunk_seq ChunkBigIntAdd(const chunk_seq& a, const chunk_seq& b,
-                                const std::string& result_prefix,
-                                bool extra_one = false) {
-  using namespace bigint_detail;
-
-  size_t n_a = plaid::size(a);
-  size_t n_b = plaid::size(b);
-
-  // Keep a the longer operand so only b needs sign-extension padding.
-  if (n_a < n_b) return ChunkBigIntAdd(b, a, result_prefix, extra_one);
-  if (n_b == 0) return a;
-
-  const bool a_sign = a[n_a - 1] >> (digit_bits - 1);
-  const bool b_sign = b[n_b - 1] >> (digit_bits - 1);
+// nothing here depends on how either operand is stored, which is what lets the
+// narrow-limb variant below reuse it verbatim.  `pad` extends the shorter
+// operand B to A's length; `n_a` is A's limb count.
+template <class DA, class DB>
+inline chunk_seq add_fused(DA A, DB B, digit pad, size_t n_a, bool a_sign,
+                           bool b_sign, const std::string& result_prefix,
+                           bool extra_one) {
   const double_digit mask = (static_cast<double_digit>(1) << digit_bits) - 1;
-
-  const digit pad = b_sign ? static_cast<digit>(mask) : 0;  // sign-extend b
-  auto A = delayed::delay(a);
-  auto B = delayed::delay(b);
   auto ab_pairs = delayed::zip(A, B, pad);
 
   auto classifications = delayed::map(ab_pairs, [mask](auto p) {
@@ -111,11 +95,86 @@ inline chunk_seq ChunkBigIntAdd(const chunk_seq& a, const chunk_seq& b,
   chunk_seq result_seq = delayed::force(result, result_prefix);
 
   // Same-sign addition that flips the sign bit overflowed into a new limb.
-  digit top = result_seq[n_a - 1];
+  // Read the top limb with back(), not result_seq[n_a - 1]: when the operands'
+  // chunk partitions disagree (the narrow-limb variant below) zip re-grids and
+  // force's output is ragged, which operator[]'s dense index arithmetic cannot
+  // address.  The result is exactly n_a limbs, so its last element IS limb
+  // n_a - 1.
+  CHECK(plaid::size<digit>(result_seq) == n_a)
+      << "bigint add: result has " << plaid::size<digit>(result_seq)
+      << " limbs, expected " << n_a;
+  digit top = result_seq.back<digit>();
   if (a_sign == b_sign && ((top >> (digit_bits - 1)) != a_sign))
     result_seq.push_back(a_sign ? static_cast<digit>(mask) : 0);
 
   return result_seq;
+}
+
+}  // namespace bigint_detail
+
+// ── out-of-core: big-integer add on the delayed primitives ───────────────────
+// a + b (+ extra_one as a carry into limb 0).  The fused chain
+//   zip -> map(classify) -> scan(carry) -> zip -> map(add) -> force
+// never spills an intermediate to disk.  extra_one lets callers build
+// subtraction as add(a, ~b, /*extra_one=*/true).
+inline chunk_seq ChunkBigIntAdd(const chunk_seq& a, const chunk_seq& b,
+                                const std::string& result_prefix,
+                                bool extra_one = false) {
+  using namespace bigint_detail;
+
+  size_t n_a = plaid::size(a);
+  size_t n_b = plaid::size(b);
+
+  // Keep a the longer operand so only b needs sign-extension padding.
+  if (n_a < n_b) return ChunkBigIntAdd(b, a, result_prefix, extra_one);
+  if (n_b == 0) return a;
+
+  const bool a_sign = a[n_a - 1] >> (digit_bits - 1);
+  const bool b_sign = b[n_b - 1] >> (digit_bits - 1);
+  const double_digit mask = (static_cast<double_digit>(1) << digit_bits) - 1;
+
+  const digit pad = b_sign ? static_cast<digit>(mask) : 0;  // sign-extend b
+  return bigint_detail::add_fused(delayed::delay(a), delayed::delay(b), pad,
+                                  n_a, a_sign, b_sign, result_prefix,
+                                  extra_one);
+}
+
+// ── out-of-core: one operand stored in NARROWER limbs ────────────────────────
+// The same base-2^64 big integer, but `b32`'s limbs are stored as uint32_t --
+// legitimate whenever every limb of b is known to fit in 32 bits (a compressed
+// operand), and half the bytes on disk.
+//
+// The point for the library: a uint32_t chunk_seq holds CHUNK_SIZE/4 elements
+// per chunk while a uint64_t one holds CHUNK_SIZE/8, so the two operands do
+// NOT share a chunk partition.  The delayed layer's zip re-grids onto the
+// union of the two partitions and addresses each side by its own chunk index
+// plus an element offset, so this needs no repacking pass and no change to the
+// algorithm below -- the identical fused chain runs over mismatched grids.
+// Every physical chunk is still read exactly once (see plan_chunks' dedup).
+//
+// b32 is non-negative by construction (limbs < 2^32), so it zero-extends.
+inline chunk_seq ChunkBigIntAddNarrow(const chunk_seq& a, const chunk_seq& b32,
+                                      const std::string& result_prefix,
+                                      bool extra_one = false) {
+  using namespace bigint_detail;
+
+  const size_t n_a = plaid::size<digit>(a);
+  const size_t n_b = plaid::size<uint32_t>(b32);
+  CHECK(n_b <= n_a) << "ChunkBigIntAddNarrow: the narrow operand must be the "
+                       "shorter one (n_b="
+                    << n_b << " > n_a=" << n_a << ")";
+  if (n_a == 0) return {};
+  if (n_b == 0) return a;
+
+  const bool a_sign = a[n_a - 1] >> (digit_bits - 1);
+
+  // map widens each 32-bit limb in place in the fused pass -- it forwards the
+  // uint32_t leaf's partition, so the grid mismatch reaches zip intact.
+  auto B = delayed::map(delayed::delay<uint32_t>(b32),
+                        [](uint32_t v) { return static_cast<digit>(v); });
+  return bigint_detail::add_fused(delayed::delay(a), B, /*pad=*/(digit)0, n_a,
+                                  a_sign, /*b_sign=*/false, result_prefix,
+                                  extra_one);
 }
 
 // ── out-of-core: the SAME add, but WITHOUT delayed fusion

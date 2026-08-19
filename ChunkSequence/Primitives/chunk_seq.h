@@ -611,11 +611,40 @@ struct chunk_seq {
     CHECK(off < c.used) << "operator[]: index " << i << " past end of chunk "
                         << ci;
 
+    return read_elem<T>(c, off);
+  }
+
+  // Last element of the sequence.  Unlike operator[], this does NOT assume the
+  // dense layout -- it walks back to the last non-empty chunk and reads that
+  // chunk's own final element -- so it is safe on a ragged sequence, including
+  // delayed::force output whose node grid is not CHUNK_SIZE/sizeof(T) (a
+  // re-gridding zip, or a narrowing map).
+  template <typename T = uint64_t>
+  T back() const {
+    static_assert(CHUNK_SIZE % sizeof(T) == 0,
+                  "sizeof(T) must divide CHUNK_SIZE");
+    for (size_t k = chunks.size(); k-- > 0;) {
+      const chunk& c = chunks[k];
+      if (c.used == 0) continue;
+      CHECK(c.used >= sizeof(T)) << "back(): chunk " << k << " holds " << c.used
+                                 << " bytes, less than one element";
+      return read_elem<T>(c, c.used - sizeof(T));
+    }
+    CHECK(false) << "back(): sequence is empty";
+    return T{};
+  }
+
+ private:
+  // One O_DIRECT-aligned element read at `off` bytes into `c`.  An element
+  // never straddles an O_DIRECT_MULTIPLE boundary, since sizeof(T) divides
+  // CHUNK_SIZE and O_DIRECT_MULTIPLE alike.
+  template <typename T>
+  T read_elem(const chunk& c, size_t off) const {
     const size_t byte = c.begin_addr + off;
     const size_t block = AlignDown(byte);  // O_DIRECT-aligned start
 
     void* buf = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, O_DIRECT_MULTIPLE);
-    CHECK(buf != nullptr) << "operator[]: buffer allocation failed";
+    CHECK(buf != nullptr) << "read_elem: buffer allocation failed";
     int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
     SYSCALL(fd);
     SYSCALL(pread(fd, buf, O_DIRECT_MULTIPLE, (off_t)block));
@@ -626,6 +655,7 @@ struct chunk_seq {
     return value;
   }
 
+ public:
   // Append one element to the end of the sequence, updating both the on-disk
   // data and the in-memory chunk_seq.  Requires a non-empty seq (there is no
   // filename to derive a first chunk from otherwise).
@@ -1047,16 +1077,24 @@ chunk_seq sequential_to_chunk_seq(
                                 [&seq](size_t i) { return seq[i]; });
 }
 
-// Total number of *elements* (not chunks) in the sequence.  O(1): every chunk
-// but the last is full.  (Single-element access lives on the struct itself:
-// chunk_seq::operator[] and chunk_seq::push_back.)
+// Total number of *elements* (not chunks) in the sequence.  O(number of
+// chunks): sums each chunk's own `used` rather than assuming every chunk but
+// the last is full, so it is correct on a *ragged* sequence too -- one with a
+// partial chunk somewhere other than the end, as produced by plaid::flatten
+// (and hence sample_sort), plaid::reverse, group_by_index with disk_span > 1,
+// or a narrowing ChunkMap.  The old closed form silently over-counted those.
+// Callers are all coarse-grained (once per algorithm phase, not per element),
+// and the one caller in a per-vertex loop -- sequential_cut_no_compression --
+// already walks the chunk headers itself, so this is no asymptotic change.
+// (Single-element access lives on the struct itself: chunk_seq::operator[] and
+// chunk_seq::push_back, both of which still assume the dense layout.)
 template <typename T = uint64_t>
 size_t size(const chunk_seq& seq) {
   static_assert(CHUNK_SIZE % sizeof(T) == 0,
                 "sizeof(T) must divide CHUNK_SIZE");
-  if (seq.chunks.empty()) return 0;
-  const size_t ept = CHUNK_SIZE / sizeof(T);
-  return (seq.chunks.size() - 1) * ept + seq.chunks.back().used / sizeof(T);
+  size_t n = 0;
+  for (const chunk& c : seq.chunks) n += c.used / sizeof(T);
+  return n;
 }
 
 // Materialize an index-ordered header list into a *fresh, independent* on-disk

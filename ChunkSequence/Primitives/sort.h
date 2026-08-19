@@ -788,11 +788,13 @@ namespace plaid {
  *
  * INVARIANT: each returned bucket is index-ordered and dense-except-last,
  * exactly like ChunkPartition's / ChunkFilter's output. Buckets are returned
- * SEPARATELY on purpose: do NOT concatenate them into one sequence -- that
- * would drop each bucket's trailing partial chunk into the middle of the
- * sequence, breaking the delayed layer's ELEMS_PER_CHUNK grid (zip alignment)
- * and eager plaid::size. A caller needing one fused sequence must re-densify
- * (a repack pass / from_chunks), not glue chunk lists.
+ * SEPARATELY on purpose: concatenating them drops each bucket's trailing
+ * partial chunk into the middle of the sequence, making it *ragged*. That is
+ * no longer fatal -- plaid::size and the delayed layer both handle ragged
+ * sequences -- but it wastes disk and splits chunks into more, smaller logical
+ * pieces when zipped, and it is still unusable by chunk_seq::operator[] and
+ * the DensePack-based primitives. A caller wanting one dense fused sequence
+ * must re-densify (a repack pass), not glue chunk lists.
  *
  * Ordering within a bucket is completion order (the reader is unordered and
  * BucketWriter accumulates opportunistically), NOT the input order --

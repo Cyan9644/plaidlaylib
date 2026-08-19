@@ -205,6 +205,27 @@ EXAMPLES = [
      "title": "big-integer add: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["bi_a*", "bi_b*", "bi_sum*"]},
 
+    # bigint_add_mixedExample is the same add with the second operand stored as
+    # uint32_t limbs, so the two operands do NOT share a chunk partition and
+    # zip must re-grid (see chunk_bigint_add.h's ChunkBigIntAddNarrow).  It
+    # reads 12 B per limb (8 for the wide operand + 4 for the narrow one)
+    # against bigint_add's 16, so at equal input *bytes* it runs a larger limb
+    # count -- compare the two at equal n for the I/O saving, at equal size for
+    # the re-gridding overhead.  elem_bytes/input_seqs are expressed in units of
+    # the NARROW element (4 B x 3 = 12 B/limb) so size_to_n's chunk rounding
+    # lands n on a multiple of CHUNK_SIZE/4, which is also a whole number of
+    # CHUNK_SIZE/8-limb chunks for the wide operand.
+    {"name": "bigint_add_mixed", "target": "bin/bigint_add_mixedExample",
+     "cols": ["n", "build_s", "add_s", "inmem_add_s", "result_limbs",
+              "throughput_gb_s"],
+     "time_col": "add_s", "inmem_col": "inmem_add_s",
+     "elem_bytes": 4, "input_seqs": 3,
+     "budget_base": "phys/2", "budget_mult": 32,
+     "xlabel": "input size",
+     "title": "big-integer add, mixed u32/u64 operand storage: "
+              "out-of-core (plaid) vs in-mem parlaylib",
+     "data_globs": ["bim_a*", "bim_b32*", "bim_sum*"]},
+
     # external_linefitExample sweeps n; the plotted time is the fit itself
     # (input build excluded).  Both passes are fully delayed, so the fit leaves
     # no intermediates beyond the lf_x/lf_y inputs.

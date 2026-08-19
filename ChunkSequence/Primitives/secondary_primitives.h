@@ -813,12 +813,16 @@ inline constexpr size_t PARTITION_DROP = SIZE_MAX;
  * and **dense-except-last** (every chunk but the bucket's final one holds
  * exactly CHUNK_SIZE/sizeof(T) elements), exactly like a ChunkFilter output.  A
  * bucket buffer is flushed only when full; its one short chunk is the last,
- * highest- index one.  Buckets are returned SEPARATELY on purpose: do NOT
- * concatenate them into one sequence — that would drop each bucket's trailing
- * partial chunk into the middle of the sequence, breaking the delayed layer's
- * ELEMS_PER_CHUNK grid (zip alignment) and eager plaid::size.  A
- * caller needing one fused sequence must re-densify (a repack pass /
- * from_chunks), not glue chunk lists.
+ * highest- index one.  Buckets are returned SEPARATELY on purpose:
+ * concatenating them drops each bucket's trailing partial chunk into the middle
+ * of the sequence, making it *ragged*.  That is no longer fatal — plaid::size
+ * and the delayed layer (delay/zip, which re-grids onto the union of its
+ * operands' partitions) both handle ragged sequences — but it still costs: a
+ * ragged sequence wastes disk, and zipping it against a dense one splits chunks
+ * into more, smaller logical pieces.  It is also still unusable by the
+ * primitives that do assume the dense layout, notably chunk_seq::operator[] and
+ * any DensePack-based primitive.  A caller wanting one dense fused sequence
+ * must re-densify (a repack pass), not glue chunk lists.
  *
  * Ordering within a bucket is completion order (the reader is unordered), NOT
  * the input order — callers needing sorted/index order must not rely on it.
@@ -1554,11 +1558,13 @@ void reverse_chunk_contents(const chunk& c) {
 // multiple of ELEMS_PER_CHUNK), that partial chunk becomes the *first* chunk
 // after reversal, not the last -- std::reverse on the chunk headers moves it
 // there, and per-chunk reversal alone can't relocate it back without an extra
-// data-moving pass. The result is still exactly correct when read back via
-// materialize()/to_vector() (both size a chunk_seq by summing each chunk's
-// own `used` field), but must NOT be fed into primitives that instead assume
-// only the *last* chunk can be partial -- notably plaid::size<T>(), the
-// delayed layer's zip/chunk grid, and any DensePack-based primitive.
+// data-moving pass. The result is correct when read back via
+// materialize()/to_vector(), via plaid::size<T>(), or through the delayed
+// layer (delay() takes its partition from each chunk's own `used`, and zip
+// re-grids onto the union of its operands' partitions) -- all of which size a
+// chunk_seq by summing `used`. It must still NOT be fed to primitives that
+// assume only the *last* chunk can be partial -- notably
+// chunk_seq::operator[]/push_back and any DensePack-based primitive.
 template <typename T>
 chunk_seq& reverse(chunk_seq& seq) {
   parlay::parallel_for(0, seq.chunks.size(), [&](size_t i) {
