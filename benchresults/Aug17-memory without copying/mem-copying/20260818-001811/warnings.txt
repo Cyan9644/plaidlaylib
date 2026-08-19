@@ -1,0 +1,2 @@
+example convex_hull at size=128 GiB (n=4294967296): exited -6 (killed by signal 6 (crash)) — point dropped
+example samplesort at size=128 GiB (n=17179869184): exited -6 (killed by signal 6 (crash)) — point dropped
