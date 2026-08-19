@@ -479,7 +479,11 @@ struct chunk_seq {
   // needed on the write side.
   void consolidate(const std::string& output_path) const {
     int out_fd = open(output_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    SYSCALL(out_fd);
+    // Fatal: every write below would go to fd -1 and the caller would read
+    // back whatever happened to be at output_path already (a stale file from
+    // an earlier run), which is worse than no output at all.
+    CHECK(out_fd >= 0) << "consolidate: open(" << output_path
+                       << ") failed: " << std::strerror(errno);
 
     // Process chunks in logical index order regardless of vector ordering.
     std::vector<const chunk*> ordered;
@@ -499,10 +503,21 @@ struct chunk_seq {
       auto [it, inserted] = fd_cache.emplace(c->filename, -1);
       if (inserted) {
         it->second = open(c->filename.c_str(), O_DIRECT | O_RDONLY);
-        SYSCALL(it->second);
+        CHECK(it->second >= 0)
+            << "consolidate: open(" << c->filename
+            << ") failed: " << std::strerror(errno)
+            << "; soft RLIMIT_NOFILE=" << SoftFdLimit();
       }
-      SYSCALL(pread(it->second, buf, AlignUp(c->used), (off_t)c->begin_addr));
-      SYSCALL(write(out_fd, buf, c->used));
+      const ssize_t got =
+          pread(it->second, buf, AlignUp(c->used), (off_t)c->begin_addr);
+      CHECK(got >= (ssize_t)c->used)
+          << "consolidate: pread(" << c->filename << ", chunk " << c->index
+          << ") returned " << got << " of " << c->used
+          << " bytes: " << std::strerror(errno);
+      const ssize_t put = write(out_fd, buf, c->used);
+      CHECK(put == (ssize_t)c->used)
+          << "consolidate: write(" << output_path << ") returned " << put
+          << " of " << c->used << " bytes: " << std::strerror(errno);
     }
 
     free(buf);
@@ -2565,7 +2580,17 @@ class BucketWriter {
         results_[i].filename = GetFileName(prefix, i);
         bk.fd = open(results_[i].filename.c_str(),
                      O_WRONLY | O_DIRECT | O_CREAT | O_TRUNC, 0644);
-        SYSCALL(bk.fd);
+        // Fatal, not logged: with fd == -1 every Write routed to this bucket
+        // is silently discarded and the caller gets a short/empty bucket back
+        // as if nothing went wrong.  One fd per (bucket, shard) means a
+        // few-thousand-bucket count_sort/group_by_index needs a matching
+        // RLIMIT_NOFILE -- ParseGlobalArguments lifts the soft limit to the
+        // hard limit, so reaching here means the HARD limit is too low.
+        CHECK(bk.fd >= 0) << "BucketWriter: open(" << results_[i].filename
+                          << ") failed for bucket " << b << " of "
+                          << num_buckets << " (shard " << s << " of "
+                          << disk_span_ << "): " << std::strerror(errno)
+                          << "; soft RLIMIT_NOFILE=" << SoftFdLimit();
         bk.cur = NewRequest(bk.fd, 0);
       }
     }

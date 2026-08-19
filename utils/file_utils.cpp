@@ -334,6 +334,22 @@ void Write(int fd, const void* buffer, size_t write_size) {
 //
 
 void ParseGlobalArguments(int& argc, char** argv) {
+  // Lift the soft fd limit to the hard limit before any I/O starts.  Every
+  // main() in the repo calls this function exactly once, so this is the single
+  // place that reaches every binary -- and it must stay ABOVE the early
+  // `argument_index == 1` return below, which is the path taken whenever no
+  // global --flags are passed (i.e. almost always).
+  //
+  // The library opens one file per drive plus one io_uring instance (itself an
+  // fd) per reader/writer worker, and BucketWriter opens one fd per
+  // (bucket, shard) -- a few thousand buckets (count_sort/group_by_index) blows
+  // straight past the common 1024 soft limit, at which point open() returns
+  // EMFILE and io_uring_queue_init fails the same way.  Binaries used to call
+  // RaiseFdLimit() individually, which meant every binary that forgot (e.g.
+  // primitivesTest, whose group_by case groups into 4096 buckets) hit that
+  // limit.
+  RaiseFdLimit();
+
   std::map<std::string, std::string> arguments = {
       {"num_ssd", std::to_string(SSD_COUNT)},
       {"ssd_selection", "s"},

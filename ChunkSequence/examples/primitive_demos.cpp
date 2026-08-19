@@ -1102,10 +1102,6 @@ static void cleanup_bucket_prefix(const std::string& prefix,
 
 int run(int argc, char* argv[]) {
   ParseGlobalArguments(argc, argv);
-  // group_by_index's BucketWriter opens one fd per bucket (up to
-  // kMaxBuckets), past the 1024 soft fd limit; lift it to the hard limit
-  // before any I/O starts.
-  RaiseFdLimit();
   const size_t n = (argc > 1) ? std::stoull(argv[1]) : 1'000'000;
   CHECK(n > 0) << "need n > 0 (n=" << n << ")";
 
@@ -1750,10 +1746,6 @@ static uint64_t key_at(size_t i) { return parlay::hash64(i); }
 
 int run(int argc, char* argv[]) {
   ParseGlobalArguments(argc, argv);
-  // Both shuffles fan out one io_uring instance + one open file per drive for
-  // every concurrent reader/writer, past the 1024 soft fd limit; lift it to the
-  // hard limit before any I/O starts.
-  RaiseFdLimit();
 
   const size_t n = (argc > 1) ? std::stoull(argv[1]) : 1'000'000;
   CHECK(n > 0) << "need n > 0 (n=" << n << ")";

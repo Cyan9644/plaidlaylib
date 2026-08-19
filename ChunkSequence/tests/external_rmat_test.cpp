@@ -200,9 +200,6 @@ bool run_case(size_t n_req, size_t avg_degree, const std::string& label) {
 
 int main(int argc, char* argv[]) {
   ParseGlobalArguments(argc, argv);
-  // direct_sample_sort opens many files per worker; the same fd-limit lift
-  // every external example applies.
-  RaiseFdLimit();
   // Both sides of every comparison build a DRAM reference graph, so this test
   // caps its own sizes rather than taking `make test TEST_ARGS=<n>` at face
   // value: the dense case's avg_degree is n/2, so its edge count grows as

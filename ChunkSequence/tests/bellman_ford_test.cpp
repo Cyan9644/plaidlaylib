@@ -147,7 +147,6 @@ bool run_case(const Case& c) {
 
 int main(int argc, char* argv[]) {
   ParseGlobalArguments(argc, argv);
-  RaiseFdLimit();
 
   std::vector<Case> cases;
 

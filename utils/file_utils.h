@@ -186,11 +186,21 @@ inline size_t AvailablePhysicalMemoryBytes() {
 // io_uring_queue_init fails with EMFILE.  Bumping the soft limit to the hard
 // limit needs no privilege; call it once at program start.  Returns the new
 // soft limit (0 on failure).
+//
+// ParseGlobalArguments() calls this for every binary, so no main() needs to.
 inline size_t RaiseFdLimit() {
   struct rlimit rl;
   if (getrlimit(RLIMIT_NOFILE, &rl) != 0) return 0;
   rl.rlim_cur = rl.rlim_max;
   if (setrlimit(RLIMIT_NOFILE, &rl) != 0) return 0;
+  return (size_t)rl.rlim_cur;
+}
+
+// The process's current soft open-file limit (0 if it cannot be read).  For
+// diagnostics: an EMFILE is only actionable next to the limit it hit.
+inline size_t SoftFdLimit() {
+  struct rlimit rl;
+  if (getrlimit(RLIMIT_NOFILE, &rl) != 0) return 0;
   return (size_t)rl.rlim_cur;
 }
 

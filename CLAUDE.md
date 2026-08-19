@@ -162,6 +162,25 @@ called **once** by the dispatcher, not per case: it consumes the global flags an
 populates the SSD list, so a second call would reset that list to the defaults
 and discard any `--ssd=` selection.
 
+`ParseGlobalArguments` is also the single place that lifts the soft
+`RLIMIT_NOFILE` to the hard limit (`RaiseFdLimit()`, `utils/file_utils.h`) — it
+runs **above** the function's no-global-flags early return, so it reaches every
+binary in the repo (each `main()` calls it exactly once).  Binaries used to call
+`RaiseFdLimit()` individually and the ones that forgot hit the common 1024 soft
+limit: `group_by`'s `group_by_index(large k)` case groups into 4096 buckets, and
+`BucketWriter` opens one fd per (bucket, shard).  That open used to be a logged
+`SYSCALL`, which left every bucket past the limit silently discarding its writes
+and coming back short; it is now a fatal `CHECK`, so reaching it means the
+**hard** limit is below what the bucket count needs — raise it (`ulimit -Hn`),
+don't read the abort as a test regression.
+
+`chunk_seq::consolidate` was hardened the same way (fatal on a failed open or a
+short `pread`/`write`).  The `scalar` case had been consolidating to a fixed
+`/tmp` path, so once a copy owned by another user was left there,
+`fs.protected_regular` turned the `O_CREAT` into EACCES, every `write` went to
+fd -1, and the case verified — and passed on — the **stale** file from the
+earlier run.  It now writes a per-pid path under `$TMPDIR` and unlinks it.
+
 ## Examples
 
 Each example is **dual-purpose**: run by hand it prints human-readable output,

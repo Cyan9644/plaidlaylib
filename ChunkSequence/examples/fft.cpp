@@ -88,7 +88,6 @@ static cd input_val(size_t m) {
 
 int main(int argc, char* argv[]) {
   ParseGlobalArguments(argc, argv);
-  RaiseFdLimit();
   const size_t req_n = (argc > 1) ? std::stoull(argv[1]) : (size_t(1) << 20);
   const ChunkFFT::Dims d = ChunkFFT::choose_dims(req_n);
   const size_t N = d.N, A = d.A, B = d.B;

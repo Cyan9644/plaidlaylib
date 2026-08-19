@@ -1041,11 +1041,19 @@ int run(int argc, char* argv[]) {
   }
 
   // ── consolidate + verify the whole thing matches an in-memory model ────────
-  const std::string out = "/tmp/scalar_test_consolidated.bin";
+  // Per-pid path, unlinked below: a fixed shared name in a sticky world-
+  // writable dir survives the run, and once one user's copy is left behind
+  // every later run by a different user gets EACCES on the O_CREAT (Linux's
+  // fs.protected_regular) -- which used to leave this case verifying the
+  // STALE file and reporting PASS.
+  const char* tmpdir = getenv("TMPDIR");
+  const std::string out = std::string(tmpdir && *tmpdir ? tmpdir : "/tmp") +
+                          "/scalar_test_consolidated." +
+                          std::to_string((long)getpid()) + ".bin";
   seq.consolidate(out);
   {
     FILE* f = fopen(out.c_str(), "rb");
-    CHECK(f != nullptr);
+    CHECK(f != nullptr) << "could not reopen " << out << " after consolidate";
     const size_t total = ops::size(seq);
     std::vector<T> buf(total);
     size_t got = fread(buf.data(), sizeof(T), total, f);
@@ -1059,6 +1067,7 @@ int run(int argc, char* argv[]) {
         ok = false;
       }
   }
+  unlink(out.c_str());
 
   // ── delayed::size (file / map / index / zip) ───────────────────────────────
   {
