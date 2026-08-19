@@ -372,7 +372,10 @@ inline constexpr size_t kProcessInplacePipelineMultiplier = 3;
 // each sequence's own original chunks/files (no fresh-file rewrite).
 //
 // budget_bytes == 0 (the default) resolves via GetProcessInplaceBudgetBytes()
-// (env override PROCESS_INPLACE_BUDGET_BYTES, else physical RAM / 4).
+// (env override PROCESS_INPLACE_BUDGET_BYTES, else physical RAM / 4).  Either
+// way the number is a *peak RSS* ceiling, divided by
+// kProcessInplacePipelineMultiplier before waves are packed -- so a caller
+// picking a budget by hand wants multiplier * (the bytes it wants in a wave).
 //
 // A single sequence's own bytes exceeding the budget is a CHECK failure, not
 // silently honored: process_inplace hands `processor` the *entire* sequence's
@@ -380,8 +383,9 @@ inline constexpr size_t kProcessInplacePipelineMultiplier = 3;
 // needs the whole bucket at once), so a bucket that doesn't fit the budget on
 // its own cannot be waved without changing the algorithm (re-bucketing), which
 // is out of scope here; the caller should either raise the budget
-// (PROCESS_INPLACE_BUDGET_BYTES) or presize its buckets smaller (e.g. a larger
-// num_buckets out of count_sort/GetBucketCount).
+// (PROCESS_INPLACE_BUDGET_BYTES, to at least multiplier * the largest bucket)
+// or presize its buckets smaller (e.g. a larger num_buckets out of
+// count_sort/GetBucketCount).
 //
 // `processor`'s bucket_idx is translated back to `seqs`'s own global index
 // (wave start offset + the wave-local index process_inplace hands it), so a
@@ -394,8 +398,12 @@ void process_inplace_budgeted(std::vector<chunk_seq>& seqs, Processor processor,
   if (seqs.empty()) return;
   if (budget_bytes == 0) budget_bytes = GetProcessInplaceBudgetBytes();
   // Pack waves against real peak RSS, not raw bucket bytes -- see
-  // kProcessInplacePipelineMultiplier's comment.
-  budget_bytes = std::max<size_t>(1, budget_bytes / kProcessInplacePipelineMultiplier);
+  // kProcessInplacePipelineMultiplier's comment.  The caller's number is kept
+  // for the CHECK below: reporting only the post-divide figure reads as though
+  // the budget were ignored.
+  const size_t requested_bytes = budget_bytes;
+  budget_bytes =
+      std::max<size_t>(1, budget_bytes / kProcessInplacePipelineMultiplier);
 
   std::vector<size_t> nb(seqs.size(), 0);
   for (size_t i = 0; i < seqs.size(); i++)
@@ -412,8 +420,12 @@ void process_inplace_budgeted(std::vector<chunk_seq>& seqs, Processor processor,
     CHECK(nb[lo] <= budget_bytes)
         << "process_inplace_budgeted: sequence " << lo << " alone is " << nb[lo]
         << " bytes, exceeding the " << budget_bytes
-        << "-byte budget (override via PROCESS_INPLACE_BUDGET_BYTES, or "
-           "presize buckets smaller upstream)";
+        << "-byte effective wave budget (" << requested_bytes
+        << " requested / " << kProcessInplacePipelineMultiplier
+        << "x pipeline peak-RSS multiplier) -- raise "
+           "PROCESS_INPLACE_BUDGET_BYTES to at least "
+        << kProcessInplacePipelineMultiplier * nb[lo]
+        << ", or presize buckets smaller upstream";
 
     std::vector<chunk_seq> wave(std::make_move_iterator(seqs.begin() + lo),
                                 std::make_move_iterator(seqs.begin() + hi));

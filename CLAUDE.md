@@ -549,7 +549,14 @@ each sequence's own chunks, driven by an arbitrary `Processor` lambda) /
 wave-batched, keeping the in-place, original-layout write-back — so the caller
 doesn't have to pre-size every
 sequence to fit DRAM the way `count_sort`'s bucket count already does for
-`sort_inplace` and `Permutation::Run`).  The `ChunkOperation`
+`sort_inplace` and `Permutation::Run`).  Its budget
+(`PROCESS_INPLACE_BUDGET_BYTES`, else available RAM / 4) is a **peak-RSS
+ceiling**, not a wave size: `process_inplace` pipelines three stages per worker,
+so `process_inplace_budgeted` divides the budget by
+`kProcessInplacePipelineMultiplier` (3) before packing waves.  Set the env var to
+~3x the largest bucket, not 1x — a budget below `3 * largest_bucket` trips the
+own-bucket-too-big `CHECK` even though the bucket looks like it fits.  The
+`ChunkOperation`
 enum (`Sort`/`Shuffle`) + `apply<Op>(seqs, ...)` is the named-operation
 front door on top of `process_inplace_budgeted`, for callers who'd rather
 select a named operation than hand-write a raw `Processor` lambda.  Supporting

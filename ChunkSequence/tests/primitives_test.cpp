@@ -2676,15 +2676,29 @@ int run(int argc, char* argv[]) {
       (argc > 1) ? std::stoull(argv[1]) : 2'000'000;  // ~16MB/bucket (uint64_t)
   const size_t bucket_bytes = elems_per_bucket * sizeof(uint64_t);
 
-  // A budget that fits exactly one bucket comfortably but not two -- forces
-  // more than one wave across the 6 buckets built below, without ever
-  // tripping process_inplace_budgeted's own-bucket-too-big CHECK (each
-  // bucket alone is well under this budget).
-  const size_t small_budget = bucket_bytes + bucket_bytes / 2;  // 1.5 buckets
+  // A budget whose EFFECTIVE wave size fits exactly one bucket comfortably but
+  // not two -- forces more than one wave across the 6 buckets built below,
+  // without ever tripping process_inplace_budgeted's own-bucket-too-big CHECK
+  // (each bucket alone is well under the effective budget).
+  //
+  // PROCESS_INPLACE_BUDGET_BYTES is a *peak RSS* ceiling, not a wave size:
+  // process_inplace_budgeted divides it by kProcessInplacePipelineMultiplier
+  // (process_inplace runs a 3-deep previous/current/next stage pipeline, so a
+  // wave peaks at ~3x its nominal bytes) before packing waves.  So a budget
+  // meant to hold N buckets must be N * multiplier bucket-bytes.  Scaling by
+  // the library constant rather than a literal 3 keeps the two from drifting
+  // apart -- they already did once: the multiplier landed after this case was
+  // written, which made the un-scaled 1.5-bucket budget resolve to HALF a
+  // bucket and abort on the very CHECK the comment above promises to avoid.
+  const size_t small_budget = plaid::kProcessInplacePipelineMultiplier *
+                              (bucket_bytes + bucket_bytes / 2);
+  const size_t effective_budget =
+      small_budget / plaid::kProcessInplacePipelineMultiplier;  // 1.5 buckets
 
   std::cout << "elems_per_bucket=" << elems_per_bucket
             << " bucket_bytes=" << bucket_bytes
-            << " small_budget=" << small_budget << "\n";
+            << " small_budget=" << small_budget
+            << " (effective " << effective_budget << ")\n";
 
   bool pass = true;
 
