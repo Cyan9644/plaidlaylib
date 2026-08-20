@@ -116,12 +116,33 @@ def phys_bytes():
     return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
 
 
+def avail_bytes():
+    """Approximate utils/file_utils.h's AvailablePhysicalMemoryBytes(): the
+    kernel's own free+reclaimable estimate (/proc/meminfo's MemAvailable),
+    not raw installed RAM -- an example's own C++ RAM gate uses the real
+    thing (and re-reads it at run time), so predicting off total RAM here can
+    target a size the C++ gate would itself reject (or, worse, accept with no
+    real headroom behind it).  Falls back to phys_bytes() if unreadable (e.g.
+    non-Linux), same fallback the C++ helper uses.  Doesn't chase the C++
+    side's cgroup-headroom min -- the existing SAFETY margin and shrink-retry
+    loop already absorb estimation slop of this size.
+    """
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return phys_bytes()
+
+
 def get_budget(budget_base, env_var="EXAMPLE_INMEM_BUDGET_BYTES"):
     override = os.environ.get(env_var)
     if override:
         return int(override)
-    phys = phys_bytes()
-    return phys if budget_base == "phys" else phys // 2
+    base = avail_bytes() if budget_base.startswith("avail") else phys_bytes()
+    return base // 2 if budget_base.endswith("/2") else base
 
 
 def predict_n(entry, scale):

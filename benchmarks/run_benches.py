@@ -173,9 +173,12 @@ EXAMPLES = [
               "throughput_gb_s"],
      "time_col": "select_s", "inmem_col": "inmem_select_s",
      "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys", "budget_mult": 20,  # 16 is parlaylib's own estimate;
-     # padded for real-world overhead (fragmentation, page cache pressure from
-     # the on-disk input) observed to push actual peak RSS past the 16n cliff
+     "budget_base": "avail", "budget_mult": 16,  # matches kth_smallest.cpp's
+     # own gate exactly (AvailablePhysicalMemoryBytes()/16) -- budget_base
+     # used to be "phys" (raw installed RAM) with budget_mult=20, which both
+     # overstated available headroom (total vs. actually-free/reclaimable)
+     # and under-divided it, together targeting ~12x more than the C++ gate
+     # would allow and reliably OOMing before the in-mem baseline even ran
      "xlabel": "input size",
      "title": "kth-smallest selection: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["kth_in*", "next_*"]},
@@ -242,7 +245,12 @@ EXAMPLES = [
               "count", "throughput_gb_s"],
      "time_col": "total_s", "inmem_col": "inmem_s",
      "elem_bytes": 16, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 16,  # matches fft.cpp's N*sizeof(cd)<=budget
+     "budget_base": "avail/2", "budget_mult": 80,  # matches fft.cpp's
+     # N*sizeof(cd)*5<=AvailablePhysicalMemoryBytes()/2 -- do_baseline/
+     # do_verify keep four N-sized buffers live at once (x, Xmem, Xref, and
+     # the stage-1 result pulled back into DRAM), ~4.5x transiently, so the
+     # gate (and this mirror of it) budget for 5x one N*sizeof(cd) buffer,
+     # not 1x
      "xlabel": "input size",
      "title": "FFT (transpose-free): out-of-core (plaid) vs in-mem four-step",
      "data_globs": ["fft_in*", "fft_s1*"]},
@@ -279,7 +287,7 @@ EXAMPLES = [
               "inmem_s", "count", "throughput_gb_s"],
      "time_col": "total_s", "inmem_col": "inmem_s",
      "elem_bytes": 16, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 16,  # matches fft.cpp's N*sizeof(cd)<=budget
+     "budget_base": "avail/2", "budget_mult": 80,  # same gate/fix as fftExample
      "xlabel": "input size",
      "title": "FFT (explicit transpose): out-of-core (plaid) vs in-mem four-step",
      "data_globs": ["fft_in*", "fft_s1*", "fft_t*", "fft_t2*"]},
@@ -413,7 +421,8 @@ EXAMPLES = [
                        "random_shuffle_method (out-of-core)"),
      "extra_series": [("perm_s", "Permutation (out-of-core)", "^-")],
      "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys", "budget_mult": 32,
+     "budget_base": "avail", "budget_mult": 32,  # matches primitive_demos.cpp's
+     # random_shuffle demo now budgeting off AvailablePhysicalMemoryBytes()
      "xlabel": "input size",
      "title": "random shuffle: two out-of-core methods vs in-mem parlaylib",
      "data_globs": ["rs_in*", "rs_bucket_*", "rs_out_*", "rs_base_*", "perm*"]},

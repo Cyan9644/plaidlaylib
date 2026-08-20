@@ -93,12 +93,20 @@ int main(int argc, char* argv[]) {
   const size_t N = d.N, A = d.A, B = d.B;
   CHECK(N >= (size_t(1) << 16)) << "n must be at least 2^16";
 
-  const size_t phys =
-      (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
-  size_t budget = phys / 2;
+  // Budget off *available* memory (see AvailablePhysicalMemoryBytes's own
+  // comment), not raw installed RAM -- same fix already applied in
+  // kth_smallest.cpp and sort.h's GetProcessInplaceBudgetBytes.  And test
+  // against the REAL simultaneous peak, not one N*sizeof(cd) buffer: when
+  // do_baseline/do_verify run below, `x`, `Xmem`, `Xref` (complex_fft's
+  // result) and `out` (the whole stage-1 result pulled back into DRAM) are
+  // all live at once -- four N-sized buffers, ~4.5x transiently while
+  // complex_fft's internal workspace overlaps `x`/`Xmem` -- so a bare
+  // N*sizeof(cd)<=budget check let this run at ~4x more than DRAM could
+  // actually hold and OOM'd.
+  size_t budget = AvailablePhysicalMemoryBytes() / 2;
   if (const char* e = getenv("EXAMPLE_INMEM_BUDGET_BYTES"))
     budget = std::stoull(e);
-  const bool inmem_ok = N * sizeof(cd) <= budget;
+  const bool inmem_ok = N * sizeof(cd) * 5 <= budget;
 
   // The in-mem parlaylib complex_fft plays two roles once do_baseline is true:
   //   * baseline TIMING (inmem_s) -- what the `make bench-examples` comparison

@@ -1755,9 +1755,9 @@ int run(int argc, char* argv[]) {
   // out-of-core outputs read back (16n) — call it ~32n, as in
   // external_samplesort_vs_peter.  Past the budget the out-of-core shuffles
   // still run and are timed; only the baseline and the checks are skipped.
-  const size_t phys =
-      (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
-  size_t budget = phys;
+  // Budget off *available* memory, not raw installed RAM -- same fix as
+  // kth_smallest.cpp / fft.cpp / sort.h's GetProcessInplaceBudgetBytes.
+  size_t budget = AvailablePhysicalMemoryBytes();
   if (const char* e = getenv("EXAMPLE_INMEM_BUDGET_BYTES"))
     budget = std::stoull(e);
   const bool check_ok = n <= budget / 32;
@@ -1794,13 +1794,13 @@ int run(int argc, char* argv[]) {
   std::cout << " done   " << std::setprecision(4) << shuffle_s << "s   "
             << std::setprecision(2) << shuffle_gb_s << " GB/s (input read)\n";
 
-  // Snapshot its output (under budget), then clear every file it left so the
-  // next method is timed on drives holding only the shared input.
-  parlay::sequence<uint64_t> ours;
-  if (check_ok) ours = plaid::materialize<uint64_t>(shuffled);
-  remove_prefixes(kMethodPrefixes);
-  std::cout
-      << "random_shuffle_method's files cleared before the next method runs\n";
+  // Leave its output on disk (rather than snapshotting a full n-element copy
+  // into DRAM here) and quiesce before starting Permutation::Permute --
+  // Permutation's own bucket budgeting re-reads AvailablePhysicalMemoryBytes()
+  // live, so it needs the same real headroom random_shuffle_method itself ran
+  // with, not that headroom minus an already-resident ~8n-byte `ours`. Trade-
+  // off: shuffled's files also sit on the drives during Permutation's timed
+  // phase now, instead of being cleared first.
   quiesce_drives();
 
   // ── 2. Permutation::Permute (low-level reader/writer, in-place buckets) ──
@@ -1814,8 +1814,16 @@ int run(int argc, char* argv[]) {
   std::cout << " done   " << std::setprecision(4) << perm_s << "s   "
             << std::setprecision(2) << perm_gb_s << " GB/s (input read)\n";
 
-  parlay::sequence<uint64_t> theirs;
-  if (check_ok) theirs = plaid::materialize<uint64_t>(permuted);
+  // Snapshot both out-of-core outputs now, back-to-back, then clear both
+  // methods' files -- deferred until after Permutation returns so neither
+  // materialization is resident in DRAM while the other method still needs
+  // its own headroom.
+  parlay::sequence<uint64_t> ours, theirs;
+  if (check_ok) {
+    ours = plaid::materialize<uint64_t>(shuffled);
+    theirs = plaid::materialize<uint64_t>(permuted);
+  }
+  remove_prefixes(kMethodPrefixes);
   remove_prefixes(kPermPrefixes);
   quiesce_drives();
 

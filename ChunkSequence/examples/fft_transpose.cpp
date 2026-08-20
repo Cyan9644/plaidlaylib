@@ -95,12 +95,14 @@ int main(int argc, char* argv[]) {
       << "transpose variant requires B <= EPC (N <= 2^36); "
          "use fftExample for larger N";
 
-  const size_t phys =
-      (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
-  size_t budget = phys / 2;
+  // Same fix as fftExample: budget off *available* memory, and test the real
+  // simultaneous peak (x, Xmem, Xref, out all live at once under
+  // do_baseline/do_verify -- see fft.cpp's fuller comment), not one
+  // N*sizeof(cd) buffer.
+  size_t budget = AvailablePhysicalMemoryBytes() / 2;
   if (const char* e = getenv("EXAMPLE_INMEM_BUDGET_BYTES"))
     budget = std::stoull(e);
-  const bool inmem_ok = N * sizeof(cd) <= budget;
+  const bool inmem_ok = N * sizeof(cd) * 5 <= budget;
   const bool do_baseline = inmem_ok && !trace_enabled();
   const bool do_verify = do_baseline;
 
