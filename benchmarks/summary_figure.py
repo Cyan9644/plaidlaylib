@@ -60,6 +60,18 @@ SAFETY = 0.97           # margin below the predicted cliff (RSS accounting is a 
 MAX_ATTEMPTS = 3
 SHRINK = 0.85            # per-retry shrink factor when a prediction overshoots
 
+# Per-entry OOM fallback: if the DRAM-cliff predictor's normal shrink-retry
+# loop exhausts MAX_ATTEMPTS without ever landing a point, retry once more at
+# this fixed byte size before giving up on the entry entirely.  kth_smallest's
+# recursive out-of-core path has been observed to OOM repeatedly under the
+# predictor's own estimate; 23232774144 bytes (n=2904031232 at its 8-byte
+# elements, chunk-grid rounded by rb.size_to_n) is a size confirmed to run
+# cleanly, so it's registered here as that entry's fallback.  Add more
+# entries as other predictors prove unreliable on a given box.
+OOM_FALLBACK_SIZE_BYTES = {
+    "kth_smallest": 23232774144,
+}
+
 # (display_label, EXAMPLES registry name) pairs for the 21 bars: 12 primitives
 # + 9 examples, "sort"/"samplesort" collapsed to the single samplesort entry
 # and "bellman_ford" mapping to the bellman_ford_sparse registry entry (the
@@ -191,8 +203,10 @@ def run_summary(bellman_ford_n, extra_ssd_args, clear_glob, clear_enabled, warni
     """Run every SUMMARY_ENTRIES point once; return a list of result rows.
 
     Each row: {label, name, n, time_s, inmem_time_s, ratio}. An entry whose
-    baseline never fits within MAX_ATTEMPTS retries is omitted (and warned
-    about), not fabricated.
+    baseline never fits within MAX_ATTEMPTS retries falls back, if it's
+    registered in OOM_FALLBACK_SIZE_BYTES, to one more attempt at that fixed
+    byte size; only after that also fails (or for entries with no fallback
+    registered) is it omitted (and warned about), not fabricated.
 
     n_override, if given, replaces the per-entry DRAM-cliff prediction with
     one fixed n for every entry and disables the shrink-retry loop (one
@@ -256,6 +270,28 @@ def run_summary(bellman_ford_n, extra_ssd_args, clear_glob, clear_enabled, warni
             got_row = row
             got_row["n"] = str(n)
             break
+
+        if got_row is None and n_override is None and name in OOM_FALLBACK_SIZE_BYTES:
+            fallback_n = rb.size_to_n(entry, OOM_FALLBACK_SIZE_BYTES[name])
+            print(f"  predictor exhausted; OOM fallback attempt: n={fallback_n} "
+                  f"(fixed {OOM_FALLBACK_SIZE_BYTES[name]} bytes)", flush=True)
+            fields, problem = run_once(entry, fallback_n, [], extra_ssd_args)
+            if problem:
+                w = f"summary {label} ({name}) OOM fallback at n={fallback_n}: {problem}"
+                print(f"  !!! {w}", flush=True)
+                warnings.append(w)
+                rb.clear_bench_data(clear_glob, clear_enabled)
+            else:
+                row = dict(zip(entry["cols"], fields))
+                rb.clear_bench_data(clear_glob, clear_enabled)
+                if not row.get(inmem_col, "").strip():
+                    w = (f"summary {label} ({name}): in-mem baseline also skipped at "
+                         f"OOM fallback n={fallback_n}")
+                    print(f"  !!! {w}", flush=True)
+                    warnings.append(w)
+                else:
+                    got_row = row
+                    got_row["n"] = str(fallback_n)
 
         if got_row is None:
             w = f"summary {label} ({name}): gave up after {max_attempts} attempt(s), no bar"
