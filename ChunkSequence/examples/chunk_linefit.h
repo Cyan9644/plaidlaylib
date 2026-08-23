@@ -22,11 +22,7 @@ auto add_points = parlay::binary_op(f, point(0, 0));
 // explain
 auto linefit(const chunk_seq& x, const chunk_seq& y) {
   // this function is intended to fit a set of points to a line
-  size_t n = 0;
-  for (size_t r = 0; r < x.chunks.size(); r++) {
-    n += x.chunks[r].used;
-  }
-  n /= sizeof(double);
+  size_t n = plaid::get_used_bytes(x) / sizeof(double);
   // find number of elements (point pairs). This should apply for both sequences
   // because they're of the same underlying type and each x must have a y
 

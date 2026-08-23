@@ -331,9 +331,11 @@ def plot_summary(rows, path):
     labels = [r["label"] for r in rows]
     ratios = [float(r["ratio"]) for r in rows]
     x = np.arange(len(labels))
-    width = 0.38
+    width = 0.46  # wide relative to the 1.0 group spacing -> tight gap between bar groups
 
-    fig, ax = plt.subplots(figsize=(max(10, 0.55 * len(labels)), 6.5),
+    # Sized for a LaTeX double-column figure: fixed width near a typical
+    # two-column \textwidth, short enough not to dominate the page.
+    fig, ax = plt.subplots(figsize=(max(7.0, 0.32 * len(labels)), 2.5),
                            constrained_layout=True)
     ax.bar(x - width / 2, [1.0] * len(labels), width,
           label="ParlayLib DRAM", color=plot_style.PALETTE["green"])
@@ -344,8 +346,8 @@ def plot_summary(rows, path):
 
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=45, ha="right")
+    ax.set_xlim(x[0] - 0.7, x[-1] + 0.7)
     ax.set_ylabel("Relative Performance")
-    ax.set_title("plaid primitives/examples vs parlaylib")
     ax.grid(True, axis="y")
     ax.legend()
 

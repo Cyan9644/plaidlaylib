@@ -503,10 +503,9 @@ struct chunk_seq {
       auto [it, inserted] = fd_cache.emplace(c->filename, -1);
       if (inserted) {
         it->second = open(c->filename.c_str(), O_DIRECT | O_RDONLY);
-        CHECK(it->second >= 0)
-            << "consolidate: open(" << c->filename
-            << ") failed: " << std::strerror(errno)
-            << "; soft RLIMIT_NOFILE=" << SoftFdLimit();
+        CHECK(it->second >= 0) << "consolidate: open(" << c->filename
+                               << ") failed: " << std::strerror(errno)
+                               << "; soft RLIMIT_NOFILE=" << SoftFdLimit();
       }
       const ssize_t got =
           pread(it->second, buf, AlignUp(c->used), (off_t)c->begin_addr);
@@ -1764,6 +1763,14 @@ class ChunkEmitter {
   UnorderedFileWriter<R>& writer_;
   size_t num_drives_;
 };
+
+size_t get_used_bytes(const chunk_seq& seq) {
+  size_t n = 0;
+  for (size_t j = 0; j < seq.chunks.size(); j++) {
+    n += seq.chunks[j].used;
+  }
+  return n;
+}
 
 /**
  * Streaming transform: read every chunk of `seq`, hand each to `body`, write
