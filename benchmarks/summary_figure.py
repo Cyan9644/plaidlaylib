@@ -334,25 +334,47 @@ def plot_summary(rows, path):
     width = 0.46  # wide relative to the 1.0 group spacing -> tight gap between bar groups
 
     # Sized for a LaTeX double-column figure: fixed width near a typical
-    # two-column \textwidth, short enough not to dominate the page.
-    fig, ax = plt.subplots(figsize=(max(7.0, 0.32 * len(labels)), 2.5),
-                           constrained_layout=True)
-    ax.bar(x - width / 2, [1.0] * len(labels), width,
-          label="ParlayLib DRAM", color=plot_style.PALETTE["green"])
-    ax.bar(x + width / 2, ratios, width,
-          label="PLaID external", color=plot_style.PALETTE["blue"])
-    ax.axhline(1.0, color=plot_style.PALETTE["red"], linestyle="--",
-              linewidth=1.0, zorder=0)
+    # two-column \textwidth, short enough not to dominate the page. This
+    # figure is much shorter than plot_style's other consumers are tuned
+    # for (they run ~5.5-6.5in tall), so left at plot_style's absolute
+    # point sizes the text would dwarf a 2.5in-tall plot area. \includegraphics
+    # rescales the whole PNG to a target width in the final document, so what
+    # actually matters for legibility there is font-size-relative-to-width,
+    # not the raw pt numbers -- scale every text/line rcParam down by how much
+    # narrower this figure is than the old (pre-compaction) design so that
+    # ratio, and hence the printed appearance, is preserved.
+    fig_width = max(7.0, 0.32 * len(labels))
+    old_fig_width = max(10, 0.55 * len(labels))
+    text_scale = fig_width / old_fig_width
+    base_rc = matplotlib.rcParams
+    scaled_rc = {
+        "font.size": base_rc["font.size"] * text_scale,
+        "axes.labelsize": base_rc["axes.labelsize"] * text_scale,
+        "xtick.labelsize": base_rc["xtick.labelsize"] * text_scale,
+        "ytick.labelsize": base_rc["ytick.labelsize"] * text_scale,
+        "legend.fontsize": base_rc["legend.fontsize"] * text_scale,
+        "axes.linewidth": base_rc["axes.linewidth"] * text_scale,
+        "grid.linewidth": base_rc["grid.linewidth"] * text_scale,
+        "lines.linewidth": base_rc["lines.linewidth"] * text_scale,
+    }
+    with matplotlib.rc_context(scaled_rc):
+        fig, ax = plt.subplots(figsize=(fig_width, 2.5), constrained_layout=True)
+        ax.bar(x - width / 2, [1.0] * len(labels), width,
+              label="ParlayLib DRAM", color=plot_style.PALETTE["green"])
+        ax.bar(x + width / 2, ratios, width,
+              label="PLAID external", color=plot_style.PALETTE["blue"])
+        ax.axhline(1.0, color=plot_style.PALETTE["red"], linestyle="--",
+                  linewidth=scaled_rc["lines.linewidth"] * 0.5, zorder=0)
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=45, ha="right")
-    ax.set_xlim(x[0] - 0.7, x[-1] + 0.7)
-    ax.set_ylabel("Relative Performance")
-    ax.grid(True, axis="y")
-    ax.legend()
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=45, ha="right")
+        ax.set_xlim(x[0] - 0.7, x[-1] + 0.7)
+        ax.set_ylabel("Relative Performance")
+        ax.grid(True, axis="y")
+        ax.legend()
 
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
+        fig.savefig(path, dpi=300)
+        plt.close(fig)
     print(f"  wrote {path}", flush=True)
 
 
