@@ -20,6 +20,10 @@
 // invariant: chunks[i].index == i; every primitive returning a chunk_seq
 // preserves it so callers can index by position.
 
+
+
+
+
 #ifndef CHUNK_SEQ_H
 #define CHUNK_SEQ_H
 
@@ -451,13 +455,15 @@ class UnorderedFileWriter {
   }
 };
 
+
+
+
 // ============================================================================
 // chunk / chunk_seq -- the data model
 //
 // (was ChunkSequence/Primitives/chunk_seq.h)
 // ============================================================================
 
-// CHUNK_SIZE lives in configs.h (override with -DCHUNK_SIZE_BYTES=<n>).
 constexpr size_t ELEMS_PER_CHUNK = CHUNK_SIZE / sizeof(uint64_t);
 
 struct chunk {
@@ -473,30 +479,34 @@ struct chunk_seq {
   // this vector is ordered by index
   std::vector<chunk> chunks;
 
-  // Read all chunks in index order and write them contiguously to output_path.
-  // Intended for local-filesystem output; reads from SSDs use O_DIRECT but the
-  // output file is opened with ordinary (buffered) I/O so no alignment is
-  // needed on the write side.
+
+  // this is mostly internal but it's helpful to be able to reorder
+  static void sort_by_indices(std::vector<const chunk*>& seq) {
+    std::sort(seq.begin(), seq.end(),
+              [](const chunk* a, const chunk* b) { return a->index < b->index; });
+  }
+  
+  //consdolidate is intended to read all chunks in their index order and write them back to a single file.
+  //Chunks may be out of order in the sequence, so the first thing to do is sort them by their logical index.
+  //Then, pread each chunk and write to the desired file with buffered, unaligned I/O.
+
   void consolidate(const std::string& output_path) const {
     int out_fd = open(output_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    // Fatal: every write below would go to fd -1 and the caller would read
-    // back whatever happened to be at output_path already (a stale file from
-    // an earlier run), which is worse than no output at all.
+
     CHECK(out_fd >= 0) << "consolidate: open(" << output_path
                        << ") failed: " << std::strerror(errno);
 
-    // Process chunks in logical index order regardless of vector ordering.
+    //Reorder by logical order
     std::vector<const chunk*> ordered;
     ordered.reserve(chunks.size());
     for (const auto& c : chunks) ordered.push_back(&c);
-    std::sort(
-        ordered.begin(), ordered.end(),
-        [](const chunk* a, const chunk* b) { return a->index < b->index; });
+    sort_by_indices(ordered);
 
     void* buf = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
     CHECK(buf != nullptr) << "consolidate: buffer allocation failed";
 
-    // Cache fds so files referenced by multiple chunks are opened only once.
+    // We don't want to open fds for files that already have them, so we cache the file descriptors and reuse them if the same reference is used again
+    //this is extremely slow because it has no parallelism at all. I'm sure this could be sped up so we'll put this on the bucket list for later.
     std::map<std::string, int> fd_cache;
     for (const chunk* c : ordered) {
       if (c->used == 0) continue;
@@ -523,28 +533,13 @@ struct chunk_seq {
     for (auto& [name, fd] : fd_cache) close(fd);
     close(out_fd);
   }
-  const size_t headers_size() { return this->chunks.size(); }
+  const size_t headers_size() { return this->chunks.size();}
 
-  // Read the whole sequence into an in-DRAM std::vector<T> in index order.
-  // Convenience for tests / small out-of-core results; assumes the sequence
-  // fits in memory.  Chunks are read in parallel: element counts are prefix-
-  // summed to give each chunk a fixed output slice, so workers scatter into
-  // disjoint ranges of the result with no synchronization.
-  //
-  // Two things are hoisted OUT of the per-chunk parallel loop, because doing
-  // them per chunk serializes everything and starves the drives (observed as a
-  // ~5 GB/s, ~5% util, ~1.5% CPU phase — every worker blocked in the kernel):
-  //   * one O_DIRECT-aligned scratch buffer PER WORKER, reused across its
-  //     chunks, instead of aligned_alloc/free per chunk.  A 4 MB alloc goes
-  //     through mmap/munmap, which take the process-wide mmap_sem *write* lock,
-  //     so per-chunk alloc/free fully serializes the workers.
-  //   * one shared read-only fd PER DISTINCT FILE, opened once up front
-  //   (O_DIRECT
-  //     reads carry an explicit offset, so a single fd is safe to share),
-  //     instead of open()/close() per chunk.
+
+  //Not to be used for anything but testing, as you would never actually bring an SSD sequence into DRAM
   template <typename T = uint64_t>
   std::vector<T> to_vector() const {
-    // Process chunks in logical index order regardless of vector ordering.
+    // Process chunks in logical index order regardless of vector ordering
     // TODO: This is not necessary because we have the indexing invariant but
     // probably is fine anyways
     std::vector<const chunk*> ordered;
@@ -554,7 +549,7 @@ struct chunk_seq {
         ordered.begin(), ordered.end(),
         [](const chunk* a, const chunk* b) { return a->index < b->index; });
 
-    // Prefix-sum element counts to place each chunk at a fixed output offset.
+    // Prefix-sum element counts
     std::vector<size_t> offset(ordered.size() + 1, 0);
     for (size_t i = 0; i < ordered.size(); i++) {
       CHECK(ordered[i]->used % sizeof(T) == 0)
@@ -565,7 +560,7 @@ struct chunk_seq {
     std::vector<T> out(offset.back());
     if (ordered.empty()) return out;
 
-    // Open each distinct file once, shared read-only across all workers.
+    // Open each distinct file once, read-only = fine to share
     std::map<std::string, int> fds;
     for (const chunk* c : ordered)
       if (c->used && fds.find(c->filename) == fds.end()) {
@@ -574,7 +569,7 @@ struct chunk_seq {
         fds[c->filename] = fd;
       }
 
-    // One reusable aligned buffer per worker (lazily allocated on first use).
+    // One reusable aligned buffer per worker
     const size_t W = std::max<size_t>(1, parlay::num_workers());
     std::vector<T*> wbuf(W, nullptr);
 
@@ -588,8 +583,6 @@ struct chunk_seq {
             wbuf[w] = (T*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
             CHECK(wbuf[w] != nullptr) << "to_vector: buffer allocation failed";
           }
-          // O_DIRECT needs an aligned buffer and an aligned read length; the
-          // trailing padding beyond c->used is read but not copied out.
           SYSCALL(pread(fds.at(c->filename), wbuf[w], AlignUp(c->used),
                         (off_t)c->begin_addr));
           memcpy(out.data() + offset[i], wbuf[w], c->used);
@@ -603,16 +596,7 @@ struct chunk_seq {
     return out;
   }
 
-  // ── scalar element access ────────────────────────────────────────────────
-  // operator[] / push_back operate on a chunk_seq already materialized on
-  // disk, one element at a time.  They rely on the index-ordered invariant
-  // (chunks[k].index == k) so element i lives in chunks[i / ept] at byte
-  // offset begin_addr + (i % ept) * sizeof(T), where ept = CHUNK_SIZE /
-  // sizeof(T).
-
-  // Read the single element at logical index i.  Reads one O_DIRECT-aligned
-  // block (an 8-byte element never straddles a 4096 boundary since
-  // O_DIRECT_MULTIPLE is a multiple of sizeof(T)).
+  //In case you need to get a single value from the sequence, we support the [] operator. 
   template <typename T = uint64_t>
   T operator[](size_t i) const {
     static_assert(CHUNK_SIZE % sizeof(T) == 0,
@@ -640,9 +624,8 @@ struct chunk_seq {
     return value;
   }
 
-  // Append one element to the end of the sequence, updating both the on-disk
-  // data and the in-memory chunk_seq.  Requires a non-empty seq (there is no
-  // filename to derive a first chunk from otherwise).
+  //I don't think you'll really ever need to do this, but we also support adding to a sequence. 
+  //This is easy if there's an existing chunk that isn't full, but the cost is roughly the same either way.
   template <typename T = uint64_t>
   void push_back(T value) {
     static_assert(CHUNK_SIZE % sizeof(T) == 0,
@@ -651,9 +634,7 @@ struct chunk_seq {
 
     chunk& last = chunks.back();
     if (last.used < CHUNK_SIZE) {
-      // Fast path: the last chunk has room.  Read-modify-write the single
-      // aligned block holding the append position (the file was already
-      // allocated to the slot's full CHUNK_SIZE).
+      //the last chunk is not full, so we can directly write and modify it to accomodate the new value
       const size_t byte = last.begin_addr + last.used;
       const size_t block = AlignDown(byte);
 
@@ -669,10 +650,8 @@ struct chunk_seq {
       last.used += sizeof(T);
       return;
     }
-
-    // Last chunk is full: allocate a new chunk.  Reuse the drive file already
-    // present in the seq that holds the fewest chunks (balls-in-bins balance
-    // without needing a prefix or all SSDs), and place it at the next slot.
+    //the lsat chunk is full, so we need to add a new one. We prefer this to be the drive with the fewest current chunks, but notice that this could lead to 
+    //degraded performance if it devolves into round robin: user accesses chunk 1, 4, 7, 10, etc.
     std::map<std::string, size_t> counts;
     for (const chunk& c : chunks) counts[c.filename]++;
     const std::string* target = nullptr;
@@ -683,7 +662,7 @@ struct chunk_seq {
         target = &name;
       }
     const std::string filename = *target;
-    const size_t slot = best;  // dense per-file slot index
+    const size_t slot = best; 
     const size_t begin_addr = slot * CHUNK_SIZE;
 
     // Grow the file to cover the new slot (matches tabulate's allocation).
@@ -707,6 +686,9 @@ struct chunk_seq {
 
 namespace plaid {
 
+//I'm going to include some of the AI comments here because I think they give a good picture of what's going on under the hood,
+//but I don't think they're particularly useful for understanding the algorithm.
+
 /**
  * Build a chunk_seq by applying f to every index in [0, n).
  *
@@ -727,15 +709,13 @@ chunk_seq tabulate(size_t n, const std::string& result_prefix, F f,
   const size_t ept = CHUNK_SIZE / sizeof(T);
   const size_t num_chunks = (n + ept - 1) / ept;
   const size_t num_drives = GetSSDList().size();
-  // Number of io_uring writer threads (one ring each).  Defaults to one per
-  // drive; a smaller count is used by callers running many tabulates
-  // concurrently (e.g. sample_sort's per-bucket base cases) so the aggregate
-  // ring count stays bounded rather than num_callers * num_drives.
-  const size_t wthreads =
-      (io_threads == 0) ? num_drives
-                        : std::max<size_t>(1, std::min(io_threads, num_drives));
 
-  // Randomly assign each chunk to a drive for balanced SSD utilization.
+  //how many ring writer  threads shuld we get?
+  // at least 1 per drive in the case where there are no existing I/O threads, but if there are existing I/O threads, then that number if it's less than the # of drives.
+  //this is to prevent the number of threads increasing rapidly in the case of concurrent tabulates, e.g. for samplesort's base cases.
+  const size_t wthreads = (io_threads == 0) ? num_drives : std::max<size_t>(1, std::min(io_threads, num_drives));
+
+  //Semi-random hashing for sequence distribution across SSDs
   std::vector<size_t> drive_of(num_chunks);
   {
     std::mt19937_64 rng(std::random_device{}());
@@ -743,22 +723,17 @@ chunk_seq tabulate(size_t n, const std::string& result_prefix, F f,
     for (size_t i = 0; i < num_chunks; i++) drive_of[i] = dist(rng);
   }
 
-  // Group chunk indices by drive; insertion order gives each chunk its slot
-  // index (position) within that drive's file.
   std::vector<std::vector<size_t>> drive_chunks(num_drives);
   for (size_t i = 0; i < num_chunks; i++)
     drive_chunks[drive_of[i]].push_back(i);
 
-  // Precompute each chunk's slot so the parallel write loop can look it up
-  // without touching drive_chunks again (avoids false sharing on the inner
-  // vectors while many parlay workers are running).
   std::vector<size_t> slot_of(num_chunks);
   for (size_t d = 0; d < num_drives; d++)
     for (size_t s = 0; s < drive_chunks[d].size(); s++)
       slot_of[drive_chunks[d][s]] = s;
 
-  // Build filenames and pre-allocate each drive file to its exact final
-  // size so io_uring can write to arbitrary slot offsets immediately.
+  // Build filenames and pre-allocate each drive file to its final
+  // size so io_uring can write to arbitrary slot offsets
   std::vector<std::string> filenames(num_drives);
   parlay::parallel_for(
       0, num_drives,
@@ -774,10 +749,10 @@ chunk_seq tabulate(size_t n, const std::string& result_prefix, F f,
           SYSCALL(ftruncate(fd, (off_t)file_size));
         SYSCALL(close(fd));
       },
-      /*granularity=*/1);
+      1);
 
   // Build the output chunk descriptors (all metadata is known before any
-  // data is written).
+  // data is written)
   std::vector<chunk> chunks(num_chunks);
   for (size_t i = 0; i < num_chunks; i++) {
     const size_t start = i * ept;
@@ -786,8 +761,7 @@ chunk_seq tabulate(size_t n, const std::string& result_prefix, F f,
                  count * sizeof(T), i};
   }
 
-  // One io_uring writer thread per drive; queue_size limits in-flight
-  // buffers to 64 * 4 MB = 256 MB of DRAM at any moment.
+  // One io_uring writer thread per drive; in-flight DRAM is limited by the queue size to  64 * 4 MB = 256 MB at any one time
   UnorderedWriterConfig wcfg;
   wcfg.num_threads = wthreads;
   wcfg.io_uring_size = 32;
@@ -833,21 +807,8 @@ chunk_seq iota(size_t n) {
   return tabulate<uint64_t>(n, "iota", [](size_t i) { return (uint64_t)i; });
 }
 
-/**
- * Read a single local file into an out-of-core chunk_seq.  This is the inverse
- * of chunk_seq::consolidate(): consolidate() streams a chunk_seq's chunks in
- * index order into one contiguous file; from_file() slices one contiguous file
- * back into CHUNK_SIZE chunks spread balls-in-bins across the SSD drives.
- *
- * The input is treated as a flat array of T (its byte length must be a whole
- * number of elements).  The read side uses ordinary buffered I/O (no O_DIRECT):
- * like consolidate's output file it needs no alignment, and pread with an
- * explicit offset is safe to issue from many threads on one shared fd, so a
- * pool of generator threads reads strided chunk slices in parallel while the
- * io_uring writer pool (one ring per drive) lands them on the SSDs.  Peak DRAM
- * stays bounded by (num_gen_threads + queue_size) * CHUNK_SIZE regardless of
- * how large the input is, so the file may exceed DRAM.
- */
+//Takes a local files and creates a distributed chunk_seq
+//this method doesn't make a whole lot of sense practically unless files are striped or otherwise distributed across SSDs.
 template <typename T = uint64_t>
 chunk_seq from_file(const std::string& input_path,
                     const std::string& result_prefix = "chunkseq") {
@@ -958,16 +919,7 @@ chunk_seq from_file(const std::string& input_path,
   return {chunks};
 }
 
-/**
- * Convert an in-DRAM parlay::sequence (or any random-access range exposing
- * value_type, size() and operator[]) into an out-of-core chunk_seq, preserving
- * index order.  This is the inverse of materialize() / to_vector().
- *
- * Implemented on top of tabulate, so it reuses the same parallel io_uring
- * writer pipeline (one thread per drive, bounded in-flight DRAM).  The whole
- * input already lives in DRAM, so the per-element generator is a cheap indexed
- * read and the cost is dominated by the parallel SSD writes.
- */
+//simple method to create a chunk_seq from an in-memory seq using tabulate, which just returns sequence[i] at each point to create an identical sequence on disk.
 template <typename Range>
 chunk_seq to_chunk_seq(const Range& seq,
                        const std::string& result_prefix = "chunkseq",
@@ -978,20 +930,7 @@ chunk_seq to_chunk_seq(const Range& seq,
       io_threads);
 }
 
-/**
- * Sequential tabulate: the same output as tabulate(), built with blocking
- * O_DIRECT pwrites on the calling thread instead of the io_uring writer pool.
- *
- * Meant to be called from *inside* a parlay::parallel_for, where the caller
- * already supplies the parallelism (e.g. one call per bucket in
- * random_shuffle / sample_sort).  The eager tabulate would there spin up an
- * UnorderedFileWriter -- one io_uring ring per drive -- and a nested
- * parallel_for per call, so B concurrent calls mean B * num_drives rings
- * (RLIMIT_MEMLOCK pressure) and B nested parallel regions, all to write a
- * bucket small enough to fit in DRAM.  This version allocates one CHUNK_SIZE
- * bounce buffer, opens each destination drive file once, and writes its slots
- * back to back.
- */
+//this exists to be called in parallel
 template <typename T = uint64_t, typename F>
 chunk_seq sequential_tabulate(size_t n, const std::string& result_prefix, F f) {
   static_assert(CHUNK_SIZE % sizeof(T) == 0,
@@ -1047,12 +986,8 @@ chunk_seq sequential_tabulate(size_t n, const std::string& result_prefix, F f) {
   return {chunks};
 }
 
-/**
- * Convert an in-DRAM range to a chunk_seq without the io_uring writer pool: the
- * to_chunk_seq counterpart of sequential_tabulate, and the inverse of
- * sequential_materialize.  Use inside a parallel_for; use to_chunk_seq when the
- * call is the only thing running.
- */
+//used inside parallel pipelines
+//perhaps it would be better to just specify a # of threads allowed for the parallel version, but this is simple.
 template <typename Range>
 chunk_seq sequential_to_chunk_seq(
     const Range& seq, const std::string& result_prefix = "chunkseq") {
@@ -1073,16 +1008,10 @@ size_t size(const chunk_seq& seq) {
   return (seq.chunks.size() - 1) * ept + seq.chunks.back().used / sizeof(T);
 }
 
-// Materialize an index-ordered header list into a *fresh, independent* on-disk
-// chunk_seq.  Callers that build chunk headers by hand (e.g. cut) may hand us
-// headers that reference another sequence's files -- interior chunks shared by
-// reference, seam chunks in "<file>_cut" scratch files.  Rather than alias
-// those files, this copies every chunk's bytes into new files (named
-// result_prefix + drive_index) spread balls-in-bins across the drives and
-// packed at CHUNK_SIZE slots, so the returned sequence owns all its data and
-// outlives the input. The per-chunk `used` and `index` are preserved (the head
-// chunk may be partial, so this does NOT re-densify and does NOT verify the
-// every-chunk-but-last-full invariant).  Reads and writes are O_DIRECT.
+//This can be thought of as a tabulate between two chunk sequences, or a chunk sequence and a set of headers.
+// The per-chunk `used` and `index` are preserved. The head
+// chunk may be partial, so this doesn't densify or verify the
+// every-chunk-but-last-full invariant
 inline chunk_seq from_chunks(const parlay::sequence<chunk>& headers,
                              const std::string& result_prefix = "cut_out") {
   const size_t num_chunks = headers.size();
@@ -1122,7 +1051,6 @@ inline chunk_seq from_chunks(const parlay::sequence<chunk>& headers,
       },
       /*granularity=*/1);
 
-  // New descriptors: fresh file + slot offset, preserved `used` and `index`.
   std::vector<chunk> chunks(num_chunks);
   for (size_t i = 0; i < num_chunks; i++)
     chunks[i] = {filenames[drive_of[i]], slot_of[i] * CHUNK_SIZE,
@@ -1156,25 +1084,12 @@ inline chunk_seq from_chunks(const parlay::sequence<chunk>& headers,
 
 }  // namespace plaid
 
-// ============================================================================
-// ChunkSequenceReader<T> -- the standardized reader
-//
-// (was ChunkSequence/Primitives/chunk_seq_reader.h)
-// ============================================================================
 
-/**
- * Read a chunk_seq chunk-by-chunk using io_uring.
- *
- * Unlike UnorderedFileReader (which reads whole files), this reader submits
- * one io_uring read per chunk, reading exactly chunk.used bytes at
- * chunk.begin_addr within chunk.filename.  Chunks whose filename appears
- * multiple times share a cached file descriptor within each worker thread.
- *
- * Poll() returns (ptr, n_elements, chunk.index) tuples in completion order.
- * Callers must call allocator.Free(ptr) when done with a buffer.
- *
- * @tparam T Element type stored in each chunk.
- */
+//this is our standard chunk reader, based on the unordered file reader.
+//We submit one io_uring read per chunk, reading chunk.used bytes at chunk.begin_addr within chunk.filename.
+//if duplicate files appear, we use cached file descriptors rather than allocating new ones.
+//the Poll() logic is taken from the file reader and returns ptr, n_elements, chunk.index in completion order
+//allocator.Free(ptr) when done with a buffer
 template <typename T>
 class ChunkSequenceReader {
  public:
@@ -1182,16 +1097,12 @@ class ChunkSequenceReader {
   using BufferData = std::tuple<T*, size_t, size_t>;
 
   // Pool of CHUNK_SIZE buffers reused across reads.  The pool is a
-  // PROCESS-WIDE, per-element-type singleton (all Allocator instances of a
-  // given T share it), not per-reader: primitives like
-  // ChunkFilter/ChunkPartition and the deep quickhull recursion create many
+  // PROCESS-WIDE, per-element-type singleton rather than per-reader: primitives like
+  // ChunkFilter/ChunkPartition and the quickhull recursion create many
   // short-lived readers, and a per-reader pool would re-allocate (and fault in)
-  // 50*CHUNK_SIZE = 200 MB on every one of them. The shared pool grows to peak
-  // concurrent demand once and is then reused; its backing is intentionally
-  // never freed (process-lifetime, reclaimed at exit) so buffers still in
-  // flight in one reader are never pulled out from under it when another reader
-  // is destroyed.  Alloc/Free are the same lock-guarded free-list ops as
-  // before, just over the shared state.
+ //on all of them. Buffers still in
+  // flight in one reader are never dealloced when another reader
+  // is destroyed
   struct Allocator {
     static constexpr size_t BUFFER_SIZE = CHUNK_SIZE;
     static constexpr size_t INITIAL_COUNT = 50;
@@ -1218,9 +1129,7 @@ class ChunkSequenceReader {
       AllocateMore(INITIAL_COUNT);
     }
 
-    // No destructor: the shared backing outlives every reader and is reclaimed
-    // by the OS at process exit (see the class comment above).
-
+    // No destructor
     void AllocateMore(size_t n) {
       std::lock_guard<std::mutex> lg(alloc_lock());
       {
@@ -1269,12 +1178,10 @@ class ChunkSequenceReader {
   void PrepChunks(const chunk_seq& seq) { chunks = seq.chunks; }
 
   /**
-   * @param num_threads   Number of reader threads (each gets chunks
-   * round-robin).
+   * @param num_threads   Number of reader threads
    * @param queue_depth   io_uring queue depth per thread.
    * @param max_requests  Max in-flight reads per thread.
    * @param buf_queue_sz  Max entries in the output buffer queue
-   * (back-pressure).
    */
   void Start(size_t num_threads = 2, size_t queue_depth = 32,
              size_t max_requests = 16, size_t buf_queue_sz = 512) {
@@ -1282,11 +1189,6 @@ class ChunkSequenceReader {
     buffer_queue.SetSizeLimit(buf_queue_sz);
     active_threads = (int)num_threads;
 
-    // Open one shared read-only fd per distinct file, once.  io_uring reads
-    // pass an explicit offset (no shared file position), so a single fd is
-    // safe to share across all worker threads — and this keeps the open-fd
-    // count at O(distinct files) instead of O(num_threads * distinct files),
-    // which is what caused EMFILE under highly-parallel recursive sorts.
     for (const chunk& c : chunks) {
       if (shared_fds.find(c.filename) == shared_fds.end()) {
         int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
@@ -1304,10 +1206,10 @@ class ChunkSequenceReader {
     }
   }
 
-  /**
-   * Get the next completed chunk.  Blocks until one is available or the
-   * reader is exhausted.  Returns (nullptr, 0, 0) when done.
-   */
+
+   //Get the next chunk.  Blocks until one is available or the
+   //reader is out of chunks to deliver, returns (nullptr, 0, 0) when done
+
   BufferData Poll() {
     static BufferData nil{nullptr, 0, 0};
     return buffer_queue.Poll(nil).first;
@@ -1327,7 +1229,7 @@ class ChunkSequenceReader {
   std::vector<std::unique_ptr<std::thread>> worker_threads;
   SimpleQueue<BufferData> buffer_queue;
   // One read-only fd per distinct file, opened in Start(), shared across all
-  // workers, closed in the destructor.  Not mutated after Start().
+  // workers, closed in the destructor. 
   std::map<std::string, int> shared_fds;
 
   struct ReadRequest {
@@ -1342,8 +1244,7 @@ class ChunkSequenceReader {
     SYSCALL(
         InitIoUringWithRetry(queue_depth, &ring, IORING_SETUP_SINGLE_ISSUER));
 
-    // fds are opened once in Start() and shared read-only across workers;
-    // the map is not mutated after Start(), so lookups here need no lock.
+    // fds are opened once in Start() and shared
     auto get_fd = [&](const std::string& name) -> int {
       return self->shared_fds.at(name);
     };
@@ -1373,7 +1274,7 @@ class ChunkSequenceReader {
         io_uring_cqe_seen(&ring, cqe);
       }
 
-      // Submit new reads while we have capacity and pending chunks.
+      // Submit new reads while we have capacity and pending chunks
       bool submitted = false;
       while (!free_pool.empty() && !pending.empty() &&
              outstanding < max_requests) {
@@ -1402,7 +1303,7 @@ class ChunkSequenceReader {
       if (submitted) SYSCALL(io_uring_submit(&ring));
 
       // If the ring is full and there's nothing more to submit, wait
-      // for at least one completion before looping.
+      // for at least one completion before looping
       if (outstanding > 0 && (pending.empty() || free_pool.empty()) &&
           !submitted) {
         struct io_uring_cqe* cqe;
@@ -1427,39 +1328,17 @@ class ChunkSequenceReader {
   }
 };
 
-/**
- * Long-lived counterpart to ChunkSequenceReader<T>: opens fds and spawns
- * worker threads (each initializing its io_uring ring) ONCE, then replays
- * the SAME round-robin chunk list across many "rounds" instead of tearing
- * everything down after a single pass.
- *
- * Built for fixed-point-iteration callers (e.g. external_bellman_ford_fast,
- * ChunkSequence/examples/chunk_bellman_ford.h) that re-read an
- * unchanged chunk_seq many times: on WSL2, io_uring ring teardown frees its
- * RLIMIT_MEMLOCK charge asynchronously (see InitIoUringWithRetry in
- * utils/file_utils.h), so tearing down and rebuilding rings every round can
- * burn real wall-clock time retrying -ENOMEM. Keeping the rings (and worker
- * threads, and open fds) alive across rounds avoids that entirely.
- *
- * Does NOT support a different chunk list per round -- every StartRound()
- * replays the exact list fixed at Start(). A caller whose read plan changes
- * between calls must use ChunkSequenceReader instead. At most one round may
- * be in flight at a time (StartRound() must not be called again until the
- * previous round's TotalReads() completions have all been drained via
- * Poll()); callers driving this synchronously (one round fully finishes
- * before the next starts) satisfy this trivially.
- *
- * @tparam T Element type stored in each chunk.
- */
+
+//this is a reader specific to fixed-iteration-point callers that re-read the same chunks many times, e.g. bellman-ford.
+//the main difference is that it doesn't deallocate it worker threads, fds, etc. after a round because they can be reused on the next iteration.
+//StartRound() should not be called again until Poll() has processed all reads from the prior round
+//it is mostly a copy of the ChunkSequnceReader
 template <typename T>
 class PersistentChunkSequenceReader {
  public:
   using BufferData = typename ChunkSequenceReader<T>::BufferData;
 
-  // Same process-wide, per-T singleton pool as
-  // ChunkSequenceReader<T>::Allocator (see that class's comment) -- already
-  // persistent across reader instances, so no new persistence design is needed
-  // for buffers specifically.
+
   typename ChunkSequenceReader<T>::Allocator allocator;
 
   PersistentChunkSequenceReader() = default;
@@ -1469,12 +1348,6 @@ class PersistentChunkSequenceReader {
 
   ~PersistentChunkSequenceReader() { Shutdown(); }
 
-  /**
-   * Called ONCE. Opens one shared fd per distinct file, fixes each
-   * thread's round-robin chunk sub-list, and spawns num_threads persistent
-   * worker threads -- each inits its io_uring ring here, then blocks
-   * waiting for the first StartRound().
-   */
   void Start(const chunk_seq& seq, size_t num_threads = 10,
              size_t queue_depth = 32, size_t max_requests = 16,
              size_t buf_queue_sz = 128) {
@@ -1482,8 +1355,6 @@ class PersistentChunkSequenceReader {
     buffer_queue.SetSizeLimit(buf_queue_sz);
     total_reads = seq.chunks.size();
 
-    // Same fd-sharing scheme as ChunkSequenceReader::Start: one read-only
-    // fd per distinct file, shared read-only across all worker threads.
     for (const chunk& c : seq.chunks) {
       if (shared_fds.find(c.filename) == shared_fds.end()) {
         int fd = open(c.filename.c_str(), O_DIRECT | O_RDONLY);
@@ -1505,8 +1376,7 @@ class PersistentChunkSequenceReader {
   // list); callers poll exactly this many BufferData per round.
   size_t TotalReads() const { return total_reads; }
 
-  // Begin a new round: bump the round generation and wake every worker to
-  // replay its fixed chunk list. O(1), no I/O, no thread/ring churn.
+  // Begin a new round
   void StartRound() {
     {
       std::lock_guard<std::mutex> l(mu);
@@ -1515,19 +1385,14 @@ class PersistentChunkSequenceReader {
     cv.notify_all();
   }
 
-  /**
-   * Get the next completed chunk of the current round. Blocks until one is
-   * available or Shutdown() has been called. Returns (nullptr, 0, 0) once
-   * shut down.
-   */
+  
+   //Get the next completed chunk of the current round. Returns (nullptr, 0, 0) once shut down.
+   
   BufferData Poll() {
     static BufferData nil{nullptr, 0, 0};
     return buffer_queue.Poll(nil).first;
   }
 
-  // Joins all worker threads (each exits its wait loop, tears down its
-  // ring, and returns) and closes shared fds. Idempotent; also invoked by
-  // the destructor.
   void Shutdown() {
     {
       std::lock_guard<std::mutex> l(mu);
@@ -1548,18 +1413,12 @@ class PersistentChunkSequenceReader {
   bool shutting_down = false;
 
   std::vector<std::unique_ptr<std::thread>> worker_threads;
-  // Never Close()d/Reopen()d between rounds -- a round boundary is purely
-  // "the caller has drained TotalReads() completions", not a queue state
-  // transition. Only Shutdown() ever closes it (via thread exit, mirroring
-  // ChunkSequenceReader's active_threads-reaches-zero -> Close() pattern
-  // is unnecessary here since callers stop polling once they've drained
-  // TotalReads() themselves).
+ 
   SimpleQueue<BufferData> buffer_queue;
-  // One read-only fd per distinct file, opened once in Start(), shared
-  // across all workers and all rounds, closed once in Shutdown().
+
   std::map<std::string, int> shared_fds;
   size_t total_reads = 0;
-
+//Basically duplicates here
   struct ReadRequest {
     T* data;
     size_t chunk_index;
@@ -1573,9 +1432,6 @@ class PersistentChunkSequenceReader {
     SYSCALL(
         InitIoUringWithRetry(queue_depth, &ring, IORING_SETUP_SINGLE_ISSUER));
 
-    // fds are opened once in Start() and shared read-only across workers
-    // and rounds; the map is not mutated after Start(), so lookups here
-    // need no lock.
     auto get_fd = [&](const std::string& name) -> int {
       return self->shared_fds.at(name);
     };
@@ -1622,7 +1478,6 @@ class PersistentChunkSequenceReader {
           io_uring_cqe_seen(&ring, cqe);
         }
 
-        // Submit new reads while we have capacity and pending chunks.
         bool submitted = false;
         while (!free_pool.empty() && !pending.empty() &&
                outstanding < max_requests) {
@@ -1630,7 +1485,7 @@ class PersistentChunkSequenceReader {
           if (sqe == nullptr) break;
 
           const chunk c =
-              pending.front();  // copy before pop to avoid dangling ref
+              pending.front(); 
           pending.pop_front();
 
           auto* req = free_pool.back();
@@ -1639,7 +1494,7 @@ class PersistentChunkSequenceReader {
           req->chunk_index = c.index;
           req->used_bytes = c.used;
 
-          // O_DIRECT requires the read size to be page-aligned.
+          // O_DIRECT requires the read size to be page-aligned
           size_t read_size = AlignUp(c.used);
           io_uring_prep_read(sqe, get_fd(c.filename), req->data, read_size,
                              c.begin_addr);
@@ -1666,46 +1521,32 @@ class PersistentChunkSequenceReader {
           io_uring_cqe_seen(&ring, cqe);
         }
       }
-      // Round done; loop back to wait for the next StartRound().
+
     }
 
     io_uring_queue_exit(&ring);
     free(pool);
-    // Shared fds are closed once in Shutdown(), not per worker.
+
   }
 };
 
-// ============================================================================
-// The unified engine -- ChunkEmitter / ExternalTransform / RemoveWorker
-//
-// (was ChunkSequence/Primitives/external_engine.h)
-// ============================================================================
 
 namespace plaid {
 
-/**
- * The unified out-of-core transform engine shared by the eager streaming
- * primitives (ChunkMap, ChunkScan pass 2, …).
- *
- * Two building blocks live here:
- *   - ChunkEmitter<R>    : allocate output blocks and hand them to the writer,
- *                          recording a chunk descriptor for each.
- *   - ExternalTransform  : drive read -> body -> emit -> write for the
- *                          "one-or-more emit(s) per input chunk" family.
- *   - RemoveWorker     : drive read -> per-worker fold for the scalar family
- *                          (ChunkReduce, ChunkFindIf, ChunkScan pass 1).
- *
- * All three route through the single standardized reader (ChunkSequenceReader)
- * and writer (UnorderedFileWriter), so a chunk_seq produced by the engine is
- * indistinguishable from one produced by tabulate/dense-pack.
- *
- * Ownership rule for ExternalTransform: the engine owns each input buffer and
- * frees it back to the reader pool after `body` returns.  A body therefore
- * copies whatever it needs into freshly emitted output blocks (emit.alloc());
- * it must not retain or free the input pointer.  (This drops the old in-place
- * T==R buffer reuse; the extra in-DRAM copy is negligible next to the SSD
- * read+write it accompanies.)
- */
+
+ //The unified transform engine shared for eager streaming primitives (ChunkMap, ChunkScan pass 2, &c).
+
+//ChunkEmitter<R>    : allocate output blocks and hand them to the writer,
+     //                    recording a chunk descriptor for each.
+//ExternalTransform  : drive read -> body -> emit -> write for the
+    //                   "one-or-more emit(s) per input chunk" family.
+//RemoveWorker     : drive read -> per-worker fold for the scalar family
+   //                    (ChunkReduce, ChunkFindIf, ChunkScan pass 1).
+ /* */
+
+ //this transform basically exists because early in the development, I recognized that we were repeating logic for many of these streaming-pass
+ //primitives like filter, scan, etc. This just allows us to specify the operations to be performed in a streaming manner more easily.
+ //the underlying logic is still handled by a chunk reader, so they don't add any new functionality
 template <typename R>
 class ChunkEmitter {
  public:
@@ -1724,7 +1565,7 @@ class ChunkEmitter {
   }
 
   // Number of R elements that fit in one output block.
-  size_t out_cap() const { return CHUNK_SIZE / sizeof(R); }
+  size_t out_cap() const {return CHUNK_SIZE / sizeof(R);}
 
   // Allocate a fresh, O_DIRECT-aligned CHUNK_SIZE output block.
   R* alloc() const {
@@ -1732,14 +1573,11 @@ class ChunkEmitter {
     CHECK(p != nullptr) << "ChunkEmitter: allocation failed";
     return p;
   }
-
-  /**
-   * Emit one output block holding `count` valid R elements.  The caller must
-   * have zero-padded the tail out to CHUNK_SIZE.  `logical_index` fixes this
-   * block's position in the output order; ExternalTransform sorts by it and
-   * (when compacting) renumbers to a dense 0..k-1 to restore the
-   * index-ordered invariant.  Drive placement is deterministic balls-in-bins
-   * via parlay::hash64 of the emission slot.
+  /*
+    Emit one output block holding `count` valid R elements.  The caller must
+   have zero-padded the tail out to CHUNK_SIZE. ExternalTransform sorts by it and
+   (when compacting) renumbers to a dense 0..k-1 to restore the
+   index-ordered invariant. 
    */
   void emit(std::shared_ptr<R> buf, size_t count, size_t logical_index) const {
     const size_t slot = out_count_.fetch_add(1);
@@ -1750,7 +1588,6 @@ class ChunkEmitter {
     writer_.Push(std::move(buf), CHUNK_SIZE / sizeof(R), d, base);
   }
 
-  // Convenience overload: adopt a raw block from alloc() (freed with free()).
   void emit(R* buf, size_t count, size_t logical_index) const {
     emit(std::shared_ptr<R>(buf, free), count, logical_index);
   }
@@ -1772,22 +1609,11 @@ size_t get_used_bytes(const chunk_seq& seq) {
   return n;
 }
 
-/**
- * Streaming transform: read every chunk of `seq`, hand each to `body`, write
- * whatever `body` emits, and return the resulting chunk_seq.
- *
- * body signature:
- *   void body(const T* in, size_t n, size_t index, const ChunkEmitter<R>& emit)
- * where `in`/`n` are the input chunk's data and element count and `index` is
- * its position in the input.  A body may emit any number of output blocks (up
- * to `max_out_per_input`); use `index * max_out_per_input + sub` as the
- * logical index of the sub-th emitted block to keep global order.
- *
- * @param max_out_per_input  Upper bound on emits per input chunk (sizes the
- *                           output descriptor table).
- * @param compact  Renumber output chunk indices to a dense 0..k-1 after
- *                  sorting (restores out.chunks[i].index == i).
- */
+
+//param max_out_per_input  Upper bound on emits per input chunk (sizes the output descriptor table).
+//param compact  Renumber output chunk indices to a dense 0..k-1 after
+// sorting (restores out.chunks[i].index == i).
+ 
 template <typename T, typename R = T, typename Body>
 chunk_seq ExternalTransform(const chunk_seq& seq,
                             const std::string& result_prefix, Body body,
@@ -1795,7 +1621,7 @@ chunk_seq ExternalTransform(const chunk_seq& seq,
   const size_t num_drives = GetSSDList().size();
 
   // Create/truncate one output file per drive.  The writer opens files with
-  // O_CREAT but not O_TRUNC, so stale data from a prior run is cleared here.
+  // O_CREAT so stale data from a prior run is cleared here
   std::vector<std::string> filenames(num_drives);
   parlay::parallel_for(
       0, num_drives,
@@ -1811,8 +1637,6 @@ chunk_seq ExternalTransform(const chunk_seq& seq,
   reader.PrepChunks(seq);
   reader.Start(5, 32, 16);
 
-  // One io_uring writer thread per drive; queue_size caps in-flight buffers
-  // to 64 * 4 MB = 256 MB of DRAM at any moment.
   UnorderedWriterConfig wcfg;
   wcfg.num_threads = num_drives;
   wcfg.io_uring_size = 32;
@@ -1855,14 +1679,10 @@ chunk_seq ExternalTransform(const chunk_seq& seq,
   return {out_chunks};
 }
 
-/**
- * Scalar-fold driver: read every chunk of `seq` and return one accumulator per
- * parlay worker.  `worker(reader)` polls the shared reader to exhaustion
- * (Poll() returns nullptr when done) and returns its local accumulator; the
- * caller combines the per-worker results (e.g. parlay::reduce).  No writer is
- * started.  Workers may also just scatter into a shared array by chunk index
- * (as ChunkScan's pass 1 does) and return a placeholder.
- */
+
+ //return one accumulator per worker.
+ //worker(reader) polls the shared reader till it's empty and returns the local accumulator,
+ //and we aggregate these via parlay::reduce
 template <typename T, typename WorkerFn>
 auto RemoveWorker(const chunk_seq& seq, size_t reader_threads, WorkerFn worker)
     -> parlay::sequence<
@@ -1899,36 +1719,10 @@ struct DensePackRun {
   size_t count;
 };
 
-/**
- * Shared dense-packing driver behind ChunkFilter and ChunkFlatTabulate.
- *
- * Both primitives produce, per virtual chunk, a variable-length run of
- * survivors in logical order and must pack those runs into a tightly packed
- * chunk_seq: every output chunk but the last holds exactly CHUNK_SIZE/sizeof(R)
- * elements.  The only difference between them is how a batch of runs is
- * produced (reading + predicate-compaction vs. calling a block function), so
- * that is the single point of variation `produce`.
- *
- * `produce(base, batch_n)` returns a movable Batch that:
- *   - keeps its run storage alive for the batch's lifetime, and
- *   - exposes `size()` (== batch_n) and `run(b) -> DensePackRun<R>`.
- * `run(b)` is queried after the Batch has settled in DensePack's local, so
- * data() pointers stay valid even for producers whose storage uses a
- * small-buffer optimization (e.g. parlay::sequence).
- *
- * Algorithm per batch (identical to the two originals it replaces):
- *   1. produce the batch's runs (in index order).
- *   2. prefix-sum run counts, accounting for the carry left by the prior batch.
- *   3. parallel scatter each run into pre-zeroed output buffers
- * (non-overlapping ranges by the prefix sums, so no races).
- *   4. push full output chunks; carry the trailing (< epct) survivors forward.
- * A final partial chunk is flushed after the loop.
- *
- * Output files grow via CHUNK_SIZE-aligned offsets (not pre-fallocated, as the
- * output size is unknown up front) and preserve the index-ordered invariant.
- *
- * @tparam R  Output element type.
- */
+
+
+//One problem that we may encounter with operations like filtering and flat tabulating is that the result chunks are no longer full;
+//we waste memory and I/O operations by sending them off like this. A better approach is to compact them into full chunks, which requires combining survivor blocks.
 template <typename R, typename ProduceBatch>
 chunk_seq DensePack(size_t num_virtual, const std::string& result_prefix,
                     ProduceBatch produce) {
@@ -1938,7 +1732,6 @@ chunk_seq DensePack(size_t num_virtual, const std::string& result_prefix,
   const size_t num_drives = GetSSDList().size();
 
   // Create/truncate one output file per drive so prior-run data is cleared
-  // (the writer opens with O_CREAT but not O_TRUNC).
   std::vector<std::string> filenames(num_drives);
   parlay::parallel_for(
       0, num_drives,
@@ -1951,7 +1744,6 @@ chunk_seq DensePack(size_t num_virtual, const std::string& result_prefix,
       /*granularity=*/1);
 
   // Per-drive slot counter: next free CHUNK_SIZE-aligned slot in each file.
-  // Advanced serially in the (sequential) push loop; no atomics needed.
   std::vector<size_t> next_slot(num_drives, 0);
   std::mt19937_64 rng(std::random_device{}());
   std::uniform_int_distribution<size_t> drive_dist(0, num_drives - 1);
@@ -1986,18 +1778,16 @@ chunk_seq DensePack(size_t num_virtual, const std::string& result_prefix,
     offset[0] = carry.size();
     for (size_t b = 0; b < batch_n; b++)
       offset[b + 1] = offset[b] + batch.run(b).count;
+    // std::vector<size_t> offset(batch_n + 1);
+    // offset[0] = carry.size();
+    // for (size_t b = 0; b < batch_n; b++)
+    //   offset[b + 1] = offset[b] + batch.run(b).count;
+
     const size_t total = offset[batch_n];
     const size_t num_out = total / epct;
     const size_t new_carry_cnt = total % epct;
 
     // 3. Allocate output buffers: num_out full chunks + 1 overflow for carry.
-    //    We do NOT zero the whole buffer: every buffer's [0, total) is fully
-    //    covered by the carry memcpy + prefix-sum-tiled scatter below, and the
-    //    overflow buffer is only read back up to new_carry_cnt.  The only bytes
-    //    that can reach disk unwritten are the tail past the epct packed
-    //    elements on a full-chunk O_DIRECT write when sizeof(R) does not divide
-    //    CHUNK_SIZE, so zero just that (a no-op when packed_bytes ==
-    //    CHUNK_SIZE, i.e. for every current element type).
     const size_t packed_bytes = epct * sizeof(R);
     const size_t num_alloc = num_out + (new_carry_cnt > 0 ? 1 : 0);
     std::vector<R*> obuf(num_alloc, nullptr);
@@ -2010,7 +1800,7 @@ chunk_seq DensePack(size_t num_virtual, const std::string& result_prefix,
     if (!carry.empty() && num_alloc > 0)
       memcpy(obuf[0], carry.data(), carry.size() * sizeof(R));
 
-    // 4. Parallel scatter — non-overlapping by prefix sums, so no races.
+    // 4. Parallel scatter, non-overlapping by prefix sums
     parlay::parallel_for(
         0, batch_n,
         [&](size_t b) {
@@ -2030,7 +1820,7 @@ chunk_seq DensePack(size_t num_virtual, const std::string& result_prefix,
         },
         /*granularity=*/1);
 
-    // 5. Push full output chunks with balls-in-bins drive assignment.
+    // 5. Push full output chunks
     for (size_t k = 0; k < num_out; k++) {
       const size_t d = drive_dist(rng);
       const size_t slot = next_slot[d]++;
@@ -2040,7 +1830,7 @@ chunk_seq DensePack(size_t num_virtual, const std::string& result_prefix,
           {filenames[d], slot * CHUNK_SIZE, CHUNK_SIZE, out_idx++});
     }
 
-    // 6. Update the carry from the overflow buffer (or clear it).
+    // 6. Update the carry from the overflow buffer or clear it.
     carry.resize(new_carry_cnt);
     if (new_carry_cnt > 0) {
       memcpy(carry.data(), obuf[num_out], new_carry_cnt * sizeof(R));
@@ -2048,7 +1838,7 @@ chunk_seq DensePack(size_t num_virtual, const std::string& result_prefix,
     }
   }
 
-  // Flush the final partial chunk (if any survivors remain in the carry).
+  // Flush the final partial chunk
   if (!carry.empty()) {
     R* buf = (R*)aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
     CHECK(buf != nullptr) << "DensePack: final chunk allocation failed";
@@ -2066,36 +1856,16 @@ chunk_seq DensePack(size_t num_virtual, const std::string& result_prefix,
   return {out_chunks};
 }
 
-/**
- * Streaming reader-backed dense-packing driver: the read-overlapped sibling of
- * DensePack, used by ChunkFlatMap (→ KMP / Rabin-Karp) and ChunkFilter.
- *
- * Where DensePack processes the input in 128-chunk windows with a hard barrier
- * per window (read-all → compute-all → pack) off a fresh reader each window,
- * this driver streams: ONE persistent reader over the whole input, a dispatcher
- * that releases each input chunk to a worker the instant its read (and, for
- * halo>0, its right neighbor's read) lands, and an index-ordered packer that
- * threads the dense-packing carry sequentially while later chunks are still
- * being read + computed.  So reads overlap compute continuously and the per-
- * window reader churn / synchronous seam read are gone.
- *
- * Parallelism model is the same as DensePack — between chunks, each chunk's
- * `body` run sequentially on one worker — only the *scope* changes from a
- * per-window barrier to the whole sequence (mirrors delayed's for_each_chunk).
- *
- * `body(buf, n, gpos, halo_buf, halo_n) -> parlay::sequence<R>` returns chunk
- * i's output run in logical order.  For halo>0, halo_buf/halo_n is a read-only
- * view of chunk i+1's first min(halo, count) elements (the forward halo); at
- * the last chunk halo_n==0, halo_buf==nullptr.  The body must report only
- * outputs whose logical start falls in this chunk, using the halo purely as
- * lookahead.
- *
- * @tparam T     Input element type (matches the chunk_seq).
- * @tparam R     Output element type (sizeof(R) is not restricted here; the ≤8B
- *               on-disk cap is a delayed-layer constraint, not a packing one).
- * @tparam Body  Callable (const T*, size_t, uint64_t, const T*, size_t)
- *               -> parlay::sequence<R>.
- */
+
+//DensePackStream is basically the same as DensePack except this version has a persistent reader 
+//and can actually overlap read and computation + packing 
+//Needless to say, this is the useful version.
+ //@tparam T     Input element type (matches the chunk_seq).
+ // @tparam R     Output element type (sizeof(R) is not restricted here; the ≤8B
+ //              on-disk cap is a delayed-layer constraint, not a packing one).
+ // @tparam Body  Callable (const T*, size_t, uint64_t, const T*, size_t)
+ //            -> parlay::sequence<R>.
+
 template <typename T, typename R, typename Body>
 chunk_seq DensePackStream(const chunk_seq& seq,
                           const std::string& result_prefix, size_t halo,
@@ -2289,51 +2059,15 @@ chunk_seq DensePackStream(const chunk_seq& seq,
 
 }  // namespace plaid
 
-// ============================================================================
-// NReader / NRemoveWorker -- co-indexed N-way read
-//
-// (was ChunkSequence/Primitives/n_reader.h)
-// ============================================================================
-
 namespace plaid {
 
-/**
- * NReader<T> — read N chunk sequences in lockstep and hand a worker the N
- * co-indexed buffers together from a single Poll().
- *
- * Motivation (see count_sort.h): some primitives need to walk two (or
- * more) chunk_seqs that share an index space at the same time — e.g. a values
- * sequence and a same-length bucket-id sequence — pairing element k of chunk i
- * in one with element k of chunk i in the other.  A single ChunkSequenceReader
- * only streams one sequence, and running two independent readers gives back
- * chunks in each reader's own io_uring completion order, so the two streams are
- * not aligned.  NReader owns one ChunkSequenceReader per input sequence and a
- * thin matching layer that re-pairs their output by chunk.index before handing
- * it out, so Poll() always returns a full set of N co-indexed buffers.
- *
- * Requirements on the inputs:
- *   - All N sequences must share the same index set (chunks[i].index == i for
- *     each, the library-wide index-ordered invariant), i.e. the same number of
- *     chunks.  A chunk index that is missing from any one sequence will never
- *     complete a match and is silently dropped.
- *   - This version uses a single element type T for every sequence (mirroring
- *     RemoveWorker<T>).  Sequences with different element types would need a
- *     variadic/heterogeneous variant; two same-typed sequences is the case the
- *     current callers need.
- *
- * Ownership: Poll() returns raw buffers owned by the per-sequence reader pools.
- * The worker must return them with Free(match) (or FreeSlot) exactly once, the
- * same contract as ChunkSequenceReader::allocator.Free.
- *
- * Note on buffering: if one reader races ahead of the others, its unmatched
- * buffers accumulate in the matcher (the reader pools grow to cover them).  For
- * co-generated sequences read at similar rates this stays small; it is bounded
- * only by how far the fastest reader can get ahead of the slowest.
- */
+//Some algorithms, like checking equality, may require us to iterate over multiple sequences at once, 
+//which is not a functionality supported by an individual chunk reader because the chunks don't necessarily arrive in order.
+//requirements are that the sequences share the same index set, viz. same number of chunks.
+//we only support a single element type for this iteration.
 template <typename T>
 class NReader {
  public:
-  // One matched position across all N sequences.
   struct Match {
     std::vector<T*> ptrs;       // size N; ptrs[s] = seq s's buffer at index
     std::vector<size_t> sizes;  // size N; element count in ptrs[s]
@@ -2410,9 +2144,6 @@ class NReader {
     size_t filled = 0;
   };
 
-  // One pump per sequence: drain reader s and deposit each buffer into the
-  // matcher keyed by chunk index; the buffer that completes a match publishes
-  // the assembled Match to match_queue_.
   static void Pump(NReader* self, size_t s) {
     while (true) {
       auto [ptr, size, index] = self->readers_[s]->Poll();
@@ -2439,8 +2170,6 @@ class NReader {
       }
       if (ready.valid()) self->match_queue_.Push(std::move(ready));
     }
-
-    // Last pump to finish closes the output so pollers unblock.
     if (--self->active_pumps_ == 0) self->match_queue_.Close();
   }
 
@@ -2454,27 +2183,7 @@ class NReader {
   SimpleQueue<Match> match_queue_;
 };
 
-/**
- * N-sequence analogue of RemoveWorker: read `seqs` in lockstep and return one
- * accumulator per parlay worker.  `worker(nreader)` polls the shared NReader to
- * exhaustion (Poll().valid() == false when done) and returns its local
- * accumulator; the caller combines the per-worker results.  Each worker must
- * Free() the matches it consumes.
- *
- * Example (paired values + bucket-ids walk):
- *   auto locals = NRemoveWorker<uint64_t>({&values, &ids}, 10,
- *       [&](NReader<uint64_t>& r) {
- *           LocalAcc acc;
- *           while (true) {
- *               auto m = r.Poll();
- *               if (!m.valid()) break;
- *               uint64_t* val = m.ptrs[0]; uint64_t* id = m.ptrs[1];
- *               for (size_t k = 0; k < m.sizes[0]; k++) acc.add(id[k], val[k]);
- *               r.Free(m);
- *           }
- *           return acc;
- *       });
- */
+//same as above for the removeworker
 template <typename T, typename WorkerFn>
 auto NRemoveWorker(const std::vector<const chunk_seq*>& seqs,
                    size_t reader_threads, WorkerFn worker)
@@ -2489,22 +2198,9 @@ auto NRemoveWorker(const std::vector<const chunk_seq*>& seqs,
 
 }  // namespace plaid
 
-// ============================================================================
-// BucketWriter -- the count-sort scatter
-//
-// (was ChunkSequence/Primitives/bucketed_file_writer.h)
-// ============================================================================
 
-// Bucketed file writer: decouples a scatter pass's per-worker buffer size from
-// its write size, so a k-way partition need not fill a full CHUNK_SIZE buffer
-// per (worker, bucket) before anything can be flushed.
-//
-// Extracted from direct_samplesort.h (itself a port of Peter's
-// OrderedFileWriter / type_allocator.h), so both the hand-rolled direct sample
-// sort and a primitives-based partitioner can share one writer implementation.
-// See direct_samplesort.h's header comment for the rationale: a worker's
-// scatter buffer here is one SAMPLE_SORT_BUCKET_SIZE (4 KiB) block, and the
-// writer itself rebuilds large sequential writes out of them with iovecs.
+
+//this part is from peter's code
 
 namespace plaid {
 
@@ -2540,19 +2236,7 @@ using BucketData = AllocatorData<SAMPLE_SORT_BUCKET_SIZE>;
 using bucket_allocator = AlignedTypeAllocator<BucketData, O_DIRECT_MULTIPLE>;
 
 // ── bucketed writer  (Peter's OrderedFileWriter)
-// ────────────────────────────── One append-only O_DIRECT file per bucket.
-// Write() takes ownership of a scatter buffer and appends it to the bucket's
-// pending writev; once the request holds >= kFlushThresholdBytes (or
-// IO_VECTOR_SIZE iovecs) it is queued to an io_uring thread.  Requests are
-// stamped with their file offset when created, so a bucket file is a contiguous
-// log in request-creation order even though the writes complete out of order —
-// which is what lets the finished file be carved into chunks.
-//
-// A buffer whose length is not a multiple of O_DIRECT_MULTIPLE (only ever a
-// worker's last, partial buffer for a bucket) cannot go in an O_DIRECT iovec,
-// so it is parked; ReapResult() concatenates a bucket's parked buffers into one
-// aligned tail and appends it as the final iovec (his
-// GatherMisalignedPointers).
+
 template <typename T>
 class BucketWriter {
  public:
@@ -2562,12 +2246,7 @@ class BucketWriter {
     size_t file_bytes = 0;  // bytes on disk (true_bytes rounded up)
   };
 
-  // disk_span spreads each bucket's data across `disk_span` independent
-  // per-drive files instead of one (bucket b shard s -> GetFileName(prefix,
-  // b*disk_span+s), so with disk_span == drive count, shard s of every
-  // bucket lands on drive s -- reading/writing one bucket then touches every
-  // drive instead of a single one).  Default 1 reproduces the original
-  // one-file-per-bucket layout exactly.
+
   BucketWriter(const std::string& prefix, size_t num_buckets,
                size_t disk_span = 1)
       : num_buckets_(num_buckets),
@@ -2576,7 +2255,7 @@ class BucketWriter {
         results_(num_buckets * disk_span) {
     // One accumulating request is permanently held per (bucket,shard), so the
     // pool must exceed num_buckets*disk_span for a flush to make progress;
-    // the surplus caps how many requests can be in flight (and hence DRAM).
+    // the surplus caps how many requests can be in flight
     requests_.resize(num_buckets * disk_span * kRequestsPerBucket);
     for (Request& r : requests_) free_requests_.Push(&r);
 
@@ -2587,12 +2266,7 @@ class BucketWriter {
         results_[i].filename = GetFileName(prefix, i);
         bk.fd = open(results_[i].filename.c_str(),
                      O_WRONLY | O_DIRECT | O_CREAT | O_TRUNC, 0644);
-        // Fatal, not logged: with fd == -1 every Write routed to this bucket
-        // is silently discarded and the caller gets a short/empty bucket back
-        // as if nothing went wrong.  One fd per (bucket, shard) means a
-        // few-thousand-bucket count_sort/group_by_index needs a matching
-        // RLIMIT_NOFILE -- ParseGlobalArguments lifts the soft limit to the
-        // hard limit, so reaching here means the HARD limit is too low.
+
         CHECK(bk.fd >= 0) << "BucketWriter: open(" << results_[i].filename
                           << ") failed for bucket " << b << " of "
                           << num_buckets << " (shard " << s << " of "
@@ -2608,8 +2282,7 @@ class BucketWriter {
       if (bk.fd >= 0) close(bk.fd);
   }
 
-  // Drains `pending_` until it is closed.  Run on kWriterIoThreads parlay
-  // workers alongside the scatter workers.
+
   void RunIoThread() {
     struct io_uring ring;
     SYSCALL(InitIoUringWithRetry(kWriterRingDepth, &ring,
@@ -2620,7 +2293,7 @@ class BucketWriter {
     while (more || in_ring > 0) {
       bool submitted = false;
       while (more && in_ring < kWriterRingDepth) {
-        // Block for work only when there is nothing in flight to reap.
+        // Block for work only when there is nothing in flight to reap
         auto [r, code] =
             pending_.Poll(nullptr, (in_ring == 0 && !submitted) ? -1 : 0);
         if (r == nullptr) {
@@ -2662,9 +2335,7 @@ class BucketWriter {
   // Takes ownership of `buf` (a bucket_allocator block); `count` is its live
   // element prefix.  `shard` selects which of bucket b's disk_span files this
   // block goes to -- the caller picks it (e.g. round-robin per (worker,bucket)
-  // staging slot), the writer just routes by (b,shard).  Default 0 keeps the
-  // original 3-argument call sites (disk_span==1 callers, e.g.
-  // direct_samplesort.h) working unchanged.
+  // staging slot), the writer just routes by (b,shard)
   void Write(size_t b, T* buf, size_t count, size_t shard = 0) {
     Bucket& bk = buckets_[b * disk_span_ + shard];
     const size_t bytes = count * sizeof(T);
@@ -2678,7 +2349,7 @@ class BucketWriter {
     r->Add((char*)buf, bytes);
     if (r->bytes >= kFlushThresholdBytes || r->n == IO_VECTOR_SIZE) {
       // The next request appends where this one ends, so the file stays a
-      // contiguous log even though the writes complete out of order.
+      // contiguous log even though the writes complete out of order
       bk.append_off += r->bytes;
       bk.cur = NewRequest(bk.fd, bk.append_off);
       l.unlock();
@@ -2738,7 +2409,7 @@ class BucketWriter {
     return results_;
   }
 
-  // Called after the I/O threads have joined: every write has landed.
+  // Called after the I/O threads have joined
   void CloseFiles() {
     for (Bucket& bk : buckets_) {
       if (bk.fd >= 0) SYSCALL(close(bk.fd));
