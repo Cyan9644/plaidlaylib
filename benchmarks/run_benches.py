@@ -213,12 +213,33 @@ EXAMPLES = [
     # no intermediates beyond the lf_x/lf_y inputs.
     {"name": "linefit", "target": "bin/linefitExample",
      "cols": ["n", "build_s", "fit_s", "inmem_fit_s", "offset", "slope",
-              "throughput_gb_s"],
+              "throughput_gb_s", "eager_fit_s", "eager_offset", "eager_slope",
+              "eager_throughput_gb_s"],
      "time_col": "fit_s", "inmem_col": "inmem_fit_s",
      "elem_bytes": 8, "input_seqs": 2,
      "budget_base": "phys/2", "budget_mult": 16,
      "xlabel": "input size",
      "title": "line fit: out-of-core (plaid) vs in-mem parlaylib",
+     "data_globs": ["lf_x*", "lf_y*"]},
+
+    # Same linefitExample binary/CSV as "linefit" above, but plots the two
+    # out-of-core substrates against each other (delayed fusion engine vs an
+    # explicit NRemoveWorker lockstep fold, examples/chunk_linefit_eager.h)
+    # instead of out-of-core vs in-mem -- both do 2 reads / 0 writes, so this
+    # isolates the delayed engine's fusion overhead.  no_ram_cliff since
+    # neither series is DRAM-budget-gated.  Selecting only this entry (not
+    # "linefit") runs linefitExample once per sweep point, not twice.
+    {"name": "linefit_delayed_vs_eager", "target": "bin/linefitExample",
+     "cols": ["n", "build_s", "fit_s", "inmem_fit_s", "offset", "slope",
+              "throughput_gb_s", "eager_fit_s", "eager_offset", "eager_slope",
+              "eager_throughput_gb_s"],
+     "time_col": "fit_s", "inmem_col": "eager_fit_s",
+     "series_labels": ("eager (out-of-core, NRemoveWorker)",
+                       "delayed (out-of-core, fused zip)"),
+     "no_ram_cliff": True,
+     "elem_bytes": 8, "input_seqs": 2,
+     "xlabel": "input size",
+     "title": "line fit: delayed (fused) vs eager (materialized) out-of-core",
      "data_globs": ["lf_x*", "lf_y*"]},
 
     # external_samplesortExample sweeps n; the plotted time is the sort pass only
