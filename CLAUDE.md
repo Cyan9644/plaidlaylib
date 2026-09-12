@@ -5,7 +5,7 @@ filter, scan, flat-tabulate, find_if, …) for data stored across many SSDs.  Da
 is too large for DRAM; all I/O goes through `io_uring` with `O_DIRECT`.
 The primary goal of the project/library is to demonstrate that multi-SSD programming can be made relatively ergonomic with carefully chosen abstractions, while maintaining parallelism to rival in memory parallel algorithm implementations via techniques such as delaying to reduce IO trips. Examples are free to make calls into the reader and writer but these should be temporary solutions to reveal what abstractions are later needed; the ultimate goal is a useable set of abstractions that avoid burdening the user with the drive setup itself.
 
-The library is deliberately small: **five headers**, nine test binaries, twelve
+The library is deliberately small: **five headers**, twelve test binaries, twelve
 example binaries.  It reached that size through a whitelist cleanup that dropped
 the accumulated experimental surface (parked research, superseded alternates,
 head-to-head comparison drivers); a handful of pieces (`reverse`,
@@ -109,7 +109,7 @@ ChunkSequence/
                                 pass), so a graph larger than DRAM never needs
                                 to be built there just to hand bellman_ford a
                                 chunk_csr
-  tests/                      nine binaries, each exiting 0 on PASS
+  tests/                      twelve binaries, each exiting 0 on PASS
     primitives_test.cpp         every case for chunk_seq.h/primitives.h/sort.h
     delayed_test.cpp            the delayed layer
     kmp_test.cpp  rabin_karp_test.cpp  bigint_add_test.cpp  convex_hull_test.cpp
@@ -118,6 +118,12 @@ ChunkSequence/
                                 small hand-built graphs
     external_rmat_test.cpp      external_rmat_symmetric_graph vs the in-memory
                                 graph_utils reference, element-wise
+    primes_test.cpp             chunk_primes vs a from-scratch sieve oracle
+    linefit_test.cpp            plaid::linefit vs in_memory_baselines.h's
+                                global linefit, within tolerance
+    fft_test.cpp                ChunkFFT stage1_rows/stage2_cols vs upstream
+                                complex_fft, reusing chunk_fft.h's own
+                                spectrum_errs/out_perm helpers
   examples/                   eleven demonstration programs + the primitive demos
     primes.cpp                  out-of-core prime sieve on ChunkFlatTabulate
     kmp.cpp  chunk_kmp.h        out-of-core KMP search
@@ -149,14 +155,15 @@ results/                      timestamped benchmark output; gitignored
 
 ## Tests
 
-`make test` builds and runs all seven binaries, continuing past a failure and
+`make test` builds and runs all twelve binaries, continuing past a failure and
 exiting non-zero if any failed.  `TEST_ARGS` is forwarded to every binary
 (`make test TEST_ARGS=8000000`); a case with no argument uses its own default.
 
-`bin/primitivesTest` holds seventeen cases — iota, map, reduce, scan,
+`bin/primitivesTest` holds nineteen cases — iota, map, reduce, scan,
 segmented_reduce, find_if, histogram, scalar, filter, flat_tabulate, flat_map,
-partition, group_by, reverse, chunk_operation, combined, samplesort — each in its own
-namespace with its original `main` renamed to `run()`, ordered cheap-first so a
+partition, group_by, reverse, chunk_operation, combined, samplesort, pack,
+random_shuffle — each in its own namespace with its original `main` renamed to
+`run()`, ordered cheap-first so a
 substrate break surfaces before the expensive sorts.  `ParseGlobalArguments` is
 called **once** by the dispatcher, not per case: it consumes the global flags and
 populates the SSD list, so a second call would reset that list to the defaults
@@ -215,7 +222,11 @@ out-of-core output is read back and compared element-wise) and exits non-zero on
 mismatch — a differential test in the spirit of the benchmarks' `agree`.
 
 - `primes.cpp` → `bin/primesExample [n] [out_path]`: out-of-core Eratosthenes
-  sieve on `ChunkFlatTabulate`.  Prints `pi(n)`, output throughput, and the last
+  sieve on `ChunkFlatTabulate`, factored into `examples/chunk_primes.h`
+  (`chunk_primes` + its `in_mem_primes` small-prime helper) — the same
+  `<name>.cpp` + `chunk_<name>.h` split every other multi-file example uses,
+  and what lets `primesTest` call `chunk_primes` directly without pulling in
+  this driver's own `main()`.  Prints `pi(n)`, output throughput, and the last
   few primes; consolidating the full list to a local file is opt-in via
   `out_path` (skipped at bench scale).  Emits
   `CSV,n,time_s,inmem_time_s,count,throughput_gb_s`.
@@ -466,8 +477,19 @@ summary (also persisted to `warnings.txt`).  It is **not** part of
 `make bench` / `--all`.
 
 `make bench-summary` (`benchmarks/summary_figure.py`) draws the combined
-relative-performance bar chart: 21 entries (12 primitives + 9 examples), each run
-once at the largest n where its own in-mem baseline still fits DRAM.  Its
+relative-performance bar chart: 21 entries (12 primitives + 9 examples).  It
+runs **no binaries itself** — it only reads the `<name>_scale.csv` files
+`run_benches.py`'s example sweep already writes to
+`results/<timestamp>/<name>_scale.csv` (via `make bench-examples` or
+`run_benches.py --example ...`, run beforehand at whatever sizes/cadence),
+picking for each entry the largest-n row whose in-mem column is non-blank;
+without `--dir`, each entry's CSV is found by globbing every
+`results/*/` directory and taking the most recent match, so bars swept at
+different times still combine into one chart.  An entry with no matching CSV,
+or none of whose rows have a usable in-mem column, is skipped with a warning,
+never fabricated.  Because it does no execution, its output image is also
+half the height of the old run-everything design:
+`figsize=(fig_width, 1.25)` at 300 dpi → 375 px tall (was 750 px).  Its
 `SUMMARY_ENTRIES` asserts both alphabetical order and membership in
 `run_benches.EXAMPLES`, so the two files must be edited together.
 

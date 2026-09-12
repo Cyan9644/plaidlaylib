@@ -44,13 +44,14 @@ UTIL_OBJS := $(OBJDIR)/file_utils.o
 
 # ChunkSequence correctness tests (each exits 0 on PASS, non-zero on FAIL).
 # primitivesTest covers everything in Primitives/{chunk_seq,primitives,sort}.h;
-# delayedTest covers Primitives/delayed.h; the rest are the four examples that
+# delayedTest covers Primitives/delayed.h; the rest are the examples that
 # carry a correctness test.
 TEST_BINARIES := $(BINDIR)/primitivesTest $(BINDIR)/delayedTest \
                  $(BINDIR)/kmpTest $(BINDIR)/rabinKarpTest \
                  $(BINDIR)/bigintAddTest $(BINDIR)/convexHullTest \
                  $(BINDIR)/kthSmallestTest $(BINDIR)/bellmanFordTest \
-                 $(BINDIR)/externalRmatTest
+                 $(BINDIR)/externalRmatTest $(BINDIR)/primesTest \
+                 $(BINDIR)/linefitTest $(BINDIR)/fftTest
 
 # ChunkSequence examples (dual-purpose: demo + a machine-readable CSV line).
 # primitive_demos is one binary holding every per-primitive demo, dispatched on
@@ -224,8 +225,8 @@ LINKD = $(CXX) $(CXXFLAGS) $(DEPFLAGS) $(INCLUDES) $< $(UTIL_OBJS) -o $@ $(LDFLA
 
 # primitivesTest: every case for chunk_seq.h / primitives.h / sort.h in one
 # binary (iota, map, reduce, scan, segmented_reduce, find_if, histogram,
-# scalar, filter, flat_tabulate, flat_map, partition, group_by,
-# chunk_operation, combined, samplesort).
+# scalar, filter, flat_tabulate, flat_map, partition, group_by, reverse,
+# chunk_operation, combined, samplesort, pack, random_shuffle).
 $(BINDIR)/primitivesTest: ChunkSequence/tests/primitives_test.cpp $(UTIL_OBJS)
 	$(LINKD)
 
@@ -260,6 +261,23 @@ $(BINDIR)/bellmanFordTest: ChunkSequence/tests/bellman_ford_test.cpp $(UTIL_OBJS
 	$(LINKD)
 
 $(BINDIR)/externalRmatTest: ChunkSequence/tests/external_rmat_test.cpp $(UTIL_OBJS) | deps/parlaylib-examples
+	$(LINKD)
+
+# primesTest cross-checks chunk_primes.h against a from-scratch sieve written
+# in the test itself (no upstream baseline include), so no order-only prereq.
+$(BINDIR)/primesTest: ChunkSequence/tests/primes_test.cpp $(UTIL_OBJS)
+	$(LINKD)
+
+# linefitTest cross-checks against examples/in_memory_baselines.h's global
+# linefit (self-contained in this repo, no deps/ dependency), so no
+# order-only prereq.
+$(BINDIR)/linefitTest: ChunkSequence/tests/linefit_test.cpp $(UTIL_OBJS)
+	$(LINKD)
+
+# fftTest includes upstream fast_fourier_transform.h (complex_fft, its
+# independent oracle), so it needs the order-only deps/parlaylib-examples
+# prereq, same as convexHullTest/bellmanFordTest/externalRmatTest.
+$(BINDIR)/fftTest: ChunkSequence/tests/fft_test.cpp $(UTIL_OBJS) | deps/parlaylib-examples
 	$(LINKD)
 
 # ── examples ───────────────────────────────────────────────────────────────────
@@ -330,12 +348,14 @@ bench-examples-full:
 	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add,linefit,convex_hull,samplesort" --outdir results \
 	    --example-sizes "1GiB 4GiB 16GiB 64GiB 256GiB 1TiB"
 
-# Combined bar chart: 19 primitives/examples, each run ONCE at the largest n
-# where its own in-mem parlaylib baseline still fits DRAM, plotted as a
-# relative-performance bar chart (in-mem pinned at 1.0). See
-# benchmarks/summary_figure.py.  Real-scale run -- not for a tmpfs dev box
-# (some entries' RAM-cliff n is large); dry-run with a small
-# EXAMPLE_INMEM_BUDGET_BYTES override first (see the plan/verification notes).
+# Combined bar chart: 21 primitives/examples, plotted as a relative-
+# performance bar chart (in-mem pinned at 1.0). Runs NO binaries itself --
+# it only reads the <name>_scale.csv files already written under
+# results/<timestamp>/ by `make bench-examples` / `run_benches.py --example
+# ...` sweeps, picking each entry's largest-n row with a non-blank in-mem
+# column; an entry with no matching CSV (or none with a usable in-mem
+# column) is skipped with a warning rather than fabricated. See
+# benchmarks/summary_figure.py; populate the underlying sweep CSVs first.
 bench-summary:
 	python3 benchmarks/summary_figure.py --outdir results
 

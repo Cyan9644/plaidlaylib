@@ -951,6 +951,22 @@ int run(int argc, char* argv[]) {
     all_pass &= report("(x % 10): per-bucket counts + total", ok);
   }
 
+  // 3. ChunkHistogramByKey vs. ChunkHistogramByIndex on the equivalent
+  //    pre-mapped id sequence: the keyed variant derives the same bucket
+  //    id on the fly (key_fn = x % k) instead of reading it off disk, so
+  //    the two must agree exactly.
+  {
+    const size_t k = 10;
+    chunk_seq mod = plaid::ChunkMap<uint64_t>(
+        input, "hist_mod_key", [k](uint64_t x) { return x % k; });
+    auto h_idx = plaid::ChunkHistogramByIndex<uint64_t>(mod, k);
+    auto h_key = plaid::ChunkHistogramByKey<uint64_t>(
+        input, k, [k](uint64_t x) { return x % k; });
+    bool ok = (h_key.size() == k) && (h_idx.size() == k);
+    for (size_t b = 0; ok && b < k; b++) ok = (h_key[b] == h_idx[b]);
+    all_pass &= report("ChunkHistogramByKey matches ByIndex", ok);
+  }
+
   std::cout << "\n" << (all_pass ? "ALL PASS" : "SOME FAILED") << "\n";
   return all_pass ? 0 : 1;
 }
@@ -1020,10 +1036,12 @@ int run(int argc, char* argv[]) {
   }
 
   // ── push_back that spills into a brand-new chunk ───────────────────────────
-  // Fill the current last chunk exactly, then push once more.
+  // Fill the current last chunk exactly, then push once more.  `room` is
+  // read again below (post-consolidate tail check), hence the outer scope.
+  size_t room = 0;
   {
     size_t last_used = seq.chunks.back().used;  // bytes
-    size_t room = (CHUNK_SIZE - last_used) / sizeof(T);
+    room = (CHUNK_SIZE - last_used) / sizeof(T);
     for (size_t j = 0; j < room; j++) seq.push_back((T)0xABCD0000 + j);
     expect(seq.chunks.back().used == CHUNK_SIZE,
            "last chunk not full after filling");
@@ -1059,13 +1077,36 @@ int run(int argc, char* argv[]) {
     size_t got = fread(buf.data(), sizeof(T), total, f);
     fclose(f);
     expect(got == total, "consolidated file wrong length");
-    // Every index we can predict: [0, n) is the identity.
+    // [0, n) is the identity.
     bool ok = true;
     for (size_t i = 0; i < n && ok; i++)
       if (buf[i] != (T)i) {
         expect(false, "consolidated[" + std::to_string(i) + "] wrong");
         ok = false;
       }
+    // [n, total) is the push_back-appended tail, in the exact order pushed:
+    // the five RMW-path values, then the room-filling values, then the
+    // one new-chunk value -- reconstructed here from the same formulas
+    // used to push them above, since consolidate's handling of that tail
+    // specifically was previously never re-checked after the round-trip.
+    size_t tail_i = n;
+    for (size_t k = 0; k < 5 && ok; k++, tail_i++)
+      if (buf[tail_i] != (T)(1'000'000'000ULL + k)) {
+        expect(false, "consolidated[" + std::to_string(tail_i) +
+                          "] (RMW tail) wrong");
+        ok = false;
+      }
+    for (size_t j = 0; j < room && ok; j++, tail_i++)
+      if (buf[tail_i] != (T)(0xABCD0000ULL + j)) {
+        expect(false, "consolidated[" + std::to_string(tail_i) +
+                          "] (room-fill tail) wrong");
+        ok = false;
+      }
+    if (ok && tail_i < total && buf[tail_i] != (T)0xFEED1234ULL) {
+      expect(false, "consolidated[" + std::to_string(tail_i) +
+                        "] (new-chunk tail) wrong");
+      ok = false;
+    }
   }
   unlink(out.c_str());
 
@@ -3248,6 +3289,184 @@ int run(int argc, char* argv[]) {
 }  // namespace test_samplesort
 
 // ============================================================================
+// pack -- plaid::pack / pack_if / pack_value (Primitives/secondary_primitives.h)
+// ============================================================================
+
+namespace test_pack {
+
+static bool check_equal(const chunk_seq& got_seq,
+                        const std::vector<uint64_t>& expected,
+                        const char* label) {
+  std::vector<uint64_t> got = got_seq.to_vector<uint64_t>();
+  bool ok = (got.size() == expected.size()) &&
+           std::equal(got.begin(), got.end(), expected.begin());
+  std::cout << "  " << (ok ? "OK" : "FAIL") << " " << label << ": size="
+            << got.size() << " (expected " << expected.size() << ")\n";
+  return ok;
+}
+
+int run(int argc, char* argv[]) {
+  const size_t n =
+      (argc > 1) ? std::stoull(argv[1]) : (2 * ELEMS_PER_CHUNK + 12345);
+  bool pass = true;
+
+  // Same predicate primitive_demos.cpp's own pack demo uses (~2/3 survive),
+  // exercised identically through all three overloads -- pack (DRAM boolean
+  // gate), pack_if (chunk-parallel selector gate), pack_value (value
+  // predicate, no selector at all) -- so a bug specific to any one gating
+  // style shows up as a mismatch against the same expected list.
+  {
+    chunk_seq input = plaid::tabulate<uint64_t>(
+        n, "pack_in", [](size_t i) { return (uint64_t)i; });
+    std::vector<uint64_t> expected;
+    expected.reserve(n);
+    for (uint64_t i = 0; i < n; i++)
+      if (i % 3 != 0) expected.push_back(i);
+
+    parlay::sequence<bool> flags =
+        parlay::tabulate(n, [](size_t i) { return i % 3 != 0; });
+    chunk_seq packed_bool = plaid::pack<uint64_t>(input, "pack_bool", flags);
+    pass &= check_equal(packed_bool, expected, "pack (boolean gate)");
+
+    chunk_seq ids = plaid::ChunkMap<uint64_t>(
+        input, "pack_if_ids", [](uint64_t x) { return x % 3; });
+    chunk_seq packed_if = plaid::pack_if<uint64_t, uint64_t>(
+        input, "pack_if_out", ids, [](uint64_t id) { return id != 0; });
+    pass &= check_equal(packed_if, expected, "pack_if (selector gate)");
+
+    chunk_seq packed_value = plaid::pack_value<uint64_t>(
+        input, "pack_value_out", [](uint64_t x) { return x % 3 != 0; });
+    pass &= check_equal(packed_value, expected, "pack_value (value gate)");
+
+    bench_drives::clear_drives(
+        {"pack_in", "pack_bool", "pack_if_ids", "pack_if_out",
+         "pack_value_out"});
+  }
+
+  // Edge: predicate always false (pack_value) -> empty result.
+  {
+    const size_t small_n = ELEMS_PER_CHUNK / 2;
+    chunk_seq input = plaid::tabulate<uint64_t>(
+        small_n, "pack_edge_in", [](size_t i) { return (uint64_t)i; });
+    chunk_seq out = plaid::pack_value<uint64_t>(
+        input, "pack_edge_out", [](uint64_t) { return false; });
+    pass &= check_equal(out, {}, "pack_value (all-fail -> empty)");
+    bench_drives::clear_drives({"pack_edge_in", "pack_edge_out"});
+  }
+
+  // Edge: predicate always true (pack) -> identical to input.
+  {
+    const size_t small_n = ELEMS_PER_CHUNK / 2;
+    chunk_seq input = plaid::tabulate<uint64_t>(
+        small_n, "pack_edge2_in", [](size_t i) { return (uint64_t)i; });
+    std::vector<uint64_t> expected(small_n);
+    for (size_t i = 0; i < small_n; i++) expected[i] = (uint64_t)i;
+    parlay::sequence<bool> all_true(small_n, true);
+    chunk_seq out = plaid::pack<uint64_t>(input, "pack_edge2_out", all_true);
+    pass &= check_equal(out, expected, "pack (all-pass -> identity)");
+    bench_drives::clear_drives({"pack_edge2_in", "pack_edge2_out"});
+  }
+
+  std::cout << (pass ? "PASS" : "FAIL") << "\n";
+  return pass ? 0 : 1;
+}
+
+}  // namespace test_pack
+
+// ============================================================================
+// random_shuffle -- random_shuffle_method / plaid::Permutation (sort.h)
+// ============================================================================
+
+namespace test_random_shuffle {
+
+using T = uint64_t;
+
+// A shuffle's output is intentionally random, so there's no exact expected
+// sequence to diff against.  What IS checkable, and checked below: the
+// output is a valid permutation of [0, n) (same multiset as the identity
+// input), and it isn't trivially the identity itself at a size where that
+// would be astronomically unlikely by chance (a regression guard against a
+// silent no-op).
+static bool is_nontrivial_permutation(const chunk_seq& out, size_t n,
+                                      const char* label) {
+  std::vector<T> got = out.to_vector<T>();
+  if (got.size() != n) {
+    std::cout << "  FAIL " << label << ": size " << got.size() << " != " << n
+              << "\n";
+    return false;
+  }
+  std::vector<T> sorted_got = got;
+  std::sort(sorted_got.begin(), sorted_got.end());
+  bool perm_ok = true;
+  for (size_t i = 0; i < n && perm_ok; i++) perm_ok = (sorted_got[i] == (T)i);
+  if (!perm_ok) {
+    std::cout << "  FAIL " << label << ": not a permutation of [0, n)\n";
+    return false;
+  }
+  bool is_identity = true;
+  for (size_t i = 0; i < n && is_identity; i++) is_identity = (got[i] == (T)i);
+  if (is_identity) {
+    std::cout << "  FAIL " << label << ": output equals the identity "
+              << "permutation (n=" << n << " -- not plausible by chance)\n";
+    return false;
+  }
+  std::cout << "  OK " << label << ": valid, non-identity permutation\n";
+  return true;
+}
+
+int run(int argc, char* argv[]) {
+  const size_t n =
+      (argc > 1) ? std::stoull(argv[1]) : (2 * ELEMS_PER_CHUNK + 12345);
+  bool pass = true;
+
+  // -- random_shuffle_method: valid, non-identity permutation --------------
+  {
+    chunk_seq in =
+        plaid::tabulate<T>(n, "rshuf_in", [](size_t i) { return (T)i; });
+    chunk_seq out = random_shuffle_method<T>(in, "rshuf_out");
+    pass &= is_nontrivial_permutation(out, n, "random_shuffle_method");
+    bench_drives::clear_drives({"rshuf_in", "rshuf_out"});
+  }
+
+  // -- Permutation::Permute: valid, non-identity permutation ----------------
+  {
+    chunk_seq in =
+        plaid::tabulate<T>(n, "perm_in", [](size_t i) { return (T)i; });
+    plaid::Permutation<T> permuter;
+    chunk_seq out = permuter.Permute(in, "perm_out", /*seed=*/42);
+    pass &= is_nontrivial_permutation(out, n, "Permutation::Permute");
+    bench_drives::clear_drives({"perm_in", "perm_out"});
+  }
+
+  // -- Permutation::Permute: deterministic for a fixed seed ------------------
+  // Two independent, identically-built inputs (different file prefixes, so
+  // no shared on-disk state) shuffled with the same seed must produce
+  // byte-identical output, per Permute's own documented contract.
+  {
+    chunk_seq in_a =
+        plaid::tabulate<T>(n, "perm_det_in_a", [](size_t i) { return (T)i; });
+    chunk_seq in_b =
+        plaid::tabulate<T>(n, "perm_det_in_b", [](size_t i) { return (T)i; });
+    plaid::Permutation<T> permuter_a, permuter_b;
+    chunk_seq out_a = permuter_a.Permute(in_a, "perm_det_out_a", /*seed=*/7);
+    chunk_seq out_b = permuter_b.Permute(in_b, "perm_det_out_b", /*seed=*/7);
+    std::vector<T> va = out_a.to_vector<T>(), vb = out_b.to_vector<T>();
+    bool det_ok = (va.size() == vb.size()) &&
+                 std::equal(va.begin(), va.end(), vb.begin());
+    std::cout << "  " << (det_ok ? "OK" : "FAIL")
+              << " Permutation::Permute: same seed -> identical output\n";
+    pass &= det_ok;
+    bench_drives::clear_drives({"perm_det_in_a", "perm_det_in_b",
+                                "perm_det_out_a", "perm_det_out_b"});
+  }
+
+  std::cout << (pass ? "PASS" : "FAIL") << "\n";
+  return pass ? 0 : 1;
+}
+
+}  // namespace test_random_shuffle
+
+// ============================================================================
 // driver
 // ============================================================================
 
@@ -3276,6 +3495,8 @@ int main(int argc, char* argv[]) {
           {"chunk_operation", &test_chunk_operation::run},
           {"combined", &test_combined::run},
           {"samplesort", &test_samplesort::run},
+          {"pack", &test_pack::run},
+          {"random_shuffle", &test_random_shuffle::run},
       };
 
   size_t failed = 0;
