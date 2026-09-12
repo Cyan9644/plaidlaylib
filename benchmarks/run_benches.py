@@ -132,7 +132,6 @@ EXAMPLES = [
      "cols": ["n", "time_s", "inmem_time_s", "count", "throughput_gb_s"],
      "inmem_col": "inmem_time_s",
      "elem_bytes": 1, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 10,
      "xlabel": "input size",
      "title": "Prime sieve: out-of-core (ChunkFlatTabulate) vs in-mem parlaylib",
      "data_globs": ["primes[0-9]*"]},
@@ -144,7 +143,6 @@ EXAMPLES = [
               "throughput_gb_s"],
      "time_col": "search_s", "inmem_col": "inmem_search_s",
      "elem_bytes": 1, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 1,
      "xlabel": "input size",
      "title": "KMP search: out-of-core (ChunkKmp) vs in-mem parlaylib",
      "data_globs": ["kmp_*"]},
@@ -156,7 +154,6 @@ EXAMPLES = [
               "throughput_gb_s"],
      "time_col": "search_s", "inmem_col": "inmem_search_s",
      "elem_bytes": 1, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 1,
      "xlabel": "input size",
      "title": "Rabin-Karp search: out-of-core (ChunkRabinKarp) vs in-mem parlaylib",
      "data_globs": ["rk_*"]},
@@ -173,12 +170,6 @@ EXAMPLES = [
               "throughput_gb_s"],
      "time_col": "select_s", "inmem_col": "inmem_select_s",
      "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "avail", "budget_mult": 16,  # matches kth_smallest.cpp's
-     # own gate exactly (AvailablePhysicalMemoryBytes()/16) -- budget_base
-     # used to be "phys" (raw installed RAM) with budget_mult=20, which both
-     # overstated available headroom (total vs. actually-free/reclaimable)
-     # and under-divided it, together targeting ~12x more than the C++ gate
-     # would allow and reliably OOMing before the in-mem baseline even ran
      "xlabel": "input size",
      "title": "kth-smallest selection: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["kth_in*", "next_*"]},
@@ -190,8 +181,6 @@ EXAMPLES = [
      "cols": ["n", "build_s", "hull_s", "inmem_hull_s", "count", "throughput_gb_s"],
      "time_col": "hull_s", "inmem_col": "inmem_hull_s",
      "elem_bytes": 32, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 32,
-     "max_n": (1 << 31) - 1,  # convex_hull.cpp's baseline hard-caps at n<2^31
      "xlabel": "input size",
      "title": "Upper convex hull: out-of-core (quickhull) vs in-mem parlaylib",
      "data_globs": ["ch_in*", "ch_scratch*"]},
@@ -204,7 +193,6 @@ EXAMPLES = [
               "eager_throughput_gb_s"],
      "time_col": "add_s", "inmem_col": "inmem_add_s",
      "elem_bytes": 8, "input_seqs": 2,
-     "budget_base": "phys/2", "budget_mult": 32,
      "xlabel": "input size",
      "title": "big-integer add: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["bi_a*", "bi_b*", "bi_sum*"]},
@@ -239,7 +227,6 @@ EXAMPLES = [
               "throughput_gb_s"],
      "time_col": "fit_s", "inmem_col": "inmem_fit_s",
      "elem_bytes": 8, "input_seqs": 2,
-     "budget_base": "phys/2", "budget_mult": 16,
      "xlabel": "input size",
      "title": "line fit: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["lf_x*", "lf_y*"]},
@@ -253,7 +240,6 @@ EXAMPLES = [
      "cols": ["n", "build_s", "sort_s", "inmem_sort_s", "throughput_gb_s"],
      "time_col": "sort_s", "inmem_col": "inmem_sort_s",
      "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 24,
      "xlabel": "input size",
      "title": "sample sort: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*",
@@ -268,12 +254,6 @@ EXAMPLES = [
               "count", "throughput_gb_s"],
      "time_col": "total_s", "inmem_col": "inmem_s",
      "elem_bytes": 16, "input_seqs": 1,
-     "budget_base": "avail/2", "budget_mult": 80,  # matches fft.cpp's
-     # N*sizeof(cd)*5<=AvailablePhysicalMemoryBytes()/2 -- do_baseline/
-     # do_verify keep four N-sized buffers live at once (x, Xmem, Xref, and
-     # the stage-1 result pulled back into DRAM), ~4.5x transiently, so the
-     # gate (and this mirror of it) budget for 5x one N*sizeof(cd) buffer,
-     # not 1x
      "xlabel": "input size",
      "title": "FFT (transpose-free): out-of-core (plaid) vs in-mem four-step",
      "data_globs": ["fft_in*", "fft_s1*"]},
@@ -297,7 +277,6 @@ EXAMPLES = [
               "fast_throughput_gb_s"],
      "time_col": "fast_op_s", "inmem_col": "inmem_op_s",
      "elem_bytes": 64, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 216,
      "xlabel": "requested vertex count",
      "title": "Bellman-Ford (sparse RMAT): out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["bf_edges_sparse*"]},
@@ -310,7 +289,6 @@ EXAMPLES = [
               "inmem_s", "count", "throughput_gb_s"],
      "time_col": "total_s", "inmem_col": "inmem_s",
      "elem_bytes": 16, "input_seqs": 1,
-     "budget_base": "avail/2", "budget_mult": 80,  # same gate/fix as fftExample
      "xlabel": "input size",
      "title": "FFT (explicit transpose): out-of-core (plaid) vs in-mem four-step",
      "data_globs": ["fft_in*", "fft_s1*", "fft_t*", "fft_t2*"]},
@@ -319,7 +297,6 @@ EXAMPLES = [
      "cols": ["n", "build_s", "map_s", "inmem_map_s", "throughput_gb_s"],
      "time_col": "map_s", "inmem_col": "inmem_map_s",
      "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 24,
      "xlabel": "input size",
      "title": "map: out-of-core (ChunkMap) vs in-mem parlay::tabulate",
      "data_globs": ["map_in*", "map_out*"]},
@@ -328,7 +305,6 @@ EXAMPLES = [
      "cols": ["n", "build_s", "reduce_s", "inmem_reduce_s", "result", "throughput_gb_s"],
      "time_col": "reduce_s", "inmem_col": "inmem_reduce_s",
      "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 16,
      "xlabel": "input size",
      "title": "reduce: out-of-core (ChunkReduce) vs in-mem parlaylib",
      "data_globs": ["red_in*"]},
@@ -337,7 +313,6 @@ EXAMPLES = [
      "cols": ["n", "build_s", "scan_s", "inmem_scan_s", "total", "throughput_gb_s"],
      "time_col": "scan_s", "inmem_col": "inmem_scan_s",
      "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 24,
      "xlabel": "input size",
      "title": "scan: out-of-core (ChunkScan) vs in-mem parlaylib",
      "data_globs": ["scn_in*", "scn_out*"]},
@@ -346,7 +321,6 @@ EXAMPLES = [
      "cols": ["n", "tabulate_s", "inmem_tabulate_s", "throughput_gb_s"],
      "time_col": "tabulate_s", "inmem_col": "inmem_tabulate_s",
      "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 16,
      "xlabel": "input size",
      "title": "tabulate: out-of-core (ChunkFlatTabulate) vs in-mem parlaylib",
      "data_globs": ["tab_out*"]},
@@ -355,16 +329,14 @@ EXAMPLES = [
      "cols": ["n", "build_s", "zip_s", "inmem_zip_s", "result", "throughput_gb_s"],
      "time_col": "zip_s", "inmem_col": "inmem_zip_s",
      "elem_bytes": 8, "input_seqs": 2,
-     "budget_base": "phys/2", "budget_mult": 40,
      "xlabel": "input size",
-     "title": "zip+reduce: out-of-core delayed (plaid) vs in-mem parlay::zip",
+     "title": "zip+reduce: out-of-core delayed (plaid) vs in-mem fused parlaylib",
      "data_globs": ["zip_a*", "zip_b*"]},
 
     {"name": "filter", "target": "bin/primitive_demosExample", "pre_argv": ["filter"],
      "cols": ["n", "build_s", "filter_s", "inmem_filter_s", "count", "throughput_gb_s"],
      "time_col": "filter_s", "inmem_col": "inmem_filter_s",
      "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 24,
      "xlabel": "input size",
      "title": "filter: out-of-core (ChunkFilter) vs in-mem parlaylib",
      "data_globs": ["flt_in*", "flt_out*"]},
@@ -373,7 +345,6 @@ EXAMPLES = [
      "cols": ["n", "build_s", "pack_s", "inmem_pack_s", "out_elems", "throughput_gb_s"],
      "time_col": "pack_s", "inmem_col": "inmem_pack_s",
      "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 32,
      "xlabel": "input size",
      "title": "pack: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["pck_in*", "pck_out*"]},
@@ -382,7 +353,6 @@ EXAMPLES = [
      "cols": ["n", "build_s", "sort_s", "inmem_sort_s", "throughput_gb_s"],
      "time_col": "sort_s", "inmem_col": "inmem_sort_s",
      "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 24,
      "xlabel": "input size",
      "title": "group by index: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["gbi_ex_in*", "gbi_ex_bucket*"]},
@@ -391,7 +361,6 @@ EXAMPLES = [
      "cols": ["n", "build_s", "reverse_s", "inmem_reverse_s", "throughput_gb_s"],
      "time_col": "reverse_s", "inmem_col": "inmem_reverse_s",
      "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 24,
      "xlabel": "input size",
      "title": "reverse: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["rev_in*"]},
@@ -400,7 +369,6 @@ EXAMPLES = [
      "cols": ["n", "build_s", "hist_s", "inmem_hist_s", "num_buckets", "throughput_gb_s"],
      "time_col": "hist_s", "inmem_col": "inmem_hist_s",
      "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys/2", "budget_mult": 16,
      "xlabel": "input size",
      "title": "histogram by index: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["hist_in*"]},
@@ -421,7 +389,6 @@ EXAMPLES = [
               "out_elems", "throughput_gb_s"],
      "time_col": "cut_s", "inmem_col": "inmem_cut_s",
      "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "phys", "budget_mult": 24,
      "xlabel": "input size",
      "title": "cut / slice: out-of-core (plaid) vs in-mem parlaylib",
      "data_globs": ["cut_in*", "cut_out*"]},
@@ -444,8 +411,6 @@ EXAMPLES = [
                        "random_shuffle_method (out-of-core)"),
      "extra_series": [("perm_s", "Permutation (out-of-core)", "^-")],
      "elem_bytes": 8, "input_seqs": 1,
-     "budget_base": "avail", "budget_mult": 32,  # matches primitive_demos.cpp's
-     # random_shuffle demo now budgeting off AvailablePhysicalMemoryBytes()
      "xlabel": "input size",
      "title": "random shuffle: two out-of-core methods vs in-mem parlaylib",
      "data_globs": ["rs_in*", "rs_bucket_*", "rs_out_*", "rs_base_*", "perm*"]},
@@ -606,7 +571,7 @@ def make(target):
         sys.exit(f"make {target} failed (exit {r.returncode})")
 
 
-def run_binary(path, args, fatal=True):
+def run_binary(path, args, fatal=True, env=None):
     """Run a benchmark binary, echo its output, return (csv_fields, problem).
 
     `problem` is None on a clean run, else a short description (crash,
@@ -614,10 +579,11 @@ def run_binary(path, args, fatal=True):
     benchmarks) any problem aborts the whole run; with fatal=False (the
     examples sweep) it is returned so the caller can warn and keep sweeping.
     `csv_fields` is None if the binary printed no CSV line (e.g. it crashed).
+    `env`, if given, is the child's full environment (default: inherit ours).
     """
     cmd = [path] + [str(a) for a in args]
     print(f"  $ {' '.join(cmd)}", flush=True)
-    r = subprocess.run(cmd, cwd=REPO_ROOT,
+    r = subprocess.run(cmd, cwd=REPO_ROOT, env=env,
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     print(r.stdout, end="", flush=True)
     csv = None
@@ -688,8 +654,39 @@ def run_chunk_size(chunk_sizes, n, extra_args, clear_glob, clear_enabled):
 
 
 # ── examples sweep ──────────────────────────────────────────────────────────
+# --inmem-uncapped child environments.  Every example gates its in-memory
+# baseline on `n*k <= budget` with the budget overridable by these env vars
+# (bellman_ford has its own pair), so 2^62 lifts every gate and 0 closes it.
+# BELLMAN_FORD_BUILD_BUDGET_BYTES=0 means "no check" to bellman_ford.cpp; once
+# the baseline is off it is unset again, restoring its default so a graph whose
+# out-of-core arrays alone exceed DRAM takes its clean "SKIPPED" path instead
+# of being OOM-killed.
+_INMEM_UNCAPPED_ENV = {"EXAMPLE_INMEM_BUDGET_BYTES": str(2**62),
+                       "BELLMAN_FORD_INMEM_MAX_N": str(2**62),
+                       "BELLMAN_FORD_BUILD_BUDGET_BYTES": "0"}
+_INMEM_OFF_ENV = {"EXAMPLE_INMEM_BUDGET_BYTES": "0",
+                  "BELLMAN_FORD_INMEM_MAX_N": "0",
+                  "BELLMAN_FORD_BUILD_BUDGET_BYTES": None}
+
+
+def _child_env(overrides):
+    env = dict(os.environ)
+    for k, v in overrides.items():
+        if v is None:
+            env.pop(k, None)
+        else:
+            env[k] = v
+    return env
+
+
+def _killed_by_signal(problem):
+    """True if run_binary's `problem` says the child died by a signal
+    (returncode < 0: OOM SIGKILL or a crash), as opposed to exiting non-zero."""
+    return bool(problem) and re.match(r"exited -\d+", problem) is not None
+
+
 def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings,
-                n_values=None):
+                n_values=None, inmem_uncapped=False):
     """Sweep one example over input `sizes` (bytes); return parsed rows.
 
     If `n_values` is given (a list of element counts), it takes precedence over
@@ -712,6 +709,13 @@ def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings,
     noise source in-binary (a sync()+settle between the input build and the op,
     so the build's writeback doesn't inflate the op timer — see quiesce_drives()
     in each example).
+
+    With `inmem_uncapped`, the in-memory baseline's RAM gate is lifted
+    (_INMEM_UNCAPPED_ENV) so it runs at every size until it actually dies.  The
+    first point killed by a signal (OOM SIGKILL / crash) is rerun once with the
+    baseline off (_INMEM_OFF_ENV), and every later point stays baseline-off, so
+    the sweep continues out-of-core only.  A non-signal non-zero exit (a
+    cross-check mismatch) is NOT rerun -- turning the baseline off would hide it.
     """
     make(entry["target"])
     binary = os.path.join(BINDIR, os.path.basename(entry["target"]))
@@ -719,12 +723,25 @@ def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings,
     points = ([(n, n * entry["elem_bytes"] * entry["input_seqs"]) for n in n_values]
              if n_values is not None else
              [(size_to_n(entry, size), size) for size in sizes])
+    baseline_alive = True
     for n, size in points:
         print(f"\n=== example {entry['name']}: size={_bytes_fmt(size, None)} "
               f"(n={n}) ===", flush=True)
-        fields, problem = run_binary(binary, entry.get("pre_argv", []) + [n]
-                                     + entry.get("extra_argv", []) + extra_args,
-                                     fatal=False)
+        argv = entry.get("pre_argv", []) + [n] + entry.get("extra_argv", []) + extra_args
+        env = None
+        if inmem_uncapped:
+            env = _child_env(_INMEM_UNCAPPED_ENV if baseline_alive else _INMEM_OFF_ENV)
+        fields, problem = run_binary(binary, argv, fatal=False, env=env)
+        if inmem_uncapped and baseline_alive and _killed_by_signal(problem):
+            w = (f"example {entry['name']} at size={_bytes_fmt(size, None)} (n={n}): "
+                 f"{problem} with the in-memory baseline uncapped — rerunning this "
+                 "point with the baseline off; out-of-core only from here")
+            print(f"  !!! {w}", flush=True)
+            warnings.append(w)
+            baseline_alive = False
+            clear_bench_data(clear_glob, clear_enabled)
+            fields, problem = run_binary(binary, argv, fatal=False,
+                                         env=_child_env(_INMEM_OFF_ENV))
         if problem:
             w = (f"example {entry['name']} at size={_bytes_fmt(size, None)} (n={n}): "
                  f"{problem}" + ("" if fields else " — point dropped"))
@@ -939,6 +956,12 @@ def main():
                          "'2^32 2^33 2^34'); each n is passed to the binary exactly as "
                          "given (no chunk-grid rounding). Takes precedence over "
                          "--example-sizes when non-empty")
+    ap.add_argument("--inmem-uncapped", action="store_true",
+                    help="examples sweep: lift every in-memory baseline's RAM gate so "
+                         "it runs until it actually crashes (OOM); that point is "
+                         "rerun with the baseline off and the entry continues "
+                         "out-of-core only (see run_example). Check `swapon --show` "
+                         "first: a big swap device makes the baseline thrash, not die")
     ap.add_argument("--ssd-args", default=os.environ.get("BENCH_SSD_ARGS", ""),
                     help="extra global flags passed to each binary (e.g. '--num_ssd=4')")
     ap.add_argument("--fstrim-glob",
@@ -1005,7 +1028,8 @@ def main():
             print(f"\n######## example: {entry['name']} ########")
             rows = run_example(entry, example_sizes, extra,
                                args.fstrim_glob, clear_enabled, warnings,
-                               n_values=example_n_values)
+                               n_values=example_n_values,
+                               inmem_uncapped=args.inmem_uncapped)
             write_csv(os.path.join(outdir, f"{entry['name']}_scale.csv"),
                       ["input_bytes"] + entry["cols"], rows)
             # The CSV is the result; the plot is a convenience.  A plotting

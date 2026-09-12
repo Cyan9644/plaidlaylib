@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Combined relative-performance bar chart: for each label in
-SUMMARY_ENTRIES (12 primitives + 9 examples), plots the largest input size
+SUMMARY_ENTRIES (11 primitives + 9 examples), plots the largest input size
 at which that entry's own recorded run still has an in-memory parlaylib
 baseline, against a pinned in-mem reference at 1.0 -- in the spirit of
 parlaylib's own "ParlayLib vs ParallelSTL" figure (see
@@ -10,12 +10,11 @@ primitives/examples against their in-memory parlaylib counterparts instead.
 This script runs NO binaries and calls `make` on nothing: it only reads the
 `<name>_scale.csv` files benchmarks/run_benches.py's example sweep already
 writes to `<results-root>/<timestamp>/<name>_scale.csv` (one row per swept
-size). Populate those first -- e.g. `make bench-examples` for the handful of
-standalone examples it covers, or `python3 benchmarks/run_benches.py
---example "<name>,<name>,..."` for any entry (including the primitive demos,
-which all share bin/primitive_demosExample via pre_argv) -- at whatever
-sizes and cadence you like; this script just compiles whatever is already on
-disk into one chart.
+size). Populate those with `make bench-examples-full` on the benchmark
+machine: it sweeps exactly this script's entries (via `--list`) with the
+in-memory baseline uncapped (run_benches.py --inmem-uncapped), so each
+entry's last in-mem row is the largest size its baseline actually survived,
+then `make bench-summary RUN=results/<timestamp>` to plot that run.
 
 Reuses run_benches.py by import (the EXAMPLES registry and REPO_ROOT) -- the
 same `import run_benches as rb` precedent io_trace.py / csv_from_log.py /
@@ -51,7 +50,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import run_benches as rb  # noqa: E402  (sibling module; import-safe)
 
-# (display_label, EXAMPLES registry name) pairs for the 21 bars: 12 primitives
+# (display_label, EXAMPLES registry name) pairs for the 20 bars: 11 primitives
 # + 9 examples, "sort"/"samplesort" collapsed to the single samplesort entry
 # and "bellman_ford" mapping to the bellman_ford_sparse registry entry (the
 # sparse RMAT case). Already alphabetical by display_label; asserted below so
@@ -92,8 +91,10 @@ SUMMARY_ENTRIES = [
     ("scan", "scan"),
     ("sort / samplesort", "samplesort"),
     ("tabulate", "tabulate"),
-    ("zip", "zip"),
 ]
+# `zip` is deliberately not a bar: its demo is a fused zip+map+reduce (a dot
+# product) over two sequences -- the same shape the linefit bar already shows
+# -- so it adds no new information.
 assert sorted(SUMMARY_ENTRIES) == SUMMARY_ENTRIES, \
     "SUMMARY_ENTRIES must stay alphabetical by display_label"
 
@@ -118,15 +119,24 @@ def find_csv(name, dir_arg, results_root):
     return candidates[-1] if candidates else None
 
 
+def _positive(row, col):
+    try:
+        return float(row.get(col, "")) > 0
+    except ValueError:  # blank field
+        return False
+
+
 def load_entry_row(csv_path, entry):
     """Return the row to plot from one entry's CSV: the largest-n row whose
-    in-mem column is non-blank (mirroring the figure's old meaning for a bar
-    -- the biggest size at which the in-memory baseline still ran), or None
-    if the file has no such row.
+    out-of-core and in-mem times are both present and positive (the biggest
+    size at which the in-memory baseline still ran), or None if the file has
+    no such row.
     """
+    time_col = entry.get("time_col", "time_s")
     inmem_col = entry["inmem_col"]
     with open(csv_path, newline="") as f:
-        rows = [r for r in csv.DictReader(f) if r.get(inmem_col, "").strip()]
+        rows = [r for r in csv.DictReader(f)
+                if _positive(r, time_col) and _positive(r, inmem_col)]
     if not rows:
         return None
     return max(rows, key=lambda r: int(r["n"]))
@@ -252,7 +262,14 @@ def main():
     ap.add_argument("--results-root", default=os.environ.get("BENCH_OUTDIR", "results"),
                     help="parent dir to search for <timestamp>/<name>_scale.csv "
                          "files when --dir isn't given (default: results)")
+    ap.add_argument("--list", action="store_true",
+                    help="print the entries' run_benches.py registry names "
+                         "(comma-separated, for run_benches.py --example) and exit")
     args = ap.parse_args()
+
+    if args.list:
+        print(",".join(name for _, name in SUMMARY_ENTRIES))
+        return
 
     selected = [x for x in re.split(r"[,\s]+", args.only) if x]
     known = {l for l, _ in SUMMARY_ENTRIES}

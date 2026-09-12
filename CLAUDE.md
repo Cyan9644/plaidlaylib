@@ -402,7 +402,11 @@ mismatch — a differential test in the spirit of the benchmarks' `agree`.
   instead of `plaid::count_sort_by_key`, since a separate, already-tested
   `group_by_index` primitive existed but had no demo of its own; the library's
   `count_sort`/`count_sort_by_key` are untouched and still used internally by
-  `sample_sort`'s bucketing.  `reverse` is a new demo for the recovered
+  `sample_sort`'s bucketing.  `zip`'s in-memory baseline is **fused**
+  (`parlay::reduce` over a `parlay::delayed_tabulate` of `a[i]*b[i]`, 16n
+  footprint); it used to be `parlay::zip`, which materializes the pairs and
+  then a product array — an unfused baseline doing ~4x the memory traffic that
+  made the out-of-core side look only ~2x slower.  `reverse` is a new demo for the recovered
   `plaid::reverse` primitive (`Primitives/secondary_primitives.h`), recovered
   from `9c96e4a`'s `Primitives/reverse.h`.  **Known broken: `cut` segfaults**
   (a pre-existing break carried over from the parked `external_TODO` tree, not
@@ -476,22 +480,43 @@ produced no CSV line, keeps sweeping, and repeats all warnings in the end-of-run
 summary (also persisted to `warnings.txt`).  It is **not** part of
 `make bench` / `--all`.
 
+`make bench-examples-full` sweeps exactly the summary figure's entries
+(`summary_figure.py --list`) with **`--inmem-uncapped`**: the in-memory
+baselines' conservative C++ RAM gates are lifted (`EXAMPLE_INMEM_BUDGET_BYTES`
+and `BELLMAN_FORD_INMEM_MAX_N` set to 2^62, `BELLMAN_FORD_BUILD_BUDGET_BYTES=0`),
+so each baseline runs at every size on the ×4 ladder until it actually dies.
+A point killed by a signal (OOM SIGKILL or crash) is rerun once with the
+baseline off (`EXAMPLE_INMEM_BUDGET_BYTES=0`, `BELLMAN_FORD_INMEM_MAX_N=0`,
+bellman_ford's build budget back to its default so an out-of-core graph too
+big for DRAM still takes its clean "SKIPPED" path), and the entry continues
+out-of-core only.  A non-signal non-zero exit (a cross-check mismatch) is not
+rerun — disabling the baseline would hide it.  One run therefore feeds both
+the per-example scale plots and the summary figure.  `bench-examples` /
+`bench-examples-mid` stay capped (on tmpfs an uncapped baseline OOM competes
+with the "drives" for the same RAM).  **Before a full sweep run `swapon
+--show`** on the bench box: the crash→rerun path relies on the OOM killer
+firing promptly, and a large disk swap device makes an over-budget baseline
+thrash instead.  Fedora's default swap-on-zram (≤8 GiB, RAM-backed) is
+harmless on the 500 GiB machine; if a big disk swap is listed, `sudo swapoff
+-a` for the run (`swapon -a` after).  Nothing in the repo automates this.
+`group_by_index`'s demo sizes its bucket count off `phys/2` directly, not the
+env-overridable baseline budget, so neither setting changes its out-of-core
+work.
+
 `make bench-summary` (`benchmarks/summary_figure.py`) draws the combined
-relative-performance bar chart: 21 entries (12 primitives + 9 examples).  It
+relative-performance bar chart: 20 entries (11 primitives + 9 examples; `zip`
+is excluded because its fused dot product is the same shape as `linefit`).  It
 runs **no binaries itself** — it only reads the `<name>_scale.csv` files
-`run_benches.py`'s example sweep already writes to
-`results/<timestamp>/<name>_scale.csv` (via `make bench-examples` or
-`run_benches.py --example ...`, run beforehand at whatever sizes/cadence),
-picking for each entry the largest-n row whose in-mem column is non-blank;
-without `--dir`, each entry's CSV is found by globbing every
-`results/*/` directory and taking the most recent match, so bars swept at
-different times still combine into one chart.  An entry with no matching CSV,
-or none of whose rows have a usable in-mem column, is skipped with a warning,
-never fabricated.  Because it does no execution, its output image is also
-half the height of the old run-everything design:
-`figsize=(fig_width, 1.25)` at 300 dpi → 375 px tall (was 750 px).  Its
-`SUMMARY_ENTRIES` asserts both alphabetical order and membership in
-`run_benches.EXAMPLES`, so the two files must be edited together.
+`run_benches.py`'s example sweep already writes, picking for each entry the
+largest-n row whose out-of-core and in-mem columns are both non-blank.
+`make bench-summary RUN=results/<timestamp>` pins it to one full sweep
+(`--dir`); without it, each entry's CSV is the most recent match across
+`results/*/`, so bars swept at different times still combine into one chart
+(but a later small dev-box sweep would silently win).  An entry with no
+matching CSV, or no usable row, is skipped with a warning, never fabricated.
+Output is `figsize=(fig_width, 1.25)` at 300 dpi.  Its `SUMMARY_ENTRIES`
+asserts both alphabetical order and membership in `run_benches.EXAMPLES`, so
+the two files must be edited together.
 
 ## Data model
 

@@ -344,20 +344,24 @@ bench-examples-mid:
 
 # Full-scale examples sweep tuned for the benchmark machine (500 GiB RAM, 30x 1TB
 # SSDs): input sizes up to 1 TiB.  Multi-TB of I/O — not for a tmpfs dev box.
+# Sweeps every entry of the summary bar chart (summary_figure.py --list) with
+# the in-memory baseline UNCAPPED (--inmem-uncapped): it runs at every size
+# until it crashes (OOM), that point is rerun with the baseline off, and the
+# entry continues out-of-core only.  One run feeds both the per-example scale
+# plots and `make bench-summary`.  Check `swapon --show` first (see CLAUDE.md).
 bench-examples-full:
-	python3 benchmarks/run_benches.py --example "primes,kmp,rabin_karp,bigint_add,linefit,convex_hull,samplesort" --outdir results \
+	python3 benchmarks/run_benches.py --inmem-uncapped --outdir results \
+	    --example "$$(python3 benchmarks/summary_figure.py --list)" \
 	    --example-sizes "1GiB 4GiB 16GiB 64GiB 256GiB 1TiB"
 
-# Combined bar chart: 21 primitives/examples, plotted as a relative-
+# Combined bar chart: 20 primitives/examples, plotted as a relative-
 # performance bar chart (in-mem pinned at 1.0). Runs NO binaries itself --
-# it only reads the <name>_scale.csv files already written under
-# results/<timestamp>/ by `make bench-examples` / `run_benches.py --example
-# ...` sweeps, picking each entry's largest-n row with a non-blank in-mem
-# column; an entry with no matching CSV (or none with a usable in-mem
-# column) is skipped with a warning rather than fabricated. See
-# benchmarks/summary_figure.py; populate the underlying sweep CSVs first.
+# it only reads the <name>_scale.csv files a sweep already wrote, picking each
+# entry's largest-n row with a non-blank in-mem column.  Pin it to one
+# `make bench-examples-full` run with RUN=results/<timestamp>; without RUN each
+# entry's newest CSV under results/ is used.  See benchmarks/summary_figure.py.
 bench-summary:
-	python3 benchmarks/summary_figure.py --outdir results
+	python3 benchmarks/summary_figure.py --outdir results $(if $(RUN),--dir $(RUN),)
 
 # Single-run IO/CPU trace of one example (per-SSD read/write throughput + %util +
 # CPU over time; build/op phases marked).  Meaningful on real block devices only.

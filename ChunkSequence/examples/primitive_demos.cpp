@@ -603,22 +603,22 @@ namespace demo_zip {
 // the delayed (fused) layer (Primitives/delayed.h): delay both operands ->
 // zip -> map(multiply) -> reduce(sum), a single streaming read pass over
 // both operands with zero intermediate writes -- the point of the delayed
-// layer (see the file-level comment there).  Compares against parlay::zip +
-// parlay::reduce on the identical operands built in DRAM.
+// layer (see the file-level comment there).  Compares against the same
+// fused computation on the identical operands built in DRAM.
 //
-// parlay::zip has no standalone dot-product helper, so the in-memory
-// baseline zips the two operand sequences (producing std::tuple<uint64_t,
-// uint64_t> elements), maps the product with parlay::tabulate, and reduces
-// with parlay::addm<uint64_t>() -- the direct in-memory analogue of the
-// out-of-core delayed chain.
+// The in-memory baseline is parlay::reduce over a parlay::delayed_tabulate of
+// a[i]*b[i] -- fused like the out-of-core chain, so it reads each operand
+// once and materializes nothing.  (It used to be parlay::zip, which
+// materializes the pair sequence, then a product sequence, then reduces:
+// an unfused baseline doing ~4x the memory traffic, which made the
+// out-of-core side look closer to DRAM than it is.)
 //
 // Dual-purpose like the other examples: prints human-readable timings and
 // ends with a machine-readable `CSV,` line that benchmarks/run_benches.py
 // greps.  Unsigned multiply-then-add is associative/commutative bit-exact
 // regardless of term order, so the cross-check is exact scalar equality.
-// The in-memory baseline's resident footprint is both operands (16n) + the
-// materialized zipped-pair sequence (16n) + the product sequence (8n) =
-// ~40n, gated via EXAMPLE_INMEM_BUDGET_BYTES.
+// The in-memory baseline's resident footprint is the two operands (16n),
+// gated via EXAMPLE_INMEM_BUDGET_BYTES.
 //
 //   usage: zipExample [global --flags] [n]
 
@@ -656,14 +656,14 @@ int run(int argc, char* argv[]) {
   const size_t n = (argc > 1) ? std::stoull(argv[1]) : 1'000'000;
   CHECK(n > 0) << "need n > 0 (n=" << n << ")";
 
-  // RAM budget: both baseline operands (16n) + materialized zipped pairs
-  // (16n) + product sequence (8n) = ~40n.
+  // RAM budget: both baseline operands (16n); the fused reduce materializes
+  // nothing else.
   const size_t phys =
       (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
   size_t budget = phys / 2;
   if (const char* e = getenv("EXAMPLE_INMEM_BUDGET_BYTES"))
     budget = std::stoull(e);
-  const bool inmem_ok = n <= budget / 40;
+  const bool inmem_ok = n <= budget / 16;
 
   const std::string a_prefix = "zip_a";
   const std::string b_prefix = "zip_b";
@@ -704,13 +704,11 @@ int run(int argc, char* argv[]) {
     auto a_mem = parlay::tabulate(n, a_at);
     auto b_mem = parlay::tabulate(n, b_at);
     t0 = Clock::now();
-    auto zipped_mem = parlay::zip(a_mem, b_mem);
-    auto prod_mem = parlay::tabulate(n, [&](size_t i) {
-      return std::get<0>(zipped_mem[i]) * std::get<1>(zipped_mem[i]);
-    });
-    const uint64_t dot_mem = parlay::reduce(prod_mem, parlay::addm<uint64_t>());
+    const uint64_t dot_mem = parlay::reduce(
+        parlay::delayed_tabulate(n, [&](size_t i) { return a_mem[i] * b_mem[i]; }),
+        parlay::addm<uint64_t>());
     inmem_zip_s = elapsed(t0);
-    std::cout << "in-mem parlay::zip+reduce: dot=" << dot_mem << "   "
+    std::cout << "in-mem fused zip+reduce: dot=" << dot_mem << "   "
               << std::setprecision(4) << inmem_zip_s << "s\n";
     if (dot != dot_mem) {
       std::cout << "*** MISMATCH: out-of-core dot " << dot << " != in-mem dot "
@@ -720,7 +718,7 @@ int run(int argc, char* argv[]) {
       std::cout << "cross-check: dot products match exactly\n";
     }
   } else {
-    std::cout << "in-mem parlay::zip+reduce: skipped (~40n footprint exceeds "
+    std::cout << "in-mem fused zip+reduce: skipped (~16n footprint exceeds "
               << "RAM budget " << std::setprecision(2) << to_gb(budget)
               << " GB)\n";
   }
@@ -1121,12 +1119,15 @@ int run(int argc, char* argv[]) {
   // Primitives/chunk_seq.h's BucketWriter / Primitives/sort.h's
   // group_by_index) can't dwarf the RAM budget at small n.  Mirrors
   // sample_sort's own bucket count scaling with input size
-  // (Primitives/sort.h) instead of a fixed constant.
+  // (Primitives/sort.h) instead of a fixed constant.  Sized off phys/2
+  // directly, NOT the env-overridable baseline `budget`: run_benches.py's
+  // --inmem-uncapped sets that to 2^62 or 0, which must not change the
+  // out-of-core algorithm being timed.
   const size_t per_bucket_overhead_bytes =
       plaid::kRequestsPerBucket * IO_VECTOR_SIZE * sizeof(struct iovec) +
       parlay::num_workers() * SAMPLE_SORT_BUCKET_SIZE;
   const size_t max_buckets_by_ram =
-      std::max<size_t>(1, budget / 4 / per_bucket_overhead_bytes);
+      std::max<size_t>(1, phys / 2 / 4 / per_bucket_overhead_bytes);
   const size_t num_buckets =
       std::max<size_t>(1, std::min({kMaxBuckets, max_buckets_by_ram, n}));
 
