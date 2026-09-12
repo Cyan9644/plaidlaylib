@@ -343,16 +343,18 @@ bench-examples-mid:
 	    --example-sizes "1GiB 4GiB 16GiB 64GiB 256GiB"
 
 # Full-scale examples sweep tuned for the benchmark machine (500 GiB RAM, 30x 1TB
-# SSDs): input sizes up to 1 TiB.  Multi-TB of I/O — not for a tmpfs dev box.
+# SSDs): input sizes up to 2 TiB.  Multi-TB of I/O — not for a tmpfs dev box.
 # Sweeps every entry of the summary bar chart (summary_figure.py --list) with
 # the in-memory baseline UNCAPPED (--inmem-uncapped): it runs at every size
 # until it crashes (OOM), that point is rerun with the baseline off, and the
-# entry continues out-of-core only.  One run feeds both the per-example scale
-# plots and `make bench-summary`.  Check `swapon --show` first (see CLAUDE.md).
+# entry continues out-of-core only.  Any single run over 30 minutes is killed
+# (--timeout-min), which drops that point and skips the entry's larger sizes.
+# One run feeds both the per-example scale plots and `make bench-summary`.
+# Check `swapon --show` first (see CLAUDE.md).
 bench-examples-full:
-	python3 benchmarks/run_benches.py --inmem-uncapped --outdir results \
+	python3 benchmarks/run_benches.py --inmem-uncapped --timeout-min 30 --outdir results \
 	    --example "$$(python3 benchmarks/summary_figure.py --list)" \
-	    --example-sizes "1GiB 4GiB 16GiB 64GiB 256GiB 1TiB"
+	    --example-sizes "1GiB 4GiB 16GiB 64GiB 256GiB 1TiB 2TiB"
 
 # Combined bar chart: 20 primitives/examples, plotted as a relative-
 # performance bar chart (in-mem pinned at 1.0). Runs NO binaries itself --

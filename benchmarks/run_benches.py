@@ -571,20 +571,33 @@ def make(target):
         sys.exit(f"make {target} failed (exit {r.returncode})")
 
 
-def run_binary(path, args, fatal=True, env=None):
+def run_binary(path, args, fatal=True, env=None, timeout=None):
     """Run a benchmark binary, echo its output, return (csv_fields, problem).
 
     `problem` is None on a clean run, else a short description (crash,
-    verification mismatch, missing CSV line).  With fatal=True (the substrate
-    benchmarks) any problem aborts the whole run; with fatal=False (the
-    examples sweep) it is returned so the caller can warn and keep sweeping.
-    `csv_fields` is None if the binary printed no CSV line (e.g. it crashed).
-    `env`, if given, is the child's full environment (default: inherit ours).
+    verification mismatch, missing CSV line, timeout).  With fatal=True (the
+    substrate benchmarks) any problem aborts the whole run; with fatal=False
+    (the examples sweep) it is returned so the caller can warn and keep
+    sweeping.  `csv_fields` is None if the binary printed no CSV line (e.g. it
+    crashed).  `env`, if given, is the child's full environment (default:
+    inherit ours).  `timeout` (seconds) SIGKILLs a run that exceeds it.
     """
     cmd = [path] + [str(a) for a in args]
     print(f"  $ {' '.join(cmd)}", flush=True)
-    r = subprocess.run(cmd, cwd=REPO_ROOT, env=env,
-                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        r = subprocess.run(cmd, cwd=REPO_ROOT, env=env, timeout=timeout,
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    except subprocess.TimeoutExpired as e:
+        # subprocess.run has already killed the child; e.stdout holds what it
+        # printed so far (bytes on POSIX even with text=True).
+        out = e.stdout or ""
+        if isinstance(out, bytes):
+            out = out.decode(errors="replace")
+        print(out, end="", flush=True)
+        problem = f"timed out after {timeout:g}s (killed)"
+        if fatal:
+            sys.exit(f"\n*** {os.path.basename(path)} {problem} — aborting ***")
+        return None, problem
     print(r.stdout, end="", flush=True)
     csv = None
     for line in r.stdout.splitlines():
@@ -686,7 +699,7 @@ def _killed_by_signal(problem):
 
 
 def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings,
-                n_values=None, inmem_uncapped=False):
+                n_values=None, inmem_uncapped=False, timeout=None):
     """Sweep one example over input `sizes` (bytes); return parsed rows.
 
     If `n_values` is given (a list of element counts), it takes precedence over
@@ -716,6 +729,10 @@ def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings,
     baseline off (_INMEM_OFF_ENV), and every later point stays baseline-off, so
     the sweep continues out-of-core only.  A non-signal non-zero exit (a
     cross-check mismatch) is NOT rerun -- turning the baseline off would hide it.
+
+    `timeout` (seconds) kills any single run that exceeds it; the point is
+    dropped and the entry's remaining (larger) sizes are skipped.  A timeout is
+    never treated as a baseline crash, so it does not trigger the rerun.
     """
     make(entry["target"])
     binary = os.path.join(BINDIR, os.path.basename(entry["target"]))
@@ -724,14 +741,14 @@ def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings,
              if n_values is not None else
              [(size_to_n(entry, size), size) for size in sizes])
     baseline_alive = True
-    for n, size in points:
+    for i, (n, size) in enumerate(points):
         print(f"\n=== example {entry['name']}: size={_bytes_fmt(size, None)} "
               f"(n={n}) ===", flush=True)
         argv = entry.get("pre_argv", []) + [n] + entry.get("extra_argv", []) + extra_args
         env = None
         if inmem_uncapped:
             env = _child_env(_INMEM_UNCAPPED_ENV if baseline_alive else _INMEM_OFF_ENV)
-        fields, problem = run_binary(binary, argv, fatal=False, env=env)
+        fields, problem = run_binary(binary, argv, fatal=False, env=env, timeout=timeout)
         if inmem_uncapped and baseline_alive and _killed_by_signal(problem):
             w = (f"example {entry['name']} at size={_bytes_fmt(size, None)} (n={n}): "
                  f"{problem} with the in-memory baseline uncapped — rerunning this "
@@ -741,10 +758,15 @@ def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings,
             baseline_alive = False
             clear_bench_data(clear_glob, clear_enabled)
             fields, problem = run_binary(binary, argv, fatal=False,
-                                         env=_child_env(_INMEM_OFF_ENV))
+                                         env=_child_env(_INMEM_OFF_ENV),
+                                         timeout=timeout)
+        # A timed-out point's larger successors would only take longer: stop.
+        timed_out = bool(problem) and problem.startswith("timed out")
         if problem:
             w = (f"example {entry['name']} at size={_bytes_fmt(size, None)} (n={n}): "
                  f"{problem}" + ("" if fields else " — point dropped"))
+            if timed_out and i + 1 < len(points):
+                w += f"; skipping the {len(points) - i - 1} larger size(s)"
             print(f"  !!! {w}", flush=True)
             warnings.append(w)
         if fields:
@@ -752,6 +774,8 @@ def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings,
             row["input_bytes"] = str(size)
             rows.append(row)
         clear_bench_data(clear_glob, clear_enabled)   # don't leave output on the drives
+        if timed_out:
+            break
     return rows
 
 
@@ -962,6 +986,11 @@ def main():
                          "rerun with the baseline off and the entry continues "
                          "out-of-core only (see run_example). Check `swapon --show` "
                          "first: a big swap device makes the baseline thrash, not die")
+    ap.add_argument("--timeout-min", type=float, default=0,
+                    help="examples sweep: kill any single binary run that takes longer "
+                         "than this many minutes (input build included); the point is "
+                         "dropped and that example's larger sizes are skipped "
+                         "(default: 0 = no limit)")
     ap.add_argument("--ssd-args", default=os.environ.get("BENCH_SSD_ARGS", ""),
                     help="extra global flags passed to each binary (e.g. '--num_ssd=4')")
     ap.add_argument("--fstrim-glob",
@@ -1029,7 +1058,8 @@ def main():
             rows = run_example(entry, example_sizes, extra,
                                args.fstrim_glob, clear_enabled, warnings,
                                n_values=example_n_values,
-                               inmem_uncapped=args.inmem_uncapped)
+                               inmem_uncapped=args.inmem_uncapped,
+                               timeout=args.timeout_min * 60 or None)
             write_csv(os.path.join(outdir, f"{entry['name']}_scale.csv"),
                       ["input_bytes"] + entry["cols"], rows)
             # The CSV is the result; the plot is a convenience.  A plotting

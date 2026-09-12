@@ -474,7 +474,7 @@ sequence's element size) and `input_seqs` (how many input sequences it reads), a
 8-byte sequence at the same size.  Entries for the eleven primitive demos carry
 `pre_argv` (the subcommand name), which `run_examples` places ahead of `n`.
 `make bench-examples` sweeps dev-box sizes (`128MiB … 1GiB`); `bench-examples-mid`
-goes to 256 GiB and `bench-examples-full` to 1 TiB.  The examples sweep does
+goes to 256 GiB and `bench-examples-full` to 2 TiB.  The examples sweep does
 **not** abort on a problem: the runner warns immediately, drops any point that
 produced no CSV line, keeps sweeping, and repeats all warnings in the end-of-run
 summary (also persisted to `warnings.txt`).  It is **not** part of
@@ -490,8 +490,14 @@ baseline off (`EXAMPLE_INMEM_BUDGET_BYTES=0`, `BELLMAN_FORD_INMEM_MAX_N=0`,
 bellman_ford's build budget back to its default so an out-of-core graph too
 big for DRAM still takes its clean "SKIPPED" path), and the entry continues
 out-of-core only.  A non-signal non-zero exit (a cross-check mismatch) is not
-rerun — disabling the baseline would hide it.  One run therefore feeds both
-the per-example scale plots and the summary figure.  `bench-examples` /
+rerun — disabling the baseline would hide it.  The target also passes
+`--timeout-min 30`: any single binary run (input build included) over 30
+minutes is SIGKILLed, the point is dropped with a warning, and the entry's
+remaining larger sizes are skipped (they would only be slower).  A timeout
+never triggers the baseline-off rerun — a thrashing baseline and a slow
+out-of-core run look the same from outside, and guessing wrong costs another
+30 minutes.  One run therefore feeds both the per-example scale plots and the
+summary figure.  `bench-examples` /
 `bench-examples-mid` stay capped (on tmpfs an uncapped baseline OOM competes
 with the "drives" for the same RAM).  **Before a full sweep run `swapon
 --show`** on the bench box: the crash→rerun path relies on the OOM killer
