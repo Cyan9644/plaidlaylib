@@ -223,12 +223,12 @@ EXAMPLES = [
               "throughput_gb_s", "eager_add_s", "eager_result_limbs",
               "eager_throughput_gb_s"],
      "time_col": "add_s", "inmem_col": "eager_add_s",
-     "series_labels": ("eager (out-of-core, materialized)",
+     "series_labels": ("eager (out-of-core)",
                        "delayed (out-of-core, fused)"),
      "no_ram_cliff": True,
      "elem_bytes": 8, "input_seqs": 2,
      "xlabel": "input size",
-     "title": "big-integer add: delayed (fused) vs eager (materialized) out-of-core",
+     "title": "",
      "data_globs": ["bi_a*", "bi_b*", "bi_sum*"]},
 
     # external_linefitExample sweeps n; the plotted time is the fit itself
