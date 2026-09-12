@@ -31,16 +31,9 @@
 //     n   number of points (default 1e6)
 //
 // CSV line:
-// CSV,<n>,<build_s>,<fit_s>,<inmem_fit_s>,<offset>,<slope>,<throughput_gb_s>,
-//     <eager_fit_s>,<eager_offset>,<eager_slope>,<eager_throughput_gb_s>
+// CSV,<n>,<build_s>,<fit_s>,<inmem_fit_s>,<offset>,<slope>,<throughput_gb_s>
 //   throughput = input bytes read / fit_s (the x and y sequences, 2*n*8 bytes,
 //   each read once).
-//
-// eager_fit_s times plaid::linefit_eager (examples/chunk_linefit_eager.h), the
-// same centered-sums algorithm built on NRemoveWorker's explicit lockstep fold
-// instead of the delayed zip/map/reduce engine -- both do 2 reads / 0 writes,
-// so the comparison isolates the delayed engine's fusion overhead rather than
-// an I/O difference.
 //
 // Complexity: O(n) work, O(polylog) span (two delayed passes, no recursion).
 
@@ -69,7 +62,6 @@
 // plaid; the in-memory baseline defines a global point/linefit, so
 // the two coexist.
 #include "ChunkSequence/examples/chunk_linefit.h"
-#include "ChunkSequence/examples/chunk_linefit_eager.h"
 #include "ChunkSequence/examples/in_memory_baselines.h"
 
 using Clock = std::chrono::steady_clock;
@@ -161,37 +153,10 @@ int main(int argc, char* argv[]) {
             << std::setprecision(4) << fit_s << "s   " << std::setprecision(2)
             << gb_s << " GB/s (input read)\n";
 
-  bool agree = true;
-
-  // Eager out-of-core baseline: same centered-sums algorithm, built on
-  // NRemoveWorker's explicit lockstep fold instead of the delayed fusion
-  // engine (examples/chunk_linefit_eager.h).  Cross-checked against the
-  // delayed fit within the same tolerance as the in-mem comparison below --
-  // both sum in chunk-grouped order but the per-worker fold order differs.
-  std::cout << "Fitting a line to " << n
-            << " points (eager, NRemoveWorker)..." << std::flush;
-  t0 = Clock::now();
-  auto [eager_offset, eager_slope] = plaid::linefit_eager(x, y);
-  const double eager_fit_s = elapsed(t0);
-  std::cout << " done\n";
-  const double eager_gb_s = to_gb(2 * n * sizeof(double)) / eager_fit_s;
-  std::cout << "eager: offset = " << eager_offset << "   slope = "
-            << eager_slope << "   " << std::setprecision(4) << eager_fit_s
-            << "s   " << std::setprecision(2) << eager_gb_s
-            << " GB/s (input read)\n";
-  if (!close(offset, eager_offset) || !close(slope, eager_slope)) {
-    std::cout << "*** MISMATCH: delayed (" << offset << ", " << slope
-              << ") vs eager (" << eager_offset << ", " << eager_slope
-              << ") differ beyond tolerance ***\n";
-    agree = false;
-  } else {
-    std::cout << "cross-check: eager fit matches delayed fit (within "
-                 "tolerance)\n";
-  }
-
   // In-memory baseline: parlaylib's linefit on the same points (built in DRAM
   // outside the timed region), cross-checked within a relative tolerance
   // (exact equality would be wrong -- see the file-level comment on `close`).
+  bool agree = true;
   double inmem_fit_s = 0;
   if (inmem_ok) {
     auto points_mem = parlay::tabulate(
@@ -219,8 +184,7 @@ int main(int argc, char* argv[]) {
   }
 
   // Machine-readable line for benchmarks/run_benches.py (examples sweep).
-  // Columns: n,build_s,fit_s,inmem_fit_s,offset,slope,throughput_gb_s,
-  //          eager_fit_s,eager_offset,eager_slope,eager_throughput_gb_s
+  // Columns: n,build_s,fit_s,inmem_fit_s,offset,slope,throughput_gb_s
   // (inmem_fit_s blank when the input exceeds the RAM budget).
   auto f9 = [](double v) {
     std::ostringstream o;
@@ -229,9 +193,7 @@ int main(int argc, char* argv[]) {
   };
   std::cout << "CSV," << n << ',' << f9(build_s) << ',' << f9(fit_s) << ','
             << (inmem_ok ? f9(inmem_fit_s) : std::string()) << ',' << f9(offset)
-            << ',' << f9(slope) << ',' << f9(gb_s) << ',' << f9(eager_fit_s)
-            << ',' << f9(eager_offset) << ',' << f9(eager_slope) << ','
-            << f9(eager_gb_s) << '\n';
+            << ',' << f9(slope) << ',' << f9(gb_s) << '\n';
 
   // Don't leave the input on the drives across sweep points.  (linefit reads
   // x and y through fully-delayed passes and writes no intermediates.)

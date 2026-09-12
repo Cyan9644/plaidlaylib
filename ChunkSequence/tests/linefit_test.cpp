@@ -8,7 +8,6 @@
 
 #include "ChunkSequence/Primitives/chunk_seq.h"
 #include "ChunkSequence/examples/chunk_linefit.h"
-#include "ChunkSequence/examples/chunk_linefit_eager.h"
 #include "ChunkSequence/examples/in_memory_baselines.h"
 #include "parlay/primitives.h"
 #include "parlay/random.h"
@@ -23,11 +22,6 @@
 // x/y in chunk-grouped order while the reference sums linearly, so the two
 // are numerically close but not bit-identical (same tolerance/rationale as
 // examples/linefit.cpp's own driver).
-//
-// Also cross-checks plaid::linefit_eager (chunk_linefit_eager.h) -- the same
-// centered-sums algorithm built on NRemoveWorker's explicit lockstep fold
-// instead of the delayed engine -- against the same DRAM reference, at the
-// same tolerance.
 
 static constexpr double OFFSET = 3.0;
 static constexpr double SLOPE = 1.0;
@@ -61,7 +55,6 @@ static bool check_linefit(const std::string& label, size_t n) {
   chunk_seq x = plaid::tabulate<double>(n, x_prefix, x_at);
   chunk_seq y = plaid::tabulate<double>(n, y_prefix, y_at);
   auto [offset, slope] = plaid::linefit(x, y);
-  auto [eager_offset, eager_slope] = plaid::linefit_eager(x, y);
   cleanup_prefix(x_prefix);
   cleanup_prefix(y_prefix);
 
@@ -69,11 +62,9 @@ static bool check_linefit(const std::string& label, size_t n) {
       n, [](size_t i) { return plaid::point(x_at(i), y_at(i)); });
   auto [offset_ref, slope_ref] = linefit(points_ref);  // global DRAM reference
 
-  bool ok = close(offset, offset_ref) && close(slope, slope_ref) &&
-            close(eager_offset, offset_ref) && close(eager_slope, slope_ref);
+  bool ok = close(offset, offset_ref) && close(slope, slope_ref);
   std::cout << "  " << (ok ? "OK" : "FAIL") << " " << label << ": n=" << n
-            << "  delayed=(" << offset << ", " << slope << ")"
-            << "  eager=(" << eager_offset << ", " << eager_slope << ")"
+            << "  out-of-core=(" << offset << ", " << slope << ")"
             << "  reference=(" << offset_ref << ", " << slope_ref << ")\n";
   return ok;
 }

@@ -16,6 +16,12 @@
 // skipped and the CSV field left blank, so the plotted in-mem line stops at the
 // RAM cliff.
 //
+// Also times plaid::ChunkBigIntAddEager -- the same algorithm, but with the
+// classify and carry-scan stages materialized to disk between primitives
+// instead of fused into one pass (see chunk_bigint_add.h) -- and cross-checks
+// it against the fused result bit-exactly via a streaming disk-to-disk compare
+// (chunk_contents_equal) that needs no DRAM budget, so it runs at every n.
+//
 // Usage: bigint_addExample [global --flags] [n]      (n = number of 64-bit
 // limbs)
 
@@ -25,6 +31,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -76,6 +83,40 @@ static bool contents_equal(const chunk_seq& cs, const Seq& expected) {
   }
   free(buf);
   return ok && j == expected.size();
+}
+
+// Bit-exact, chunk-by-chunk compare of two on-disk chunk_seqs' contents, with
+// only two chunk-sized buffers in DRAM regardless of n.  Used to cross-check
+// the delayed and eager adds against each other: unlike contents_equal (which
+// needs an in-DRAM `expected` sequence and only runs under the RAM budget),
+// this must scale past it, since both operands here are already out-of-core.
+static bool chunk_contents_equal(const chunk_seq& x, const chunk_seq& y) {
+  if (x.chunks.size() != y.chunks.size()) return false;
+  void* bx = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
+  void* by = aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, CHUNK_SIZE);
+  CHECK(bx != nullptr && by != nullptr);
+  bool ok = true;
+  for (size_t i = 0; ok && i < x.chunks.size(); i++) {
+    const chunk& cx = x.chunks[i];
+    const chunk& cy = y.chunks[i];
+    if (cx.used != cy.used) {
+      ok = false;
+      break;
+    }
+    if (cx.used == 0) continue;
+    int fdx = open(cx.filename.c_str(), O_DIRECT | O_RDONLY);
+    SYSCALL(fdx);
+    SYSCALL(pread(fdx, bx, AlignUp(cx.used), (off_t)cx.begin_addr));
+    close(fdx);
+    int fdy = open(cy.filename.c_str(), O_DIRECT | O_RDONLY);
+    SYSCALL(fdy);
+    SYSCALL(pread(fdy, by, AlignUp(cy.used), (off_t)cy.begin_addr));
+    close(fdy);
+    ok = memcmp(bx, by, cx.used) == 0;
+  }
+  free(bx);
+  free(by);
+  return ok;
 }
 
 // Deterministic, full-width limbs (random sign bits, so the sign-extension /
@@ -131,9 +172,42 @@ int main(int argc, char* argv[]) {
             << add_s << "s   " << std::setprecision(2) << gb_s
             << " GB/s (operands read)\n";
 
+  bool agree = true;
+
+  // Eager out-of-core baseline: same algorithm, but the classify and
+  // carry-scan stages are materialized to disk between primitives instead of
+  // fused into one pass (chunk_bigint_add.h's ChunkBigIntAddEager).  Cross-
+  // checked against the fused result bit-exactly via a streaming disk-to-disk
+  // compare, since at this benchmark's scale (up to 2^36 limbs) neither
+  // result can be materialized into DRAM.
+  std::cout << "Adding (eager, materialized intermediates)..." << std::flush;
+  t0 = Clock::now();
+  chunk_seq eager_sum = plaid::ChunkBigIntAddEager(a, b, "bi_sum_eager");
+  const double eager_add_s = elapsed(t0);
+  std::cout << " done\n";
+
+  size_t eager_result_limbs = 0;
+  for (const auto& c : eager_sum.chunks)
+    eager_result_limbs += c.used / sizeof(digit);
+  const double eager_gb_s = to_gb(2 * n * sizeof(digit)) / eager_add_s;
+
+  std::cout << "eager: " << eager_result_limbs << " result limb(s)   "
+            << std::setprecision(4) << eager_add_s << "s   "
+            << std::setprecision(2) << eager_gb_s
+            << " GB/s (operands read)\n";
+
+  if (eager_result_limbs != result_limbs ||
+      !chunk_contents_equal(sum, eager_sum)) {
+    std::cout << "*** MISMATCH: eager sum differs from delayed (fused) "
+                 "sum ***\n";
+    agree = false;
+  } else {
+    std::cout << "cross-check: eager sum matches delayed (fused) sum "
+                 "(bit-exact)\n";
+  }
+
   // In-memory baseline: our parlaylib reference on the same operands (built in
   // DRAM outside the timed region), cross-checked limb-for-limb.
-  bool agree = true;
   double inmem_add_s = 0;
   if (inmem_ok) {
     auto a_mem = parlay::tabulate(n, limb_a);  // parlay::sequence<digit>
@@ -158,7 +232,8 @@ int main(int argc, char* argv[]) {
   }
 
   // Machine-readable line for benchmarks/run_benches.py (examples sweep).
-  // Columns: n,build_s,add_s,inmem_add_s,result_limbs,throughput_gb_s
+  // Columns: n,build_s,add_s,inmem_add_s,result_limbs,throughput_gb_s,
+  //          eager_add_s,eager_result_limbs,eager_throughput_gb_s
   // (inmem_add_s blank when the operands exceed the RAM budget).
   auto f9 = [](double v) {
     std::ostringstream o;
@@ -167,11 +242,13 @@ int main(int argc, char* argv[]) {
   };
   std::cout << "CSV," << n << ',' << f9(build_s) << ',' << f9(add_s) << ','
             << (inmem_ok ? f9(inmem_add_s) : std::string()) << ','
-            << result_limbs << ',' << f9(gb_s) << '\n';
+            << result_limbs << ',' << f9(gb_s) << ',' << f9(eager_add_s)
+            << ',' << eager_result_limbs << ',' << f9(eager_gb_s) << '\n';
 
   // Don't leave operands/output on the drives across sweep points.
   cleanup_prefix(a_prefix);
   cleanup_prefix(b_prefix);
   cleanup_prefix(sum_prefix);
+  cleanup_prefix("bi_sum_eager");
   return agree ? 0 : 1;
 }
