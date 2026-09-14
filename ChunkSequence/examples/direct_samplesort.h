@@ -118,6 +118,7 @@
 #include "absl/container/btree_map.h"
 #include "absl/log/check.h"
 #include "configs.h"
+#include "utils/drive_policy.h"
 #include "utils/file_utils.h"
 
 namespace plaid {
@@ -545,9 +546,19 @@ chunk_seq direct_sample_sort(const chunk_seq& seq, Less less = {},
     // input shard's extent (unlike the disk_span==1 case, where the whole
     // bucket's data could just be copied through).
     std::vector<typename ds::BucketWriter<T>::Result> out_files(num_buckets * disk_span);
-    for (size_t b = 0; b < num_buckets; b++)
-        for (size_t s = 0; s < disk_span; s++)
-            out_files[b * disk_span + s].filename = GetFileName(tag, b * disk_span + s);
+    {
+        // Same drive-placement rule as plaid::BucketWriter's constructor (see
+        // the ablation note there); kept in step so a policy applies to both.
+        const size_t nd = GetSSDList().size();
+        const size_t total_files = num_buckets * disk_span;
+        for (size_t b = 0; b < num_buckets; b++)
+            for (size_t s = 0; s < disk_span; s++) {
+                const size_t i = b * disk_span + s;
+                const size_t d = plaid::PickDrive(i, total_files, nd,
+                                                  parlay::hash64(i) % nd);
+                out_files[i].filename = GetFileNameOnDrive(tag, d, i);
+            }
+    }
 
     std::atomic<size_t> next_bucket{0};
     // Worker-seconds spent in each stage, summed across the pipelines and printed

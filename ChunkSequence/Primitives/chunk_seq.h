@@ -60,6 +60,7 @@
 #include "parlay/primitives.h"
 #include "parlay/sequence.h"
 #include "parlay/utilities.h"
+#include "utils/drive_policy.h"
 #include "utils/file_utils.h"
 
 // ============================================================================
@@ -720,7 +721,8 @@ chunk_seq tabulate(size_t n, const std::string& result_prefix, F f,
   {
     std::mt19937_64 rng(std::random_device{}());
     std::uniform_int_distribution<size_t> dist(0, num_drives - 1);
-    for (size_t i = 0; i < num_chunks; i++) drive_of[i] = dist(rng);
+    for (size_t i = 0; i < num_chunks; i++)
+      drive_of[i] = PickDrive(i, num_chunks, num_drives, dist(rng));
   }
 
   std::vector<std::vector<size_t>> drive_chunks(num_drives);
@@ -837,7 +839,8 @@ chunk_seq from_file(const std::string& input_path,
   {
     std::mt19937_64 rng(std::random_device{}());
     std::uniform_int_distribution<size_t> dist(0, num_drives - 1);
-    for (size_t i = 0; i < num_chunks; i++) drive_of[i] = dist(rng);
+    for (size_t i = 0; i < num_chunks; i++)
+      drive_of[i] = PickDrive(i, num_chunks, num_drives, dist(rng));
   }
   std::vector<std::vector<size_t>> drive_chunks(num_drives);
   for (size_t i = 0; i < num_chunks; i++)
@@ -946,7 +949,8 @@ chunk_seq sequential_tabulate(size_t n, const std::string& result_prefix, F f) {
   {
     std::mt19937_64 rng(std::random_device{}());
     std::uniform_int_distribution<size_t> dist(0, num_drives - 1);
-    for (size_t i = 0; i < num_chunks; i++) drive_of[i] = dist(rng);
+    for (size_t i = 0; i < num_chunks; i++)
+      drive_of[i] = PickDrive(i, num_chunks, num_drives, dist(rng));
   }
   std::vector<std::vector<size_t>> drive_chunks(num_drives);
   for (size_t i = 0; i < num_chunks; i++)
@@ -1024,7 +1028,8 @@ inline chunk_seq from_chunks(const parlay::sequence<chunk>& headers,
   {
     std::mt19937_64 rng(std::random_device{}());
     std::uniform_int_distribution<size_t> dist(0, num_drives - 1);
-    for (size_t i = 0; i < num_chunks; i++) drive_of[i] = dist(rng);
+    for (size_t i = 0; i < num_chunks; i++)
+      drive_of[i] = PickDrive(i, num_chunks, num_drives, dist(rng));
   }
   std::vector<std::vector<size_t>> drive_chunks(num_drives);
   for (size_t i = 0; i < num_chunks; i++)
@@ -1553,13 +1558,15 @@ class ChunkEmitter {
   ChunkEmitter(const std::vector<std::string>& filenames,
                std::vector<std::atomic<size_t>>& file_offsets,
                std::atomic<size_t>& out_count, std::vector<chunk>& out_chunks,
-               UnorderedFileWriter<R>& writer, size_t num_drives)
+               UnorderedFileWriter<R>& writer, size_t num_drives,
+               size_t expected_total = 0)
       : filenames_(filenames),
         file_offsets_(file_offsets),
         out_count_(out_count),
         out_chunks_(out_chunks),
         writer_(writer),
-        num_drives_(num_drives) {
+        num_drives_(num_drives),
+        expected_total_(expected_total) {
     static_assert(CHUNK_SIZE % sizeof(R) == 0,
                   "sizeof(R) must divide CHUNK_SIZE for O_DIRECT alignment");
   }
@@ -1581,7 +1588,13 @@ class ChunkEmitter {
    */
   void emit(std::shared_ptr<R> buf, size_t count, size_t logical_index) const {
     const size_t slot = out_count_.fetch_add(1);
-    const size_t d = parlay::hash64(slot) % num_drives_;
+    // Placement keys off `logical_index`, not `slot`: slot is emission order
+    // (whichever worker got there first), whereas the drive-placement policies
+    // are defined over position in the sequence.  Under the default `random`
+    // policy this is the original parlay::hash64(slot) % num_drives_.
+    const size_t d =
+        PickDrive(logical_index, expected_total_, num_drives_,
+                  parlay::hash64(slot) % num_drives_);
     const size_t base = file_offsets_[d].fetch_add(CHUNK_SIZE);
     out_chunks_[slot] =
         chunk{filenames_[d], base, count * sizeof(R), logical_index};
@@ -1599,6 +1612,11 @@ class ChunkEmitter {
   std::vector<chunk>& out_chunks_;
   UnorderedFileWriter<R>& writer_;
   size_t num_drives_;
+  // Expected number of logical output chunks, for the `blocked` drive policy
+  // (0 = unknown, which degrades it to round-robin).  ExternalTransform passes
+  // num_input_chunks * max_out_per_input: exact when max_out_per_input == 1,
+  // an upper bound under FANOUT, where it only leaves the last drive short.
+  size_t expected_total_;
 };
 
 size_t get_used_bytes(const chunk_seq& seq) {
@@ -1652,7 +1670,8 @@ chunk_seq ExternalTransform(const chunk_seq& seq,
   for (auto& a : file_offsets) a.store(0, std::memory_order_relaxed);
 
   ChunkEmitter<R> emit(filenames, file_offsets, out_count, out_chunks, writer,
-                       num_drives);
+                       num_drives,
+                       /*expected_total=*/seq.chunks.size() * max_out_per_input);
 
   parlay::parallel_for(
       0, parlay::num_workers(),
@@ -1822,7 +1841,8 @@ chunk_seq DensePack(size_t num_virtual, const std::string& result_prefix,
 
     // 5. Push full output chunks
     for (size_t k = 0; k < num_out; k++) {
-      const size_t d = drive_dist(rng);
+      const size_t d = PickDrive(out_idx, /*total=*/0, num_drives,
+                                 drive_dist(rng));
       const size_t slot = next_slot[d]++;
       writer.Push(std::shared_ptr<R>(obuf[k], free), CHUNK_SIZE / sizeof(R), d,
                   slot * CHUNK_SIZE);
@@ -1844,7 +1864,8 @@ chunk_seq DensePack(size_t num_virtual, const std::string& result_prefix,
     CHECK(buf != nullptr) << "DensePack: final chunk allocation failed";
     memset(buf, 0, CHUNK_SIZE);
     memcpy(buf, carry.data(), carry.size() * sizeof(R));
-    const size_t d = drive_dist(rng);
+    const size_t d = PickDrive(out_idx, /*total=*/0, num_drives,
+                               drive_dist(rng));
     const size_t slot = next_slot[d]++;
     writer.Push(std::shared_ptr<R>(buf, free), CHUNK_SIZE / sizeof(R), d,
                 slot * CHUNK_SIZE);
@@ -2002,7 +2023,8 @@ chunk_seq DensePackStream(const chunk_seq& seq,
         if (cur_n == epct) {  // full output chunk
           if (packed_bytes < CHUNK_SIZE)
             memset((char*)cur + packed_bytes, 0, CHUNK_SIZE - packed_bytes);
-          const size_t d = drive_dist(rng);
+          const size_t d = PickDrive(out_idx, /*total=*/0, num_drives,
+                                     drive_dist(rng));
           const size_t slot = next_slot[d]++;
           writer.Push(std::shared_ptr<R>(cur, free), epct, d,
                       slot * CHUNK_SIZE);
@@ -2015,7 +2037,8 @@ chunk_seq DensePackStream(const chunk_seq& seq,
     }
     if (cur_n > 0) {  // final partial chunk
       memset((char*)cur + cur_n * sizeof(R), 0, CHUNK_SIZE - cur_n * sizeof(R));
-      const size_t d = drive_dist(rng);
+      const size_t d = PickDrive(out_idx, /*total=*/0, num_drives,
+                                 drive_dist(rng));
       const size_t slot = next_slot[d]++;
       writer.Push(std::shared_ptr<R>(cur, free), epct, d, slot * CHUNK_SIZE);
       out_chunks.push_back(
@@ -2259,11 +2282,22 @@ class BucketWriter {
     requests_.resize(num_buckets * disk_span * kRequestsPerBucket);
     for (Request& r : requests_) free_requests_.Push(&r);
 
+    // NOTE (drive-placement ablation): the status quo here is GetFileName's
+    // `i % num_drives`, i.e. already *round-robin* -- unlike every other
+    // placement site, whose status quo is pseudo-random.  So for bucket files
+    // the `round_robin` policy reproduces today's layout and `random` is the
+    // genuinely new arm.  sample_sort's output is flatten() of the buckets in
+    // bucket order, so `blocked` over i puts the first 1/D of the sorted
+    // sequence on drive 0, the next on drive 1, and so on.
+    const size_t num_drives = GetSSDList().size();
+    const size_t total_files = num_buckets * disk_span;
     for (size_t b = 0; b < num_buckets; b++) {
       for (size_t s = 0; s < disk_span; s++) {
         const size_t i = b * disk_span_ + s;
         Bucket& bk = buckets_[i];
-        results_[i].filename = GetFileName(prefix, i);
+        const size_t d = PickDrive(i, total_files, num_drives,
+                                   parlay::hash64(i) % num_drives);
+        results_[i].filename = GetFileNameOnDrive(prefix, d, i);
         bk.fd = open(results_[i].filename.c_str(),
                      O_WRONLY | O_DIRECT | O_CREAT | O_TRUNC, 0644);
 

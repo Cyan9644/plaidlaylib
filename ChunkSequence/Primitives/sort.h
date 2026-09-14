@@ -594,6 +594,10 @@ void count_sort_by_key(const chunk_seq& seq, size_t num_buckets,
   std::vector<size_t> drive_off(num_drives, 0);
 
   auto flush = [&](size_t b) {
+    // Drive-placement ablation: left as-is, for the same reason as
+    // ChunkPartition's emit_chunk (already round-robin; no meaningful
+    // `blocked` variant).  sample_sort bucketing goes through BucketWriter,
+    // not here.
     const size_t d = slot++ % num_drives;
     const size_t base = drive_off[d];
     drive_off[d] += CHUNK_SIZE;

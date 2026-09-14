@@ -84,6 +84,7 @@
 #include "ChunkSequence/Primitives/chunk_seq.h"
 #include "configs.h"
 #include "parlay/primitives.h"
+#include "utils/drive_policy.h"
 
 namespace ChunkFFT {
 
@@ -624,7 +625,8 @@ inline std::pair<chunk_seq, std::vector<std::string>> alloc_layout(
   {
     std::mt19937_64 rng(std::random_device{}());
     std::uniform_int_distribution<size_t> dist(0, num_drives - 1);
-    for (size_t i = 0; i < num_chunks; i++) drive_of[i] = dist(rng);
+    for (size_t i = 0; i < num_chunks; i++)
+      drive_of[i] = plaid::PickDrive(i, num_chunks, num_drives, dist(rng));
   }
   std::vector<std::vector<size_t>> drive_chunks(num_drives);
   for (size_t i = 0; i < num_chunks; i++)

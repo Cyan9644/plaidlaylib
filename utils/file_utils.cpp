@@ -181,9 +181,24 @@ void CheckSSDList() {
  * @return
  */
 std::string GetFileName(const std::string& prefix, size_t file_number) {
+  return GetFileNameOnDrive(prefix, file_number, file_number);
+}
+
+/**
+ * Name a file on an explicitly chosen drive.
+ *
+ * GetFileName derives the drive *from* the file number, which is fine wherever
+ * the file index is the drive index (one file per drive).  Callers that number
+ * files independently of drives -- BucketWriter, whose index is
+ * bucket*disk_span + shard -- need the two decoupled, or reassigning the drive
+ * would collide two buckets onto one basename.  file_number still goes in the
+ * basename, so names stay unique however `drive` is chosen.
+ */
+std::string GetFileNameOnDrive(const std::string& prefix, size_t drive,
+                               size_t file_number) {
   CheckSSDList();
-  size_t ssd_number = file_number % ssd_list.size();
-  return ssd_list[ssd_number] + "/" + prefix + std::to_string(file_number);
+  return ssd_list[drive % ssd_list.size()] + "/" + prefix +
+         std::to_string(file_number);
 }
 
 /**

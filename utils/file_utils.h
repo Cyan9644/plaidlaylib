@@ -287,6 +287,8 @@ void PopulateSSDList();
 void PopulateSSDList(size_t count, bool random, bool verbose);
 void PopulateSSDList(const std::vector<int>& ssd_numbers, bool verbose);
 std::string GetFileName(const std::string& prefix, size_t file_number);
+std::string GetFileNameOnDrive(const std::string& prefix, size_t drive,
+                               size_t file_number);
 std::vector<std::string> GetSSDList();
 
 void MakeFileEndMarker(unsigned char* buffer, size_t size, size_t real_size);

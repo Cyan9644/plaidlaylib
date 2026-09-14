@@ -23,6 +23,7 @@
 #include "absl/log/check.h"
 #include "configs.h"
 #include "parlay/primitives.h"
+#include "utils/drive_policy.h"
 #include "utils/file_utils.h"
 
 namespace plaid {
@@ -1342,7 +1343,8 @@ chunk_seq force(const D& d, const std::string& result_prefix) {
   {
     std::mt19937_64 rng(std::random_device{}());
     std::uniform_int_distribution<size_t> dist(0, num_drives - 1);
-    for (size_t i = 0; i < nc; i++) drive_of[i] = dist(rng);
+    for (size_t i = 0; i < nc; i++)
+      drive_of[i] = PickDrive(i, nc, num_drives, dist(rng));
   }
   std::vector<std::vector<size_t>> drive_chunks(num_drives);
   for (size_t i = 0; i < nc; i++) drive_chunks[drive_of[i]].push_back(i);
@@ -1512,7 +1514,8 @@ chunk_seq filter(const D& d, const std::string& result_prefix, Pred pred) {
 
     // Push full output chunks with balls-in-bins drive assignment.
     for (size_t k = 0; k < num_out; k++) {
-      const size_t dr = drive_dist(rng);
+      const size_t dr = PickDrive(out_idx, /*total=*/0, num_drives,
+                                  drive_dist(rng));
       const size_t slot = next_slot[dr]++;
       writer.Push(std::shared_ptr<R>(obuf[k], free), CHUNK_SIZE / sizeof(R), dr,
                   slot * CHUNK_SIZE);
@@ -1533,7 +1536,8 @@ chunk_seq filter(const D& d, const std::string& result_prefix, Pred pred) {
     CHECK(buf != nullptr) << "delayed::filter: final allocation failed";
     memset(buf, 0, CHUNK_SIZE);
     memcpy(buf, carry.data(), carry.size() * sizeof(R));
-    const size_t dr = drive_dist(rng);
+    const size_t dr = PickDrive(out_idx, /*total=*/0, num_drives,
+                                drive_dist(rng));
     const size_t slot = next_slot[dr]++;
     writer.Push(std::shared_ptr<R>(buf, free), CHUNK_SIZE / sizeof(R), dr,
                 slot * CHUNK_SIZE);

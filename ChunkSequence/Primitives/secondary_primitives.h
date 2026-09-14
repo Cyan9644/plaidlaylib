@@ -887,6 +887,11 @@ std::vector<chunk_seq> ChunkPartition(const chunk_seq& seq, size_t num_buckets,
     size_t d, base;
     {
       std::lock_guard<std::mutex> lk(place_mu);
+      // Drive-placement ablation: left as-is deliberately.  This is already
+      // round-robin, and `blocked` has no meaning here -- the output length is
+      // unknown while streaming, and all k buckets share one per-drive file
+      // set, so "the first N/D of the sequence" isn't well defined per bucket.
+      // Neither benchmarked example reaches this path.
       d = slot++ % num_drives;
       base = drive_off[d];
       drive_off[d] += CHUNK_SIZE;
