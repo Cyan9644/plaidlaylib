@@ -45,6 +45,7 @@ import glob
 import math
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -571,7 +572,7 @@ def make(target):
         sys.exit(f"make {target} failed (exit {r.returncode})")
 
 
-def run_binary(path, args, fatal=True, env=None, timeout=None):
+def run_binary(path, args, fatal=True, env=None, timeout=None, prefix=None):
     """Run a benchmark binary, echo its output, return (csv_fields, problem).
 
     `problem` is None on a clean run, else a short description (crash,
@@ -582,7 +583,7 @@ def run_binary(path, args, fatal=True, env=None, timeout=None):
     crashed).  `env`, if given, is the child's full environment (default:
     inherit ours).  `timeout` (seconds) SIGKILLs a run that exceeds it.
     """
-    cmd = [path] + [str(a) for a in args]
+    cmd = list(prefix or []) + [path] + [str(a) for a in args]
     print(f"  $ {' '.join(cmd)}", flush=True)
     try:
         r = subprocess.run(cmd, cwd=REPO_ROOT, env=env, timeout=timeout,
@@ -698,8 +699,44 @@ def _killed_by_signal(problem):
     return bool(problem) and re.match(r"exited -\d+", problem) is not None
 
 
+# ── per-run memory cap ──────────────────────────────────────────────────────
+# --inmem-uncapped lets an in-memory baseline allocate until it dies.  With
+# nothing bounding it, a big box reclaims everything else first: sshd starves
+# or is OOM-killed and the machine goes unresponsive instead of the benchmark
+# dying (observed overnight on the 500 GiB bench box, which needed a reset).
+# Running each binary in its own systemd scope with MemoryMax bounds the blast
+# radius -- only that cgroup is killed -- and MemorySwapMax=0 stops it
+# thrashing into (zram) swap first.  `systemd-run --scope` execs the command in
+# place, so an OOM kill still arrives as SIGKILL on our direct child and
+# _killed_by_signal sees it exactly as before.
+DEFAULT_MEM_MAX_FRACTION = 0.9   # of physical RAM, when --inmem-uncapped is on
+
+
+def phys_bytes():
+    return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+
+
+def mem_limit_prefix(mem_max):
+    """argv prefix running a child under a MemoryMax cgroup, or [] if disabled.
+
+    Falls back to no cap (with a loud warning) when systemd-run is missing:
+    an uncapped run still works, it just risks taking the machine down.
+    """
+    if not mem_max:
+        return []
+    if shutil.which("systemd-run") is None:
+        print("  !!! systemd-run not found — running WITHOUT a memory cap; an "
+              "over-budget in-memory baseline can hang the whole machine",
+              flush=True)
+        return []
+    scope = ["systemd-run", "--scope", "-q"]
+    if os.geteuid() != 0:
+        scope.append("--user")        # system scopes need root
+    return scope + ["-p", f"MemoryMax={mem_max}", "-p", "MemorySwapMax=0", "--"]
+
+
 def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings,
-                n_values=None, inmem_uncapped=False, timeout=None):
+                n_values=None, inmem_uncapped=False, timeout=None, mem_max=0):
     """Sweep one example over input `sizes` (bytes); return parsed rows.
 
     If `n_values` is given (a list of element counts), it takes precedence over
@@ -740,6 +777,7 @@ def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings,
     points = ([(n, n * entry["elem_bytes"] * entry["input_seqs"]) for n in n_values]
              if n_values is not None else
              [(size_to_n(entry, size), size) for size in sizes])
+    prefix = mem_limit_prefix(mem_max)
     baseline_alive = True
     for i, (n, size) in enumerate(points):
         print(f"\n=== example {entry['name']}: size={_bytes_fmt(size, None)} "
@@ -748,7 +786,8 @@ def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings,
         env = None
         if inmem_uncapped:
             env = _child_env(_INMEM_UNCAPPED_ENV if baseline_alive else _INMEM_OFF_ENV)
-        fields, problem = run_binary(binary, argv, fatal=False, env=env, timeout=timeout)
+        fields, problem = run_binary(binary, argv, fatal=False, env=env,
+                                     timeout=timeout, prefix=prefix)
         if inmem_uncapped and baseline_alive and _killed_by_signal(problem):
             w = (f"example {entry['name']} at size={_bytes_fmt(size, None)} (n={n}): "
                  f"{problem} with the in-memory baseline uncapped — rerunning this "
@@ -759,7 +798,7 @@ def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings,
             clear_bench_data(clear_glob, clear_enabled)
             fields, problem = run_binary(binary, argv, fatal=False,
                                          env=_child_env(_INMEM_OFF_ENV),
-                                         timeout=timeout)
+                                         timeout=timeout, prefix=prefix)
         # A timed-out point's larger successors would only take longer: stop.
         timed_out = bool(problem) and problem.startswith("timed out")
         if problem:
@@ -986,6 +1025,12 @@ def main():
                          "rerun with the baseline off and the entry continues "
                          "out-of-core only (see run_example). Check `swapon --show` "
                          "first: a big swap device makes the baseline thrash, not die")
+    ap.add_argument("--mem-max", default="",
+                    help="examples sweep: run each binary in its own systemd scope "
+                         "capped at this much memory (e.g. '400GiB'), so an "
+                         "over-budget in-memory baseline is OOM-killed on its own "
+                         "instead of taking the machine down. Default: 90%% of RAM "
+                         "when --inmem-uncapped is set, none otherwise; '0' disables")
     ap.add_argument("--timeout-min", type=float, default=0,
                     help="examples sweep: kill any single binary run that takes longer "
                          "than this many minutes (input build included); the point is "
@@ -1018,6 +1063,14 @@ def main():
         ap.error("nothing to run: pass --all, --delayed, --chunk-size, "
                  "--examples, and/or --example NAME")
 
+    # An uncapped baseline with no cgroup cap can wedge the whole machine
+    # (see mem_limit_prefix), so cap by default whenever it is enabled.
+    if args.mem_max:
+        mem_max = parse_bytes(args.mem_max) if args.mem_max != "0" else 0
+    else:
+        mem_max = (int(phys_bytes() * DEFAULT_MEM_MAX_FRACTION)
+                   if args.inmem_uncapped else 0)
+
     extra = args.ssd_args.split() if args.ssd_args else []
     n_values = [parse_count(x) for x in args.n_values.split()]
     chunk_sizes = [parse_bytes(x) for x in args.chunk_sizes.split()]
@@ -1032,6 +1085,9 @@ def main():
     outdir = os.path.join(REPO_ROOT, args.outdir, stamp)
     os.makedirs(outdir, exist_ok=True)
     print(f"Run directory: {outdir}\n")
+    if mem_max:
+        print(f"  per-run memory cap: {_bytes_fmt(mem_max, None)} "
+              f"(systemd scope, swap disabled)\n", flush=True)
 
     # Start from clean drives, then trim once up front (fstrim can be slow on
     # real SSDs, so we don't repeat it between points); both no-ops on tmpfs.
@@ -1059,7 +1115,8 @@ def main():
                                args.fstrim_glob, clear_enabled, warnings,
                                n_values=example_n_values,
                                inmem_uncapped=args.inmem_uncapped,
-                               timeout=args.timeout_min * 60 or None)
+                               timeout=args.timeout_min * 60 or None,
+                               mem_max=mem_max)
             write_csv(os.path.join(outdir, f"{entry['name']}_scale.csv"),
                       ["input_bytes"] + entry["cols"], rows)
             # The CSV is the result; the plot is a convenience.  A plotting

@@ -497,14 +497,28 @@ remaining larger sizes are skipped (they would only be slower).  A timeout
 never triggers the baseline-off rerun — a thrashing baseline and a slow
 out-of-core run look the same from outside, and guessing wrong costs another
 30 minutes.  One run therefore feeds both the per-example scale plots and the
-summary figure.  `bench-examples` /
+summary figure.
+
+Each binary runs inside its **own systemd scope with a memory cap**
+(`--mem-max`, default 90% of RAM whenever `--inmem-uncapped` is on;
+`--mem-max 0` disables).  Without it an uncapped baseline does not simply die:
+the kernel reclaims everything else first, `sshd` starves or is OOM-killed and
+the **whole machine goes unresponsive** — observed on the bench box after an
+overnight sweep, which then needed a hard reset.  The scope bounds the blast
+radius (only that cgroup is killed) and sets `MemorySwapMax=0` so it cannot
+thrash into zram first.  `systemd-run --scope` execs the command in place, so
+an OOM kill still arrives as SIGKILL on the driver's direct child and the
+crash→rerun path sees it unchanged; a system scope needs root, otherwise
+`--user` is used.  If `systemd-run` is missing the sweep warns loudly and runs
+uncapped.  **On a tmpfs dev box the cap also counts the data written to
+`/mnt/ssd*`** (the "drives" are RAM), so a tight cap there kills the input
+build; on the real machine `O_DIRECT` to real devices is not charged to the
+cgroup.  `bench-examples` /
 `bench-examples-mid` stay capped (on tmpfs an uncapped baseline OOM competes
-with the "drives" for the same RAM).  **Before a full sweep run `swapon
---show`** on the bench box: the crash→rerun path relies on the OOM killer
-firing promptly, and a large disk swap device makes an over-budget baseline
-thrash instead.  Fedora's default swap-on-zram (≤8 GiB, RAM-backed) is
-harmless on the 500 GiB machine; if a big disk swap is listed, `sudo swapoff
--a` for the run (`swapon -a` after).  Nothing in the repo automates this.
+with the "drives" for the same RAM).  The per-run scope sets `MemorySwapMax=0`, so
+the machine's own swap configuration no longer decides whether an over-budget
+baseline thrashes; `swapon --show` is still worth a look before a full sweep,
+but `swapoff -a` is no longer needed.
 `group_by_index`'s demo sizes its bucket count off `phys/2` directly, not the
 env-overridable baseline budget, so neither setting changes its out-of-core
 work.

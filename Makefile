@@ -349,6 +349,8 @@ bench-examples-mid:
 # until it crashes (OOM), that point is rerun with the baseline off, and the
 # entry continues out-of-core only.  Any single run over 30 minutes is killed
 # (--timeout-min), which drops that point and skips the entry's larger sizes.
+# Each run is confined to a systemd scope capped at 90% of RAM (--mem-max), so
+# an over-budget baseline is OOM-killed alone instead of wedging the machine.
 # One run feeds both the per-example scale plots and `make bench-summary`.
 # Check `swapon --show` first (see CLAUDE.md).
 bench-examples-full:
