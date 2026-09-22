@@ -87,46 +87,68 @@ def child_env(policy):
     return env
 
 
-def sweep(entry, policy, sizes, extra_args, clear_glob, clear_enabled,
+def sweep(entry, policies, sizes, extra_args, clear_glob, clear_enabled,
           warnings, timeout):
-    """Run one (example, policy) arm across the size ladder.
+    """Run every (policy, size) point for one example, INTERLEAVED.
+
+    The loop is size-major with the policy order rotated one step per size, so
+    that consecutive points alternate policies and each policy takes a
+    different position within the size group as the ladder advances.
+
+    This ordering is the whole point.  An earlier version ran one policy's
+    entire ladder before starting the next, which confounded policy with
+    elapsed time: the first arm got freshly-fstrimmed drives and every later
+    arm inherited the accumulated write/delete state of the ones before it.
+    That produced a monotone-in-run-order result (and made round_robin and
+    blocked -- maximally different layouts -- converge to within 0.2% of each
+    other at the top of the ladder, which no placement mechanism explains).
+    Interleaving spreads device drift across the arms instead of aligning it
+    with them.  Drift is not eliminated, only decorrelated from the variable
+    under test; `fstrim` still runs once at startup, not per point.
 
     Soft-failure discipline matches run_benches' examples sweep: warn, drop the
-    point, keep going.  A timeout additionally skips this arm's larger sizes --
-    they can only be slower.
+    point, keep going.  A timeout additionally skips that policy's larger sizes
+    -- they can only be slower -- without disturbing the other policies.
     """
     binary = os.path.join(rb.BINDIR, os.path.basename(entry["target"]))
-    rows = []
-    for size in sizes:
+    rows_by_policy = {p: [] for p in policies}
+    timed_out = set()
+
+    for si, size in enumerate(sizes):
         n = rb.size_to_n(entry, size)
-        print(f"\n=== {entry['name']} [{policy}]: {hb(size)} "
-              f"(n={n}) ===", flush=True)
-        fields, problem = rb.run_binary(
-            binary, entry.get("pre_argv", []) + [n] +
-            entry.get("extra_argv", []) + extra_args,
-            fatal=False, env=child_env(policy), timeout=timeout)
+        rot = si % len(policies)
+        order = policies[rot:] + policies[:rot]
+        for policy in order:
+            if policy in timed_out:
+                continue
+            print(f"\n=== {entry['name']} [{policy}]: {hb(size)} "
+                  f"(n={n}) ===", flush=True)
+            fields, problem = rb.run_binary(
+                binary, entry.get("pre_argv", []) + [n] +
+                entry.get("extra_argv", []) + extra_args,
+                fatal=False, env=child_env(policy), timeout=timeout)
 
-        if problem is not None:
-            w = f"{entry['name']} [{policy}] at {hb(size)}: {problem}"
-            warnings.append(w)
-            print(f"  !!! {w}", flush=True)
+            if problem is not None:
+                w = f"{entry['name']} [{policy}] at {hb(size)}: {problem}"
+                warnings.append(w)
+                print(f"  !!! {w}", flush=True)
+                rb.clear_bench_data(clear_glob, clear_enabled)
+                if "timed out" in problem:
+                    timed_out.add(policy)
+                    rest = [hb(s) for s in sizes[si + 1:]]
+                    if rest:
+                        w = (f"{entry['name']} [{policy}]: skipping larger "
+                             f"sizes {', '.join(rest)} after the timeout above")
+                        warnings.append(w)
+                        print(f"  !!! {w}", flush=True)
+                continue
+
+            row = dict(zip(entry["cols"], fields))
+            row["policy"] = policy
+            row["input_bytes"] = str(size)
+            rows_by_policy[policy].append(row)
             rb.clear_bench_data(clear_glob, clear_enabled)
-            if "timed out" in problem:
-                skipped = [hb(s) for s in sizes[sizes.index(size) + 1:]]
-                if skipped:
-                    w = (f"{entry['name']} [{policy}]: skipping larger sizes "
-                         f"{', '.join(skipped)} after the timeout above")
-                    warnings.append(w)
-                    print(f"  !!! {w}", flush=True)
-                break
-            continue
-
-        row = dict(zip(entry["cols"], fields))
-        row["policy"] = policy
-        row["input_bytes"] = str(size)
-        rows.append(row)
-        rb.clear_bench_data(clear_glob, clear_enabled)
-    return rows
+    return rows_by_policy
 
 
 def plot(rows_by_policy, entry, path):
@@ -222,6 +244,8 @@ def main():
     tmo = f"{args.timeout_min:g} min/run" if timeout else "none"
     print(f"  {len(policies) * len(entries) * len(sizes)} runs, "
           f"in-memory baselines OFF, timeout: {tmo}")
+    print("  order:    interleaved (size-major, policy order rotated per size) "
+          "so device drift does not align with the policy under test")
 
     # The policy is a runtime switch, so one build serves every arm.
     for entry in entries:
@@ -233,11 +257,9 @@ def main():
     warnings = []
     all_rows = []
     for entry in entries:
-        rows_by_policy = {}
-        for policy in policies:
-            rows_by_policy[policy] = sweep(
-                entry, policy, sizes, extra_args, args.fstrim_glob,
-                clear_enabled, warnings, timeout)
+        rows_by_policy = sweep(entry, policies, sizes, extra_args,
+                               args.fstrim_glob, clear_enabled, warnings,
+                               timeout)
 
         flat = [r for p in policies for r in rows_by_policy[p]]
         header = ["policy", "input_bytes"] + entry["cols"]
