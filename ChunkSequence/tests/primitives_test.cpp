@@ -2354,6 +2354,20 @@ static void cleanup_prefix(const std::string& prefix) {
     unlink(GetFileName(prefix, d).c_str());
 }
 
+// Unlink the files a group_by_* actually wrote.
+//
+// cleanup_prefix is right for primitives that emit exactly one file per drive
+// named GetFileName(prefix, d) -- tabulate, force, ExternalTransform,
+// DensePack.  It is WRONG for anything built on BucketWriter (group_by_index,
+// group_by_key, count_sort), which names one file per *bucket* and places it
+// with PickDrive (utils/drive_policy.h): bucket index and drive index are not
+// the same number, so recomputing the path finds nothing and every bucket file
+// is stranded.  The returned chunks carry the real paths, so use those.
+static void cleanup_seqs(const std::vector<chunk_seq>& parts) {
+  for (const chunk_seq& part : parts)
+    for (const chunk& c : part.chunks) unlink(c.filename.c_str());
+}
+
 // Checks that every bucket in `parts` is index-ordered + dense-except-last,
 // every value satisfies `bucket_of(value) == bucket index`, and every input
 // value in [0, n) is returned exactly once across all buckets. Returns
@@ -2450,7 +2464,7 @@ int run(int argc, char* argv[]) {
     }
 
     cleanup_prefix(in_prefix);
-    cleanup_prefix(out_prefix);
+    cleanup_seqs(parts);
   }
 
   // group_by_index with a bucket count in the thousands -- unlike the k=4
@@ -2485,8 +2499,7 @@ int run(int argc, char* argv[]) {
     }
 
     cleanup_prefix(in_prefix);
-    for (size_t i = 0; i < k_large; i++)
-      unlink(GetFileName(out_prefix, i).c_str());
+    cleanup_seqs(parts);
   }
 
   // group_by_key: identity key, default Hash = std::hash<uint64_t>.
@@ -2514,7 +2527,7 @@ int run(int argc, char* argv[]) {
     }
 
     cleanup_prefix(in_prefix);
-    cleanup_prefix(out_prefix);
+    cleanup_seqs(parts);
   }
 
   // group_by_key: derived key (v / 1000), same default Hash.
@@ -2542,7 +2555,7 @@ int run(int argc, char* argv[]) {
     }
 
     cleanup_prefix(in_prefix);
-    cleanup_prefix(out_prefix);
+    cleanup_seqs(parts);
   }
 
   std::cout << (pass ? "PASS" : "FAIL") << "\n";

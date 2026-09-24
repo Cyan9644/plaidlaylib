@@ -7,9 +7,9 @@ of the benchmark suite.
 
 The library normally scatters a chunk_seq's chunks pseudo-randomly across the
 drives (balls-in-bins).  `utils/drive_policy.h` adds a runtime switch,
-PLAID_DRIVE_POLICY, with two alternatives; this script runs bigint_add and
-samplesort across an input-size ladder under each, so the three can be plotted
-against one another:
+PLAID_DRIVE_POLICY, with two alternatives; this script runs bigint_add across
+an input-size ladder under each, so the three can be plotted against one
+another:
 
   random       balls-in-bins (the status quo, and the default)
   round_robin  chunk i -> drive i % D
@@ -28,11 +28,13 @@ What each example exercises (see the drive_policy.h call sites):
                              this sweep's only end-to-end correctness check
                              (the DRAM baselines are switched off below).
   samplesort   `sort_s`      plaid::tabulate + BucketWriter (via
-                             group_by_index).  NOTE: BucketWriter's status quo
-                             is already round-robin over bucket index, so for
-                             the bucket files it is `round_robin` that
-                             reproduces today's layout and `random` that is the
-                             new arm -- unlike every other placement site.
+                             group_by_index).  NOT swept by default any more --
+                             see EXAMPLE_NAMES.  If you re-enable it, note that
+                             BucketWriter's status quo is already round-robin
+                             over bucket index, so for the bucket files it is
+                             `round_robin` that reproduces today's layout and
+                             `random` that is the new arm -- unlike every other
+                             placement site.
 
 In-memory baselines are switched off (EXAMPLE_INMEM_BUDGET_BYTES=0) for every
 run: the comparison here is policy-vs-policy, the baselines do not depend on
@@ -42,6 +44,12 @@ Everything is reused from run_benches.py -- the size->n conversion, the `make`
 wrapper, the CSV-line parser, the between-point drive cleanup -- so this script
 cannot drift from how the real sweeps size and run the same binaries.
 
+Between every run the mounts are purged of ALL files (not just the prefixes
+the runner knows about), synced, and fstrimmed -- in that order, since fstrim
+only reclaims blocks of already-deleted files.  Per-point rather than once at
+startup: drive state that accumulates across points would otherwise show up as
+a difference between policy arms.
+
 Usage:
     python3 benchmarks/drive_policy_ablation.py                  # full ladder
     python3 benchmarks/drive_policy_ablation.py --sizes 1GiB \
@@ -49,7 +57,9 @@ Usage:
 """
 
 import argparse
+import glob
 import os
+import subprocess
 import sys
 from datetime import datetime
 
@@ -63,7 +73,12 @@ def hb(n):
 
 
 POLICIES = ("random", "round_robin", "blocked")
-EXAMPLE_NAMES = ("bigint_add", "samplesort")
+# samplesort is deliberately NOT swept by default: its DRAM appetite scales
+# with machine size (process_inplace_budgeted sizes waves off available
+# RAM/4, sample_sort picks a bucket count to fit DRAM), which made it the
+# prime suspect for taking the bench box down.  Still reachable with
+# `--examples samplesort` if you want it back.
+EXAMPLE_NAMES = ("bigint_add",)
 
 # x4 ladder, matching `make bench-examples-full`'s shape so points line up with
 # sweeps collected there.
@@ -87,8 +102,87 @@ def child_env(policy):
     return env
 
 
+def purge_mounts(glob_pat, enabled):
+    """Unlink every data file under each mount, then confirm none remain.
+
+    Two passes.  First run_benches' known-glob sweep (it owns the
+    chmod-and-retry path for files a crashed or sudo run left unwritable).
+    Then a catch-all for anything those globs miss -- a prefix no `data_globs`
+    entry covers, or debris from a run that died before it could clean up.
+    The catch-all prints every file it removes, since by definition those are
+    files nothing expected to be there.
+
+    Returns the number of unexpected files removed.  Directories (lost+found)
+    are never touched.
+    """
+    if not enabled:
+        return 0
+    rb.clear_bench_data(glob_pat, True)
+    stray = []
+    for m in sorted(glob.glob(glob_pat)):
+        try:
+            entries = list(os.scandir(m))
+        except OSError as e:
+            print(f"  !!! cannot scan {m}: {e}", flush=True)
+            continue
+        for de in entries:
+            if not de.is_file(follow_symlinks=False):
+                continue
+            try:
+                os.unlink(de.path)
+                stray.append(de.path)
+            except OSError:
+                try:
+                    os.chmod(de.path, 0o644)
+                    os.unlink(de.path)
+                    stray.append(de.path)
+                except OSError as e:
+                    print(f"  !!! could NOT remove {de.path}: {e}", flush=True)
+    if stray:
+        print(f"  purged {len(stray)} file(s) the known globs missed:",
+              flush=True)
+        for f in stray[:10]:
+            print(f"      {f}", flush=True)
+        if len(stray) > 10:
+            print(f"      ... and {len(stray) - 10} more", flush=True)
+    return len(stray)
+
+
+def reclaim(glob_pat, clear_enabled, trim_enabled, label):
+    """Unlink everything, commit the unlinks, then fstrim -- in that order.
+
+    fstrim only reclaims blocks belonging to *deleted* files, so a trim that
+    runs while data is still linked (or while the unlinks are still only in
+    the journal) frees nothing.  Hence: purge -> sync -> trim.
+
+    Unlike run_benches, this trims after every point rather than once at
+    startup: the whole reason this sweep exists is to compare policies against
+    each other, so any drive state that accumulates across points shows up as
+    a difference between arms.
+    """
+    purge_mounts(glob_pat, clear_enabled)
+    if not trim_enabled:
+        return
+    os.sync()          # unlinks must be on-device before FITRIM sees the blocks
+    mounts = sorted(glob.glob(glob_pat))
+    if not mounts:
+        return
+    ok, err = 0, None
+    for m in mounts:
+        r = subprocess.run(["fstrim", m], stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, text=True)
+        if r.returncode == 0:
+            ok += 1
+        elif err is None:
+            err = r.stdout.strip() or f"fstrim {m} exit {r.returncode}"
+    msg = f"  fstrim after {label}: {ok}/{len(mounts)} mount(s)"
+    if err:
+        msg += f" (rest skipped/unsupported: {err})"
+    print(msg, flush=True)
+
+
 def sweep(entry, policies, sizes, extra_args, clear_glob, clear_enabled,
-          warnings, timeout):
+          trim_enabled, warnings, timeout):
     """Run every (policy, size) point for one example, INTERLEAVED.
 
     The loop is size-major with the policy order rotated one step per size, so
@@ -132,7 +226,8 @@ def sweep(entry, policies, sizes, extra_args, clear_glob, clear_enabled,
                 w = f"{entry['name']} [{policy}] at {hb(size)}: {problem}"
                 warnings.append(w)
                 print(f"  !!! {w}", flush=True)
-                rb.clear_bench_data(clear_glob, clear_enabled)
+                reclaim(clear_glob, clear_enabled, trim_enabled,
+                        f"{entry['name']} [{policy}] {hb(size)} (failed)")
                 if "timed out" in problem:
                     timed_out.add(policy)
                     rest = [hb(s) for s in sizes[si + 1:]]
@@ -147,7 +242,8 @@ def sweep(entry, policies, sizes, extra_args, clear_glob, clear_enabled,
             row["policy"] = policy
             row["input_bytes"] = str(size)
             rows_by_policy[policy].append(row)
-            rb.clear_bench_data(clear_glob, clear_enabled)
+            reclaim(clear_glob, clear_enabled, trim_enabled,
+                    f"{entry['name']} [{policy}] {hb(size)}")
     return rows_by_policy
 
 
@@ -208,7 +304,7 @@ def main():
     ap.add_argument("--policies", default=",".join(POLICIES),
                     help="policies to sweep (default: all three)")
     ap.add_argument("--examples", default=",".join(EXAMPLE_NAMES),
-                    help="examples to sweep (default: bigint_add,samplesort)")
+                    help="examples to sweep (default: bigint_add)")
     ap.add_argument("--outdir", default=os.environ.get("BENCH_OUTDIR", "results"))
     ap.add_argument("--timeout-min", type=float, default=30.0,
                     help="SIGKILL any single run over this many minutes (0 = no limit)")
@@ -232,6 +328,7 @@ def main():
     entries = [by_name[nm] for nm in names]
     extra_args = args.ssd_args.split()
     clear_enabled = not args.no_clean
+    trim_enabled = not args.no_fstrim
     timeout = args.timeout_min * 60 or None
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -246,20 +343,24 @@ def main():
           f"in-memory baselines OFF, timeout: {tmo}")
     print("  order:    interleaved (size-major, policy order rotated per size) "
           "so device drift does not align with the policy under test")
+    print(f"  cleanup:  purge every file from the mounts, sync, then "
+          f"{'fstrim' if trim_enabled else 'NO fstrim (--no-fstrim)'} "
+          f"after every run")
 
     # The policy is a runtime switch, so one build serves every arm.
     for entry in entries:
         rb.make(entry["target"])
 
-    fstrim_note = rb.fstrim_mounts(args.fstrim_glob, not args.no_fstrim)
-    rb.clear_bench_data(args.fstrim_glob, clear_enabled)
+    print("\nclearing and trimming the mounts before the first run ...",
+          flush=True)
+    reclaim(args.fstrim_glob, clear_enabled, trim_enabled, "startup")
 
     warnings = []
     all_rows = []
     for entry in entries:
         rows_by_policy = sweep(entry, policies, sizes, extra_args,
-                               args.fstrim_glob, clear_enabled, warnings,
-                               timeout)
+                               args.fstrim_glob, clear_enabled, trim_enabled,
+                               warnings, timeout)
 
         flat = [r for p in policies for r in rows_by_policy[p]]
         header = ["policy", "input_bytes"] + entry["cols"]
@@ -292,8 +393,6 @@ def main():
         rb.write_csv(os.path.join(outdir, "drive_policy_all.csv"), cols, all_rows)
 
     print("\n======== run summary ========")
-    if fstrim_note:
-        print(f"  {fstrim_note}")
     if warnings:
         print(f"  !!! {len(warnings)} warning(s) (the sweep continued past them):")
         for w in warnings:
