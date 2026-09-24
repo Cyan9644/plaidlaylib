@@ -59,6 +59,7 @@ Usage:
 import argparse
 import glob
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -90,6 +91,46 @@ PLOT_COLS = {
     "bigint_add": [("add_s", "delayed"), ("eager_add_s", "eager")],
     "samplesort": [("sort_s", "")],
 }
+
+
+DEFAULT_MEM_MAX_FRACTION = 0.9   # of physical RAM
+
+
+def phys_bytes():
+    return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+
+
+def mem_limit_prefix(mem_max):
+    """argv prefix running the child in its own MemoryMax cgroup, or [].
+
+    Without a cap an out-of-memory run does not simply die: the kernel reclaims
+    everything else first, sshd starves, and the whole machine goes
+    unresponsive (this cost the bench box a hard reset).  The scope bounds the
+    blast radius to one cgroup and sets MemorySwapMax=0 so it cannot thrash
+    into swap on the way down.  `systemd-run --scope` execs in place, so an OOM
+    kill still arrives as SIGKILL on our direct child and run_binary classifies
+    it as `exited -9` exactly as it would uncapped.
+
+    Same mechanism as run_benches' own --mem-max (added on main in 30432d7);
+    reimplemented here rather than merged so this temp branch stays
+    self-contained.  Unlike run_benches, it is ON by default: this sweep has
+    already produced confirmed OOM kills.
+
+    NOTE on a tmpfs dev box: the cap also counts bytes written to /mnt/ssd*
+    (the "drives" are RAM there), so a tight cap will kill the input build.
+    Pass --mem-max 0 locally.  On the real machine O_DIRECT writes to real
+    devices are not charged to the cgroup.
+    """
+    if not mem_max:
+        return []
+    if shutil.which("systemd-run") is None:
+        print("  !!! systemd-run not found -- running WITHOUT a memory cap; "
+              "an OOM can take the whole machine down", flush=True)
+        return []
+    scope = ["systemd-run", "--scope", "-q"]
+    if os.geteuid() != 0:
+        scope.append("--user")          # system scopes need root
+    return scope + ["-p", f"MemoryMax={mem_max}", "-p", "MemorySwapMax=0", "--"]
 
 
 def child_env(policy):
@@ -182,7 +223,7 @@ def reclaim(glob_pat, clear_enabled, trim_enabled, label):
 
 
 def sweep(entry, policies, sizes, extra_args, clear_glob, clear_enabled,
-          trim_enabled, warnings, timeout):
+          trim_enabled, warnings, timeout, mem_max=0):
     """Run every (policy, size) point for one example, INTERLEAVED.
 
     The loop is size-major with the policy order rotated one step per size, so
@@ -205,6 +246,7 @@ def sweep(entry, policies, sizes, extra_args, clear_glob, clear_enabled,
     -- they can only be slower -- without disturbing the other policies.
     """
     binary = os.path.join(rb.BINDIR, os.path.basename(entry["target"]))
+    cap = mem_limit_prefix(mem_max)
     rows_by_policy = {p: [] for p in policies}
     timed_out = set()
 
@@ -217,10 +259,16 @@ def sweep(entry, policies, sizes, extra_args, clear_glob, clear_enabled,
                 continue
             print(f"\n=== {entry['name']} [{policy}]: {hb(size)} "
                   f"(n={n}) ===", flush=True)
+            argv = (entry.get("pre_argv", []) + [n] +
+                    entry.get("extra_argv", []) + extra_args)
+            # run_binary on this branch has no prefix= parameter, so the cap
+            # goes in by making systemd-run the command and the binary its
+            # first argument -- run_binary just joins path + args.
+            path, args = ((cap[0], cap[1:] + [binary] + argv) if cap
+                          else (binary, argv))
             fields, problem = rb.run_binary(
-                binary, entry.get("pre_argv", []) + [n] +
-                entry.get("extra_argv", []) + extra_args,
-                fatal=False, env=child_env(policy), timeout=timeout)
+                path, args, fatal=False, env=child_env(policy),
+                timeout=timeout)
 
             if problem is not None:
                 w = f"{entry['name']} [{policy}] at {hb(size)}: {problem}"
@@ -306,6 +354,13 @@ def main():
     ap.add_argument("--examples", default=",".join(EXAMPLE_NAMES),
                     help="examples to sweep (default: bigint_add)")
     ap.add_argument("--outdir", default=os.environ.get("BENCH_OUTDIR", "results"))
+    ap.add_argument("--mem-max", default="",
+                    help="run each binary in its own systemd scope capped at "
+                         "this much memory (e.g. '400GiB'), so an OOM kills "
+                         "only that run instead of taking the machine down. "
+                         "Default: 90%% of RAM; '0' disables (use that on a "
+                         "tmpfs dev box, where the cap also counts /mnt/ssd* "
+                         "writes)")
     ap.add_argument("--timeout-min", type=float, default=30.0,
                     help="SIGKILL any single run over this many minutes (0 = no limit)")
     ap.add_argument("--ssd-args", default=os.environ.get("BENCH_SSD_ARGS", ""),
@@ -329,6 +384,10 @@ def main():
     extra_args = args.ssd_args.split()
     clear_enabled = not args.no_clean
     trim_enabled = not args.no_fstrim
+    if args.mem_max:
+        mem_max = rb.parse_bytes(args.mem_max) if args.mem_max != "0" else 0
+    else:
+        mem_max = int(phys_bytes() * DEFAULT_MEM_MAX_FRACTION)
     timeout = args.timeout_min * 60 or None
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -343,6 +402,8 @@ def main():
           f"in-memory baselines OFF, timeout: {tmo}")
     print("  order:    interleaved (size-major, policy order rotated per size) "
           "so device drift does not align with the policy under test")
+    print(f"  mem cap:  "
+          f"{rb._bytes_fmt(mem_max, None) + ' per run (systemd scope, swap off)' if mem_max else 'NONE (--mem-max 0)'}")
     print(f"  cleanup:  purge every file from the mounts, sync, then "
           f"{'fstrim' if trim_enabled else 'NO fstrim (--no-fstrim)'} "
           f"after every run")
@@ -360,7 +421,7 @@ def main():
     for entry in entries:
         rows_by_policy = sweep(entry, policies, sizes, extra_args,
                                args.fstrim_glob, clear_enabled, trim_enabled,
-                               warnings, timeout)
+                               warnings, timeout, mem_max)
 
         flat = [r for p in policies for r in rows_by_policy[p]]
         header = ["policy", "input_bytes"] + entry["cols"]
