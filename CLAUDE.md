@@ -147,7 +147,8 @@ ChunkSequence/
                                 CSR-order pass needs (sample_sort's pivot padding
                                 mishandles a T with no numeric_limits)
     primitive_demos.cpp         one binary, 12 per-primitive demos on argv[1]
-    in_memory_baselines.h       DRAM references for linefit + sample sort
+    in_memory_baselines.h       DRAM reference for linefit (its sample_sort is
+                                no longer used by any driver -- see samplesort)
 benchmarks/                   perf benchmarks + Python runner/plotter
   delayed_compare.cpp           in-mem delayed vs chunk-eager vs chunk-delayed
   chunk_size_compare.cpp        eager vs delayed across CHUNK_SIZE
@@ -203,8 +204,9 @@ and it always ends with a machine-readable `CSV,` line the runner greps.
 `ChunkSequence/examples/<name>.cpp`).
 
 Each example also times an **in-memory baseline** in DRAM: the corresponding
-upstream parlaylib example (`deps/parlaylib-examples/`) where one exists, or
-`in_memory_baselines.h` for linefit and sample sort.  The fetch **patches four
+upstream parlaylib example (`deps/parlaylib-examples/`) where one exists,
+`in_memory_baselines.h` for linefit, or a parlaylib primitive directly
+(`parlay::sort` for samplesort).  The fetch **patches four
 upstream bugs** (see the sed commands in the Makefile: an `int` loop index that
 segfaults KMP past 2^31 chars, a missing KMP state reset after a match that reads
 past the pattern, Rabin-Karp comparing the last window against the powers-scan
@@ -323,6 +325,16 @@ mismatch — a differential test in the spirit of the benchmarks' `agree`.
   (`Primitives/sort.h`) — oversample → `heap_tree` pivots → `group_by_index` →
   per-bucket DRAM sort → `flatten`.  Bucket count is chosen so each bucket fits in
   DRAM, so the per-bucket step is one in-memory pass rather than a recursion.
+  Baseline: **`parlay::sort`** — parlaylib's own tuned sample sort
+  (`internal::sample_sort`).  Out-of-place, not `sort_inplace`, because the
+  out-of-core side likewise returns a new sorted sequence and leaves its input
+  intact; the in-place variant additionally copies the result back.  It used
+  to be `in_memory_baselines.h`'s teaching-grade `sample_sort`, which caps its
+  recursion at two levels and finishes with a sequential `std::sort`; that
+  baseline's cost grows superlinearly (measured 4.1x, 7.4x, then 10.5x per 4x of
+  input, vs ~4.2x for n log n), so the out-of-core side "won" 3x at 64 GiB partly
+  by comparison against a weak reference.  `in_memory_baselines.h`'s `sample_sort`
+  now has no caller (its `linefit` still does).
 - `fft.cpp` / `fft_transpose.cpp` → `bin/fftExample [n]` / `bin/fft_transposeExample
   [n]`: out-of-core 1-D FFT of a power-of-two `complex<double>` sequence, factored
   as an A x B matrix (`examples/chunk_fft.h`, namespace `ChunkFFT`) and computed

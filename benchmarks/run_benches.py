@@ -243,7 +243,7 @@ EXAMPLES = [
      "time_col": "sort_s", "inmem_col": "inmem_sort_s",
      "elem_bytes": 8, "input_seqs": 1,
      "xlabel": "input size",
-     "title": "sample sort: out-of-core (plaid) vs in-mem parlaylib",
+     "title": "sample sort: out-of-core (plaid) vs in-mem parlay::sort",
      "data_globs": ["ss_in*", "ss_id_*", "ss_bucket_*", "ss_base_*", "ss_deg_*",
                     "qs_base_*"]},
 

@@ -13,9 +13,8 @@
 // benchmarks/run_benches.py greps.  The examples sweep (make bench-examples)
 // times the sort across a sweep of n.
 //
-// When the input fits in RAM the driver also times parlaylib's in-memory
-// sample_sort (Examples/in_memory/sample_sort.h) on the same keys as a DRAM
-// baseline and cross-checks the result.  Unlike kth_smallest (a single scalar)
+// When the input fits in RAM the driver also times parlay::sort_inplace on the
+// same keys as a DRAM baseline and cross-checks the result.  Unlike kth_smallest (a single scalar)
 // the sort produces a full sequence, so the out-of-core output is read back and
 // compared element-wise against the in-memory sorted keys (as in
 // KMP/Rabin-Karp); keys are distinct, so the sorted order is unique and the two
@@ -49,13 +48,15 @@
 #include "absl/log/check.h"
 #include "parlay/primitives.h"
 #include "utils/file_utils.h"
-// Out-of-core algorithm under test and the in-memory parlaylib baseline it is
-// modelled on.  Both are pulled in here so the driver can time them
-// head-to-head on identical keys.  The external sort lives in namespace
-// plaid; the in-memory baseline defines a global sample_sort, so the
-// two names coexist.
+// Out-of-core algorithm under test.  The DRAM baseline is parlay::sort_inplace
+// from parlay/primitives.h (already included above), NOT the teaching-grade
+// sample_sort in examples/in_memory_baselines.h that this driver used to time:
+// that one caps its recursion at two levels and finishes with a sequential
+// std::sort, so its cost grows superlinearly with n (measured 4.1x, 7.4x then
+// 10.5x per 4x of input, against ~4.2x for n log n), which flattered the
+// out-of-core side at the large end.  parlay::sort_inplace is the library's own
+// optimized sort and is the baseline worth beating.
 #include "ChunkSequence/Primitives/sort.h"
-#include "ChunkSequence/examples/in_memory_baselines.h"
 
 using Clock = std::chrono::steady_clock;
 static double elapsed(Clock::time_point t0) {
@@ -93,15 +94,15 @@ int main(int argc, char* argv[]) {
 
   // RAM budget for the in-memory parlaylib baseline (as in delayed_compare and
   // the other examples).  When the baseline runs we also hold the n-key input
-  // (8n bytes), the in-memory sort's working set (~16n across its in/out plus
-  // count-sort buckets), and the read-back of the out-of-core output (8n) for
-  // the element-wise cross-check -- call it ~24n.
+  // (8n bytes), parlay::sort's returned sequence (8n) plus its own internal
+  // working buffer (~8n), and the read-back of the out-of-core output (8n) for
+  // the element-wise cross-check -- call it ~32n.
   const size_t phys =
       (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGE_SIZE);
   size_t budget = phys;
   if (const char* e = getenv("EXAMPLE_INMEM_BUDGET_BYTES"))
     budget = std::stoull(e);
-  const bool inmem_ok = n <= budget / 24;
+  const bool inmem_ok = n <= budget / 32;
 
   const std::string in_prefix = "ss_in";
 
@@ -123,7 +124,7 @@ int main(int argc, char* argv[]) {
   std::cout << "sorted " << n << " keys   " << std::setprecision(4) << sort_s
             << "s   " << std::setprecision(2) << gb_s << " GB/s (input read)\n";
 
-  // In-memory baseline: parlaylib's sample_sort on the same keys (built in
+  // In-memory baseline: parlay::sort_inplace on the same keys (built in
   // DRAM outside the timed region), cross-checked by reading the out-of-core
   // output back and comparing it element-wise against the in-memory sorted
   // sequence (keys are distinct, so the ordering is unique).
@@ -132,21 +133,26 @@ int main(int argc, char* argv[]) {
   if (inmem_ok) {
     auto keys_mem = parlay::tabulate(n, key_at);  // parlay::sequence<uint64_t>
     t0 = Clock::now();
-    sample_sort(keys_mem);  // in-place, global baseline
+    // parlay::sort, not sort_inplace: both are parlaylib's tuned sample sort
+    // (internal::sample_sort / _inplace), but the out-of-core side likewise
+    // RETURNS a new sorted sequence and leaves its input intact, so the
+    // out-of-place form is the like-for-like comparison -- the in-place one
+    // additionally copies the result back over the input.
+    auto sorted_mem = parlay::sort(keys_mem);
     inmem_sort_s = elapsed(t0);
-    std::cout << "in-mem parlaylib sample_sort   " << std::setprecision(4)
+    std::cout << "in-mem parlay::sort   " << std::setprecision(4)
               << inmem_sort_s << "s\n";
 
     auto out_mem = plaid::materialize<uint64_t>(sorted);
-    if (out_mem.size() != keys_mem.size()) {
+    if (out_mem.size() != sorted_mem.size()) {
       std::cout << "*** MISMATCH: out-of-core produced " << out_mem.size()
-                << " keys, expected " << keys_mem.size() << " ***\n";
+                << " keys, expected " << sorted_mem.size() << " ***\n";
       agree = false;
     } else {
-      for (size_t i = 0; i < keys_mem.size(); i++) {
-        if (out_mem[i] != keys_mem[i]) {
+      for (size_t i = 0; i < sorted_mem.size(); i++) {
+        if (out_mem[i] != sorted_mem[i]) {
           std::cout << "*** MISMATCH at index " << i << ": out-of-core "
-                    << out_mem[i] << " != in-mem " << keys_mem[i] << " ***\n";
+                    << out_mem[i] << " != in-mem " << sorted_mem[i] << " ***\n";
           agree = false;
           break;
         }
@@ -156,7 +162,7 @@ int main(int argc, char* argv[]) {
       std::cout << "cross-check: out-of-core output matches in-mem sort\n";
   } else {
     std::cout
-        << "in-mem parlaylib sample_sort: skipped (~24n footprint exceeds "
+        << "in-mem parlay::sort: skipped (~32n footprint exceeds "
         << "RAM budget " << std::setprecision(2) << to_gb(budget) << " GB)\n";
   }
 
