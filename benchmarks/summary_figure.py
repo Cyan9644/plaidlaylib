@@ -40,6 +40,7 @@ times (or via separate `--example` runs) still combine into one chart.
     python3 benchmarks/summary_figure.py
     python3 benchmarks/summary_figure.py --only "reduce,tabulate,zip"
     python3 benchmarks/summary_figure.py --dir results/20260101-000000
+    python3 benchmarks/summary_figure.py --dir results/full --dir results/sort_rerun
     python3 benchmarks/summary_figure.py --at-size 256GiB
 """
 
@@ -109,16 +110,22 @@ for _label, _name in SUMMARY_ENTRIES:
 
 def find_csv(name, dir_arg, results_root):
     """Locate the on-disk <name>_scale.csv run_benches.py's example sweep
-    writes. With an explicit --dir, only that directory is checked.
-    Otherwise every <results_root>/<timestamp>/ directory is searched and the
-    most recent match wins (timestamp directory names sort chronologically as
-    strings), so entries swept at different times still combine into one
-    chart. Returns None if nothing matches.
+    writes.  `dir_arg` is a list of explicit directories (repeat --dir); they
+    are searched LAST-FIRST, so a later --dir overrides an earlier one for the
+    entries it carries and the rest still come from the earlier one -- the
+    "rerun one example, keep the other nineteen" case, without editing the
+    earlier run's archived CSVs.  With no --dir, every
+    <results_root>/<timestamp>/ directory is searched and the most recent match
+    wins (timestamp names sort chronologically as strings).  Returns None if
+    nothing matches.
     """
     fname = f"{name}_scale.csv"
-    if dir_arg is not None:
-        path = os.path.join(dir_arg, fname)
-        return path if os.path.isfile(path) else None
+    if dir_arg:
+        for d in reversed(dir_arg):
+            path = os.path.join(d, fname)
+            if os.path.isfile(path):
+                return path
+        return None
     candidates = sorted(glob.glob(os.path.join(results_root, "*", fname)))
     return candidates[-1] if candidates else None
 
@@ -174,7 +181,8 @@ def collect_rows(dir_arg, results_root, warnings, at_size=0):
         entry = REGISTRY[name]
         csv_path = find_csv(name, dir_arg, results_root)
         if csv_path is None:
-            where = dir_arg if dir_arg is not None else os.path.join(results_root, "*")
+            where = (", ".join(dir_arg) if dir_arg
+                     else os.path.join(results_root, "*"))
             warnings.append(f"{label} ({name}): no {name}_scale.csv found under {where}")
             continue
 
@@ -286,10 +294,12 @@ def main():
                     help="plot only these display label(s) (comma/space-separated, "
                          f"e.g. 'reduce,tabulate,zip'); choices: "
                          f"{', '.join(l for l, _ in SUMMARY_ENTRIES)}")
-    ap.add_argument("--dir", default=None,
-                    help="read every entry's <name>_scale.csv from exactly this "
-                         "directory instead of searching --results-root for the "
-                         "most recent match per entry")
+    ap.add_argument("--dir", action="append", default=None,
+                    help="read every entry's <name>_scale.csv from this directory "
+                         "instead of searching --results-root for the most recent "
+                         "match per entry. Repeatable: later --dir wins for the "
+                         "entries it carries, so a single-example rerun can be "
+                         "layered over a full sweep without editing it")
     ap.add_argument("--results-root", default=os.environ.get("BENCH_OUTDIR", "results"),
                     help="parent dir to search for <timestamp>/<name>_scale.csv "
                          "files when --dir isn't given (default: results)")
@@ -316,7 +326,8 @@ def main():
     if selected:
         SUMMARY_ENTRIES = [(l, n) for l, n in SUMMARY_ENTRIES if l in selected]
 
-    dir_arg = os.path.join(rb.REPO_ROOT, args.dir) if args.dir else None
+    dir_arg = ([os.path.join(rb.REPO_ROOT, d) for d in args.dir]
+               if args.dir else None)
     results_root = os.path.join(rb.REPO_ROOT, args.results_root)
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")

@@ -373,7 +373,7 @@ bench-examples-full:
 # `make bench-examples-full` run with RUN=results/<timestamp>; without RUN each
 # entry's newest CSV under results/ is used.  See benchmarks/summary_figure.py.
 bench-summary:
-	python3 benchmarks/summary_figure.py --outdir results $(if $(RUN),--dir $(RUN),)
+	python3 benchmarks/summary_figure.py --outdir results $(foreach d,$(RUN),--dir $(d))
 
 # Single-run IO/CPU trace of one example (per-SSD read/write throughput + %util +
 # CPU over time; build/op phases marked).  Meaningful on real block devices only.

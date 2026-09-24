@@ -139,7 +139,10 @@ def plot_summary(outdir, exclude=(), stem="paper_summary"):
     ratios = [float(r["ratio"]) for r in rows]
     x = np.arange(len(rows))
 
-    fig, ax = plt.subplots(figsize=(TEXT_WIDTH, 1.45))
+    # Kept deliberately short: this figure is a wide strip across the full text
+    # width, and the rotated tick labels below the axes already add ~0.35in, so
+    # the axes themselves carry the page cost.
+    fig, ax = plt.subplots(figsize=(TEXT_WIDTH, 1.0))
     ax.bar(x, ratios, 0.7, color=plot_style.PALETTE["blue"], zorder=2)
     ax.axhline(1.0, color=plot_style.PALETTE["red"], linestyle="--",
                linewidth=0.7, zorder=3)
@@ -147,7 +150,7 @@ def plot_summary(outdir, exclude=(), stem="paper_summary"):
             va="center", ha="left", fontsize=6.5)
     ax.set_xticks(x)
     ax.set_xticklabels(names, rotation=40, ha="right", rotation_mode="anchor")
-    ax.tick_params(axis="x", length=0)
+    ax.tick_params(axis="x", length=0, labelsize=6.5, pad=1)
     ax.set_xlim(x[0] - 0.5, x[-1] + 0.5)
     ax.set_ylim(0, max(ratios) * 1.08)
     ax.set_ylabel("Time / DRAM time")

@@ -1,0 +1,2 @@
+input_bytes,n,build_s,sort_s,inmem_sort_s,throughput_gb_s
+68719476736,8589934592,4.62550373,14.9143128,15.6603105,4.29117994
