@@ -533,6 +533,29 @@ def clear_bench_data(glob_pat, enabled):
             print(f"      ... and {len(failed) - 10} more", flush=True)
 
 
+def check_ssd_mounts():
+    """Warn (never fail) if any configs.h SSD_ROOT path is not a mount point.
+
+    Runs utils/check_mounts.sh (the single source of truth, shared with the
+    Makefile), letting its output through as-is.  Returns a one-line note for
+    the end-of-run summary if it warned, else None, so a warning printed at
+    startup isn't lost in the scrollback of a long sweep.
+    """
+    try:
+        r = subprocess.run(["bash", os.path.join(REPO_ROOT, "utils", "check_mounts.sh")],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    except OSError as exc:
+        print(f"  mount check could not run ({exc})", flush=True)
+        return None
+    sys.stdout.write(r.stdout)
+    sys.stderr.write(r.stderr)
+    sys.stderr.flush()
+    for line in r.stderr.splitlines():
+        if line.startswith("WARNING:"):
+            return line
+    return None
+
+
 def fstrim_mounts(glob_pat, enabled):
     """Best-effort `fstrim` of every mount matching glob_pat.
 
@@ -1095,6 +1118,7 @@ def main():
     # Start from clean drives, then trim once up front (fstrim can be slow on
     # real SSDs, so we don't repeat it between points); both no-ops on tmpfs.
     # The fstrim outcome is reported in the end-of-run summary.
+    mount_note = check_ssd_mounts()
     clear_bench_data(args.fstrim_glob, clear_enabled)
     fstrim_note = fstrim_mounts(args.fstrim_glob, fstrim_enabled)
 
@@ -1137,6 +1161,8 @@ def main():
     # ── end-of-run summary — repeated here (and warnings persisted next to the
     # results) so problems can't get lost in the sweep output above.
     print("\n======== run summary ========")
+    if mount_note:
+        print(f"  !!! {mount_note}")
     if fstrim_note:
         print(f"  {fstrim_note}")
     if warnings:

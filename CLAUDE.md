@@ -51,6 +51,12 @@ prerequisite, and `$^` would hand those headers to `g++` as source inputs.
 
 Assumes `SSD_COUNT` (default 30) mount points named per `SSD_ROOT` (default
 `/mnt/ssd%lu`), i.e. `/mnt/ssd0 … /mnt/ssd29`.  Edit `configs.h` for your box.
+`utils/check_mounts.sh` (`make check-mounts`; also run by `make test` and at
+startup by `run_benches.py` / `io_trace.py` / `zip_depth_bench.py`) warns — never
+fails — when any of those paths is missing or is a plain directory rather than a
+mount point, since an unmounted `/mnt/ssdN` silently puts every write on the
+parent filesystem.  It reads `SSD_COUNT`/`SSD_ROOT` from `configs.h`;
+`PLAID_SKIP_MOUNT_CHECK=1` silences it (e.g. a deliberate tmpfs dev box).
 On a dev box you can point all mounts at one tmpfs, but keep sizes small — the
 "SSDs" then share one RAM-backed device, and a run that would be trivial on the
 real machine can fill it and take the box down with it.  (An earlier version of

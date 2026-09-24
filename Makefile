@@ -65,7 +65,7 @@ EXAMPLE_BINARIES := $(BINDIR)/primesExample $(BINDIR)/kmpExample \
                     $(BINDIR)/bellman_fordExample
 
 
-.PHONY: all clean distclean deps test examples bench bench-full bench-examples bench-examples-full bench-summary trace clean-bench-data format format-check
+.PHONY: all clean distclean deps test check-mounts examples bench bench-full bench-examples bench-examples-full bench-summary trace clean-bench-data format format-check
 
 all:
 	$(MAKE) deps
@@ -96,6 +96,7 @@ format-check:
 # one fails, then exits non-zero if any failed.  Pass extra args (e.g. a custom
 # element count) via TEST_ARGS, e.g. `make test TEST_ARGS=8000000`.
 test: $(TEST_BINARIES)
+	@bash utils/check_mounts.sh
 	@fail=0; \
 	for t in $(TEST_BINARIES); do \
 	  echo "==================== $$t $(TEST_ARGS) ===================="; \
@@ -104,6 +105,13 @@ test: $(TEST_BINARIES)
 	done; \
 	if [ $$fail -ne 0 ]; then echo "SOME TESTS FAILED"; exit 1; \
 	else echo "ALL TESTS PASSED"; fi
+
+# Warn (never fail) if any SSD_ROOT path from configs.h is missing or is a plain
+# directory instead of a mount point -- an unmounted /mnt/ssdN silently puts
+# every write on the parent filesystem.  Also run by `test` and at startup by
+# the Python benchmark drivers (run_benches.py, io_trace.py, zip_depth_bench.py).  PLAID_SKIP_MOUNT_CHECK=1 silences it.
+check-mounts:
+	@bash utils/check_mounts.sh
 
 # ── dependency fetching ────────────────────────────────────────────────────────
 

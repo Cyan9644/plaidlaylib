@@ -165,6 +165,9 @@ def main():
     ap.add_argument("--no-clean", action="store_true",
                     help="leave bench data files on the mounts")
     args = ap.parse_args()
+    # Warn (never fail) if a /mnt/ssdN is a plain directory instead of a mount;
+    # see utils/check_mounts.sh.
+    subprocess.run(["bash", os.path.join(REPO_ROOT, "utils", "check_mounts.sh")])
 
     extra = args.ssd_args.split() if args.ssd_args else []
     zip_n = parse_count(args.n)

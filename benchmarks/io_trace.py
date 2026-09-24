@@ -654,6 +654,7 @@ def main():
                     help="disk/CPU-sample every --size point, not just the largest "
                          "(also restores the multi-point io_sweep.csv/.png summary)")
     args = ap.parse_args(argv)
+    rb.check_ssd_mounts()
 
     if args.size and args.n:
         ap.error("--size and --n are mutually exclusive")
