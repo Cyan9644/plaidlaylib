@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Combined relative-performance bar chart: for each label in
-SUMMARY_ENTRIES (11 primitives + 9 examples), plots the largest input size
-at which that entry's own recorded run still has an in-memory parlaylib
-baseline, against a pinned in-mem reference at 1.0 -- in the spirit of
+SUMMARY_ENTRIES (11 primitives + 9 examples), plots one recorded point --
+by default the entry's largest in-mem row at or below 64 GiB (--at-size) --
+against a pinned in-mem reference at 1.0 -- in the spirit of
 parlaylib's own "ParlayLib vs ParallelSTL" figure (see
 benchresults/example_figure/), but comparing this library's out-of-core
 primitives/examples against their in-memory parlaylib counterparts instead.
@@ -20,11 +20,14 @@ Reuses run_benches.py by import (the EXAMPLES registry and REPO_ROOT) -- the
 same `import run_benches as rb` precedent io_trace.py / csv_from_log.py /
 work_exponent_bench.py already use.
 
-For each entry, the plotted point is the largest-n row in its
-`<name>_scale.csv` whose in-mem column is non-blank (i.e. the biggest input
-that sweep recorded before run_benches.py's own RAM-cliff budget skipped the
-in-memory baseline for that point). An entry with no matching CSV, or whose
-CSV has no row with a usable in-mem column, is skipped with a warning --
+For each entry, the plotted point is a row of its `<name>_scale.csv` with
+both an out-of-core and an in-mem time.  `--at-size` (default 64GiB) picks
+the largest such row at or below that input size, so the bars are measured
+uniformly; without it (`--at-size 0`) each bar sits at its own DRAM cliff,
+which across entries ranges 16 GiB..256 GiB and makes them not directly
+comparable.  An entry whose cliff is below the requested size stays at its
+own max (e.g. convex_hull at 16 GiB, capped by upstream's n < 2^31).  An
+entry with no matching CSV, or no usable row, is skipped with a warning --
 never fabricated.
 
 Without --dir, every entry is looked up independently: each
@@ -37,6 +40,7 @@ times (or via separate `--example` runs) still combine into one chart.
     python3 benchmarks/summary_figure.py
     python3 benchmarks/summary_figure.py --only "reduce,tabulate,zip"
     python3 benchmarks/summary_figure.py --dir results/20260101-000000
+    python3 benchmarks/summary_figure.py --at-size 256GiB
 """
 
 import argparse
@@ -126,11 +130,22 @@ def _positive(row, col):
         return False
 
 
-def load_entry_row(csv_path, entry):
-    """Return the row to plot from one entry's CSV: the largest-n row whose
-    out-of-core and in-mem times are both present and positive (the biggest
-    size at which the in-memory baseline still ran), or None if the file has
-    no such row.
+def load_entry_row(csv_path, entry, at_size=0):
+    """Return the row to plot from one entry's CSV, or None if it has none.
+
+    Usable rows are those whose out-of-core AND in-mem times are both present
+    and positive (i.e. the in-memory baseline still ran there).
+
+    With `at_size` (bytes), the pick is the largest usable row **at or below**
+    that input size -- min(at_size, this entry's own cliff) -- so every bar is
+    measured at the same input size wherever the data allows, instead of each
+    sitting at its own DRAM cliff (which ranges 16 GiB..256 GiB across entries
+    and makes the bars not directly comparable).  An entry whose only usable
+    rows are larger than at_size falls back to its smallest usable row; the
+    caller compares input_bytes to notice and warn.
+
+    With at_size = 0 the largest usable row wins, the pre-`--at-size`
+    behaviour.
     """
     time_col = entry.get("time_col", "time_s")
     inmem_col = entry["inmem_col"]
@@ -139,10 +154,16 @@ def load_entry_row(csv_path, entry):
                 if _positive(r, time_col) and _positive(r, inmem_col)]
     if not rows:
         return None
+    by_size = lambda r: int(r.get("input_bytes") or 0)
+    if at_size:
+        at_or_below = [r for r in rows if by_size(r) <= at_size]
+        if at_or_below:
+            return max(at_or_below, key=by_size)
+        return min(rows, key=by_size)
     return max(rows, key=lambda r: int(r["n"]))
 
 
-def collect_rows(dir_arg, results_root, warnings):
+def collect_rows(dir_arg, results_root, warnings, at_size=0):
     """Read every SUMMARY_ENTRIES entry's <name>_scale.csv and return the
     list of {label, name, n, time_s, inmem_time_s, ratio} rows to plot. An
     entry with no matching CSV, or no row with a usable in-mem column, is
@@ -157,7 +178,7 @@ def collect_rows(dir_arg, results_root, warnings):
             warnings.append(f"{label} ({name}): no {name}_scale.csv found under {where}")
             continue
 
-        row = load_entry_row(csv_path, entry)
+        row = load_entry_row(csv_path, entry, at_size)
         if row is None:
             warnings.append(f"{label} ({name}): {csv_path} has no row with a "
                             f"non-blank {entry['inmem_col']}")
@@ -168,16 +189,26 @@ def collect_rows(dir_arg, results_root, warnings):
         t = float(row[time_col])
         t_inmem = float(row[inmem_col])
         ratio = t / t_inmem if t_inmem > 0 else float("nan")
+        size = int(row.get("input_bytes") or 0)
+        if at_size and size > at_size:
+            # Only reachable via load_entry_row's fallback: nothing at or below
+            # the requested size, so this bar is NOT at the uniform size.
+            warnings.append(f"{label} ({name}): no in-mem row at or below "
+                            f"{rb._bytes_fmt(at_size, None)}; using "
+                            f"{rb._bytes_fmt(size, None)} instead")
         rows.append({"label": label, "name": name, "n": row["n"],
+                     "input_bytes": str(size),
                      "time_s": f"{t:.9g}", "inmem_time_s": f"{t_inmem:.9g}",
                      "ratio": f"{ratio:.9g}"})
-        print(f"  {label}: n={row['n']}  out-of-core={t:.4g}s  "
-              f"in-mem={t_inmem:.4g}s  ratio={ratio:.4g}x  (from {csv_path})")
+        print(f"  {label}: {rb._bytes_fmt(size, None)} (n={row['n']})  "
+              f"out-of-core={t:.4g}s  in-mem={t_inmem:.4g}s  "
+              f"ratio={ratio:.4g}x  (from {csv_path})")
     return rows
 
 
 def write_csv(path, rows):
-    header = ["label", "name", "n", "time_s", "inmem_time_s", "ratio"]
+    header = ["label", "name", "n", "input_bytes", "time_s", "inmem_time_s",
+              "ratio"]
     with open(path, "w") as f:
         f.write(",".join(header) + "\n")
         for r in rows:
@@ -262,6 +293,12 @@ def main():
     ap.add_argument("--results-root", default=os.environ.get("BENCH_OUTDIR", "results"),
                     help="parent dir to search for <timestamp>/<name>_scale.csv "
                          "files when --dir isn't given (default: results)")
+    ap.add_argument("--at-size", default="64GiB",
+                    help="plot every entry at its largest recorded in-mem row that is "
+                         "at or below this input size (default: 64GiB), so the bars "
+                         "are measured uniformly rather than each at its own DRAM "
+                         "cliff (which ranges 16 GiB..256 GiB). An entry whose cliff "
+                         "is lower stays at its own max. '0' = largest available")
     ap.add_argument("--list", action="store_true",
                     help="print the entries' run_benches.py registry names "
                          "(comma-separated, for run_benches.py --example) and exit")
@@ -288,7 +325,11 @@ def main():
     print(f"Output directory: {outdir}\n")
 
     warnings = []
-    rows = collect_rows(dir_arg, results_root, warnings)
+    at_size = rb.parse_bytes(args.at_size) if args.at_size != "0" else 0
+    if at_size:
+        print(f"  plotting each entry at min({rb._bytes_fmt(at_size, None)}, "
+              f"its own largest in-mem size)\n")
+    rows = collect_rows(dir_arg, results_root, warnings, at_size)
 
     write_csv(os.path.join(outdir, "summary_figure.csv"), rows)
     if rows:

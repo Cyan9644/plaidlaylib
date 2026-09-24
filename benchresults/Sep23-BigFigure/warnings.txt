@@ -1,0 +1,8 @@
+example filter at size=256 GiB (n=34359738368): exited -9 (killed by SIGKILL — almost certainly the OOM killer) with the in-memory baseline uncapped — rerunning this point with the baseline off; out-of-core only from here
+example filter at size=1 TiB (n=137438953472): timed out after 1800s (killed) — point dropped; skipping the 1 larger size(s)
+example pack at size=256 GiB (n=34359738368): timed out after 1800s (killed) — point dropped; skipping the 3 larger size(s)
+example group_by_index at size=256 GiB (n=34359738368): timed out after 1800s (killed) — point dropped; skipping the 3 larger size(s)
+example reverse at size=256 GiB (n=34359738368): exited -9 (killed by SIGKILL — almost certainly the OOM killer) with the in-memory baseline uncapped — rerunning this point with the baseline off; out-of-core only from here
+example reverse at size=256 GiB (n=34359738368): timed out after 1800s (killed) — point dropped; skipping the 3 larger size(s)
+example histogram_by_index at size=512 GiB (n=68719476736): timed out after 1800s (killed) — point dropped; skipping the 2 larger size(s)
+example random_shuffle at size=256 GiB (n=34359738368): timed out after 1800s (killed) — point dropped; skipping the 3 larger size(s)

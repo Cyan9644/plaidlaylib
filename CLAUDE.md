@@ -527,8 +527,17 @@ work.
 relative-performance bar chart: 20 entries (11 primitives + 9 examples; `zip`
 is excluded because its fused dot product is the same shape as `linefit`).  It
 runs **no binaries itself** — it only reads the `<name>_scale.csv` files
-`run_benches.py`'s example sweep already writes, picking for each entry the
-largest-n row whose out-of-core and in-mem columns are both non-blank.
+`run_benches.py`'s example sweep already writes, picking for each entry a row
+whose out-of-core and in-mem columns are both non-blank.  **`--at-size`
+(default `64GiB`) picks the largest such row at or below that input size**, so
+every bar is measured at the same input size; `--at-size 0` restores "each
+entry at its own largest in-mem point", which is *not* uniform — the measured
+DRAM cliff ranges 16 GiB (convex_hull, capped by upstream's n < 2^31) through
+64 GiB (map/scan/tabulate/primes/fft/samplesort/bigint_add/bellman_ford) to
+256 GiB (kmp/rabin_karp/reduce/linefit/kth_smallest).  An entry whose own
+cliff is below the requested size keeps its max, and the written
+`summary_figure.csv` records each bar's `input_bytes` so the actual size is
+never implicit.
 `make bench-summary RUN=results/<timestamp>` pins it to one full sweep
 (`--dir`); without it, each entry's CSV is the most recent match across
 `results/*/`, so bars swept at different times still combine into one chart
