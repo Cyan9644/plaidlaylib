@@ -212,6 +212,7 @@ EXAMPLES = [
               "throughput_gb_s", "eager_add_s", "eager_result_limbs",
               "eager_throughput_gb_s"],
      "time_col": "add_s", "inmem_col": "eager_add_s",
+     "env": {"BIGINT_ADD_EAGER": "1"},   # bigint_add.cpp's eager pass is opt-in
      "series_labels": ("eager (out-of-core)",
                        "delayed (out-of-core, fused)"),
      "no_ram_cliff": True,
@@ -783,9 +784,11 @@ def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings,
         print(f"\n=== example {entry['name']}: size={_bytes_fmt(size, None)} "
               f"(n={n}) ===", flush=True)
         argv = entry.get("pre_argv", []) + [n] + entry.get("extra_argv", []) + extra_args
-        env = None
+        entry_env = entry.get("env", {})
+        env = _child_env(entry_env) if entry_env else None
         if inmem_uncapped:
-            env = _child_env(_INMEM_UNCAPPED_ENV if baseline_alive else _INMEM_OFF_ENV)
+            env = _child_env({**entry_env, **(_INMEM_UNCAPPED_ENV if baseline_alive
+                                              else _INMEM_OFF_ENV)})
         fields, problem = run_binary(binary, argv, fatal=False, env=env,
                                      timeout=timeout, prefix=prefix)
         if inmem_uncapped and baseline_alive and _killed_by_signal(problem):
@@ -797,7 +800,7 @@ def run_example(entry, sizes, extra_args, clear_glob, clear_enabled, warnings,
             baseline_alive = False
             clear_bench_data(clear_glob, clear_enabled)
             fields, problem = run_binary(binary, argv, fatal=False,
-                                         env=_child_env(_INMEM_OFF_ENV),
+                                         env=_child_env({**entry_env, **_INMEM_OFF_ENV}),
                                          timeout=timeout, prefix=prefix)
         # A timed-out point's larger successors would only take longer: stop.
         timed_out = bool(problem) and problem.startswith("timed out")
