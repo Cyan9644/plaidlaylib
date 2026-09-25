@@ -58,6 +58,14 @@ Each trace directory also gets markers.csv (label,time_s -- every TRACE
 marker, on trace.csv's own time_s clock), so a later plot can crop a phase
 window from trace.csv without re-running or scraping stdout.
 
+cpu_pct (from /proc/stat) counts memory-stalled cycles as busy.  A
+system-wide `perf stat` runs alongside to measure the backend-stalled share
+of busy cycles (see STALL_METHODS), and trace.csv gains stall_frac and
+cpu_active_pct = cpu_pct * (1 - stall_frac); perf_method.txt records which
+counter was used ("none" if perf was unavailable -- the columns are then
+blank).  System-wide perf needs perf_event_paranoid <= 0 or root;
+--no-perf skips it.
+
 MEANINGFUL ONLY ON REAL BLOCK DEVICES.  On the tmpfs dev box the "SSDs" are
 RAM-backed and generate no /proc/diskstats traffic, so the disk panels come out
 empty (the script warns and still records CPU).  Run it on the 30-SSD machine.
@@ -83,6 +91,7 @@ the Makefile.
 import argparse
 import glob
 import os
+import signal
 import sys
 import threading
 import time
@@ -193,13 +202,153 @@ class Sampler(threading.Thread):
         self._stop.set()
 
 
+# ── backend-stall sampling (perf) ───────────────────────────────────────────
+# /proc/stat counts a core as busy whenever a thread is scheduled on it,
+# including cycles stalled on cache misses / DRAM bandwidth, so a
+# memory-bound run reads as 100% CPU.  A system-wide `perf stat -I` runs
+# alongside the /proc/stat sampler to measure the backend-stalled share of
+# busy time; compute_series() then reports
+#   cpu_active_pct = cpu_pct * (1 - stall_frac).
+# Methods are probed in order and the first that yields a number wins:
+#   generic   cycles + stalled-cycles-backend (stalled / unhalted cycles;
+#             typically AMD)
+#   tma_*     Intel top-down backend-bound slot fraction
+#   backend_bound / TopdownL1   AMD Zen4 / other top-down metric names
+# Parlaylib spin-waiting retires instructions, so it still counts as active;
+# only stalls are removed.
+STALL_METHODS = [
+    ("generic", ["-e", "cycles,stalled-cycles-backend"]),
+    ("tma_backend_bound", ["-M", "tma_backend_bound"]),
+    ("backend_bound", ["-M", "backend_bound"]),
+    ("TopdownL1", ["-M", "TopdownL1"]),
+]
+
+
+def _perf_float(s):
+    try:
+        return float(s)
+    except ValueError:
+        return None  # "<not counted>", "<not supported>", ""
+
+
+def parse_perf_intervals(text, method):
+    """perf stat -x, -I output -> [(ts_s, num, den)] (one per interval).
+
+    ts_s is perf's own timestamp (seconds since it started counting).  For
+    the generic method num/den are summed stalled-backend / cycles counts (a
+    hybrid CPU reports cpu_core/ and cpu_atom/ rows, which are summed); for
+    a metric method num is the mean backend-bound fraction and den = 1.
+    Intervals where the needed counters didn't produce a number are dropped.
+    """
+    rows = {}
+    for line in text.splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        f = line.split(",")
+        ts = _perf_float(f[0].strip())
+        if ts is None or len(f) < 4:
+            continue
+        r = rows.setdefault(ts, {"stall": 0.0, "cyc": 0.0, "seen": set(), "bb": []})
+        if method == "generic":
+            val, event = _perf_float(f[1]), f[3]
+            if val is None:
+                continue
+            if "stalled-cycles-backend" in event:
+                r["stall"] += val
+                r["seen"].add("stall")
+            elif event.rstrip("/").split("/")[-1].split(":")[0] == "cycles":
+                r["cyc"] += val
+                r["seen"].add("cyc")
+        else:
+            # Metric value sits in the field right before its name/unit
+            # ("%  tma_backend_bound", "backend_bound", ...).
+            for j in range(1, len(f)):
+                name = f[j].lower()
+                if "backend" in name and "bound" in name and "memory" not in name \
+                        and "core" not in name:
+                    v = _perf_float(f[j - 1])
+                    if v is not None:
+                        r["bb"].append(v / 100.0 if v > 1.0 or "%" in name else v)
+                    break
+    out = []
+    for ts in sorted(rows):
+        r = rows[ts]
+        if method == "generic":
+            if r["seen"] == {"stall", "cyc"} and r["cyc"] > 0:
+                out.append((ts, r["stall"], r["cyc"]))
+        elif r["bb"]:
+            out.append((ts, sum(r["bb"]) / len(r["bb"]), 1.0))
+    return out
+
+
+def detect_stall_method():
+    """First STALL_METHODS entry a short system-wide probe gets numbers from,
+    as (name, perf_args); None (with a loud warning) if none works."""
+    if subprocess.run(["which", "perf"], stdout=subprocess.DEVNULL,
+                      stderr=subprocess.DEVNULL).returncode != 0:
+        print("  !!! WARNING: `perf` not found -- stall_frac/cpu_active_pct "
+              "will be blank (CPU still includes stalled cycles)", flush=True)
+        return None
+    errs = []
+    for name, perf_args in STALL_METHODS:
+        p = subprocess.run(["perf", "stat", "-a", "-x,", "-I", "100"] + perf_args
+                           + ["--", "sleep", "0.35"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        if parse_perf_intervals(p.stderr, name):
+            print(f"  stall counter: {name} ({' '.join(perf_args)})", flush=True)
+            return name, perf_args
+        errs.append(f"{name}: {(p.stderr.strip().splitlines() or ['no output'])[-1]}")
+    print("  !!! WARNING: no perf backend-stall counter usable system-wide "
+          "(need perf_event_paranoid <= 0 or root) -- stall_frac/cpu_active_pct "
+          "will be blank.  Probes:\n      " + "\n      ".join(errs), flush=True)
+    return None
+
+
+class PerfStallSampler:
+    """`perf stat -a -I` over the run; results() -> [(start_mono, end_mono,
+    num, den)] on the /proc/stat sampler's CLOCK_MONOTONIC timeline."""
+
+    def __init__(self, method, interval, outdir):
+        self.name, perf_args = method
+        ms = max(10, int(round(interval * 1000)))
+        self.path = os.path.join(outdir, f"perf_stall_{os.getpid()}.txt")
+        self.start_mono = time.monotonic()
+        self.proc = subprocess.Popen(
+            ["perf", "stat", "-a", "-x,", "-I", str(ms), "-o", self.path] + perf_args,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def stop(self):
+        self.proc.send_signal(signal.SIGINT)  # flushes the final partial interval
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait()
+
+    def results(self):
+        try:
+            with open(self.path) as f:
+                text = f.read()
+            os.unlink(self.path)
+        except OSError:
+            return []
+        out, prev = [], 0.0
+        for ts, num, den in parse_perf_intervals(text, self.name):
+            out.append((self.start_mono + prev, self.start_mono + ts, num, den))
+            prev = ts
+        return out
+
+
 # ── run the example under the sampler ───────────────────────────────────────
-def run_traced(binary, args, devices, interval):
+def run_traced(binary, args, devices, interval, stall_method=None, scratch_dir="."):
     """Launch the binary with PLAID_TRACE=1, sampling concurrently.
 
-    Returns (samples, markers, stdout).  markers = [(label, mono_seconds)].
+    Returns (samples, markers, stdout, stall).  markers = [(label,
+    mono_seconds)]; stall = PerfStallSampler.results() ([] when no
+    stall_method).
     """
     env = dict(os.environ, PLAID_TRACE="1")
+    perf = PerfStallSampler(stall_method, interval, scratch_dir) if stall_method else None
     sampler = Sampler(devices, interval)
     sampler.start()
     cmd = [binary] + [str(a) for a in args]
@@ -208,6 +357,13 @@ def run_traced(binary, args, devices, interval):
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     sampler.stop()
     sampler.join()
+    stall = []
+    if perf is not None:
+        perf.stop()
+        stall = perf.results()
+        if not stall:
+            print("  !!! perf stall sampler produced no intervals; "
+                  "cpu_active_pct left blank", flush=True)
     print(proc.stdout, end="", flush=True)
     if proc.returncode != 0:
         print(f"  !!! binary exited {proc.returncode} (trace still written)", flush=True)
@@ -217,19 +373,35 @@ def run_traced(binary, args, devices, interval):
         if line.startswith("TRACE,"):
             _, label, mono = line.split(",", 2)
             markers.append((label, float(mono)))
-    return sampler.samples, markers, proc.stdout
+    return sampler.samples, markers, proc.stdout, stall
+
+
+def stall_frac_over(stall, a, b):
+    """Backend-stall fraction over [a, b]: each perf interval contributes its
+    num/den scaled by the share of it overlapping [a, b].  None if no overlap."""
+    num = den = 0.0
+    for s, e, n, d in stall:
+        ov = min(b, e) - max(a, s)
+        if ov <= 0 or e <= s:
+            continue
+        w = ov / (e - s)
+        num += w * n
+        den += w * d
+    return min(1.0, max(0.0, num / den)) if den > 0 else None
 
 
 # ── reduce raw counters to per-interval rates ───────────────────────────────
-def compute_series(samples, devices):
+def compute_series(samples, devices, stall=()):
     """Turn raw counter snapshots into per-interval rate series.
 
     Each output point is anchored at the right edge of an interval; rates are
     delta/dt.  Returns a dict of parallel lists (times[], agg_read_mbps[], ...)
-    plus per-device read/write/util keyed by device name.
+    plus per-device read/write/util keyed by device name.  `stall` is
+    run_traced()'s perf intervals; "stall"/"cpu_active" are None wherever it
+    has no coverage.
     """
     ser = {"t": [], "agg_read": [], "agg_write": [], "mean_util": [],
-           "cpu": [], "iowait": [],
+           "cpu": [], "iowait": [], "stall": [], "cpu_active": [],
            "dev_read": {d: [] for d in devices},
            "dev_write": {d: [] for d in devices},
            "dev_util": {d: [] for d in devices}}
@@ -264,6 +436,9 @@ def compute_series(samples, devices):
         d_tot = (idle1 + non1) - (idle0 + non0)
         ser["cpu"].append(100.0 * d_non / d_tot if d_tot > 0 else 0.0)
         ser["iowait"].append(100.0 * d_iow / d_tot if d_tot > 0 else 0.0)
+        sf = stall_frac_over(stall, t0, t1)
+        ser["stall"].append(sf)
+        ser["cpu_active"].append(None if sf is None else ser["cpu"][-1] * (1.0 - sf))
     return ser
 
 
@@ -336,12 +511,15 @@ def window_series_stats(ser, t0, start_mono, end_mono):
     dur = max(0.0, end_mono - start_mono)
     if not idxs:
         return {"dur_s": dur, "avg_util_pct": 0.0, "avg_cpu_pct": 0.0,
+                "avg_cpu_active_pct": None,
                 "avg_read_mbps": 0.0, "avg_write_mbps": 0.0}
     n = len(idxs)
+    active = [ser["cpu_active"][i] for i in idxs if ser["cpu_active"][i] is not None]
     return {
         "dur_s": dur,
         "avg_util_pct": sum(ser["mean_util"][i] for i in idxs) / n,
         "avg_cpu_pct": sum(ser["cpu"][i] for i in idxs) / n,
+        "avg_cpu_active_pct": sum(active) / len(active) if active else None,
         "avg_read_mbps": sum(ser["agg_read"][i] for i in idxs) / n,
         "avg_write_mbps": sum(ser["agg_write"][i] for i in idxs) / n,
     }
@@ -363,6 +541,8 @@ def slice_ser(ser, devices, lo_mono, hi_mono):
         "mean_util": [ser["mean_util"][i] for i in idxs],
         "cpu": [ser["cpu"][i] for i in idxs],
         "iowait": [ser["iowait"][i] for i in idxs],
+        "stall": [ser["stall"][i] for i in idxs],
+        "cpu_active": [ser["cpu_active"][i] for i in idxs],
         "dev_read": {d: [ser["dev_read"][d][i] for i in idxs] for d in devices},
         "dev_write": {d: [ser["dev_write"][d][i] for i in idxs] for d in devices},
         "dev_util": {d: [ser["dev_util"][d][i] for i in idxs] for d in devices},
@@ -371,10 +551,13 @@ def slice_ser(ser, devices, lo_mono, hi_mono):
 
 # ── output ──────────────────────────────────────────────────────────────────
 def write_trace_csv(path, ser, devices, t0):
+    # stall_frac / cpu_active_pct go last (blank where perf had no coverage)
+    # so readers indexing the older columns by position are unaffected.
     header = ["time_s", "agg_read_mbps", "agg_write_mbps", "mean_util_pct",
               "cpu_pct", "iowait_pct"]
     for d in devices:
         header += [f"{d}_read_mbps", f"{d}_write_mbps", f"{d}_util_pct"]
+    header += ["stall_frac", "cpu_active_pct"]
     with open(path, "w") as f:
         f.write(",".join(header) + "\n")
         for i, t in enumerate(ser["t"]):
@@ -385,6 +568,9 @@ def write_trace_csv(path, ser, devices, t0):
                 row += [f"{ser['dev_read'][d][i]:.3f}",
                         f"{ser['dev_write'][d][i]:.3f}",
                         f"{ser['dev_util'][d][i]:.2f}"]
+            sf, ca = ser["stall"][i], ser["cpu_active"][i]
+            row += ["" if sf is None else f"{sf:.4f}",
+                    "" if ca is None else f"{ca:.2f}"]
             f.write(",".join(row) + "\n")
     print(f"  wrote {path}", flush=True)
 
@@ -665,6 +851,9 @@ def main():
     ap.add_argument("--trace-all", action="store_true",
                     help="disk/CPU-sample every --size point, not just the largest "
                          "(also restores the multi-point io_sweep.csv/.png summary)")
+    ap.add_argument("--no-perf", action="store_true",
+                    help="skip the perf backend-stall sampler (stall_frac/"
+                         "cpu_active_pct columns left blank)")
     args = ap.parse_args(argv)
     rb.check_ssd_mounts()
 
@@ -715,6 +904,8 @@ def main():
     # summary land together under the same results/<stamp>/ directory.
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     sweep_dir = os.path.join(rb.REPO_ROOT, args.outdir, stamp)
+    os.makedirs(sweep_dir, exist_ok=True)  # also perf's scratch output dir
+    stall_method = None if args.no_perf else detect_stall_method()
     sweep_rows = []
     # Rows for the example's own performance comparison (the CSV,... line it
     # already prints — n vs. each implementation's time/throughput; this is
@@ -764,7 +955,8 @@ def main():
             rb.clear_bench_data(args.mount_glob, not args.no_clean)
             continue
 
-        samples, markers, stdout = run_traced(binary, bin_args, devices, args.interval)
+        samples, markers, stdout, stall = run_traced(
+            binary, bin_args, devices, args.interval, stall_method, sweep_dir)
         if len(samples) < 2:
             print(f"  !!! too few samples for {desc} (run too short for "
                   "--interval); skipping this point", flush=True)
@@ -784,7 +976,7 @@ def main():
             print(f"  !!! no (or malformed) CSV, line for {desc}; "
                   "excluded from the performance comparison", flush=True)
 
-        ser_full = compute_series(samples, devices)
+        ser_full = compute_series(samples, devices, stall)
         t0 = samples[0][0]
 
         # Crop to the traced algorithm's own window: a driver may keep doing
@@ -811,6 +1003,9 @@ def main():
 
         write_trace_csv(os.path.join(outdir, "trace.csv"), ser, devices, t0)
         write_markers_csv(os.path.join(outdir, "markers.csv"), markers, t0)
+        with open(os.path.join(outdir, "perf_method.txt"), "w") as f:
+            f.write((f"{stall_method[0]} {' '.join(stall_method[1])}"
+                     if stall_method and stall else "none") + "\n")
         plot_trace(ser, markers, devices, t0, os.path.join(outdir, "trace.png"),
                   hide_kinds=hide_kinds)
 
