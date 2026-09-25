@@ -5,7 +5,7 @@
 # `make bench-examples-full`: uncapped in-mem baselines, 30-min timeout.
 #
 #   usage:  bash benchresults/Sep24-FinalFigures/run_core_64g_repeats.sh [REPS]
-#   env:    TAG=<name>  DRY_RUN=1 (echo only)
+#   env:    TAG=<name>  DRY_RUN=1 (echo only)  ENTRIES=a,b (subset rerun)
 #
 # Output: results/core64-repeats-$TAG/
 #   rep<i>/<ts>/            run_benches.py sweep (*_scale.csv, warnings.txt, ...)
@@ -17,7 +17,7 @@ set -euo pipefail
 REPS="${1:-2}"
 SIZE="64GiB"
 TAG="${TAG:-$(date +%Y%m%d-%H%M%S)}"
-ENTRIES="map,reduce,filter,scan,tabulate,group_by_index,histogram_by_index,pack,random_shuffle,reverse,bigint_add,linefit,kmp,rabin_karp,primes,samplesort,kth_smallest"
+ENTRIES="${ENTRIES:-map,reduce,filter,scan,tabulate,group_by_index,histogram_by_index,pack,random_shuffle,reverse,bigint_add,linefit,kmp,rabin_karp,primes,samplesort,kth_smallest}"
 ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 cd "$ROOT"
 
