@@ -1114,6 +1114,11 @@ class ChunkSequenceReader {
     static constexpr size_t ALLOC_BATCH = 50;
     static constexpr size_t ALLOC_THRESHOLD = 10;
 
+    // How long Alloc() waits for a Free() before growing the pool past its
+    // cap.  Only reached if the cap is genuinely too small for the concurrent
+    // demand; growing anyway (loudly) is strictly better than deadlocking.
+    static constexpr int64_t STARVE_TIMEOUT_US = 30'000'000;  // 30 s
+
     // Shared pool state (Meyers singletons: constructed on first use, correct
     // init order, one instance per T across the whole process).
     static std::vector<T*>& free_list() {
@@ -1128,36 +1133,121 @@ class ChunkSequenceReader {
       static std::mutex m;
       return m;
     }
+    // Signalled by Free(); waited on by Alloc() once the pool is at its cap.
+    static std::condition_variable& free_cond() {
+      static std::condition_variable c;
+      return c;
+    }
+    // Buffers ever created (pool high-water mark).  The pool never shrinks, so
+    // this only rises; it is what the cap below bounds.
+    static size_t& pool_count() {
+      static size_t n = 0;
+      return n;
+    }
+    // Slab base pointers, kept so the pool is not *structurally* unfreeable.
+    // (Still no destructor: buffers can be in flight in another reader at exit
+    // -- see the class comment above -- so releasing them at teardown would be
+    // a use-after-free.  Recorded for auditing and for a future explicit
+    // release once buffer ownership is tracked.)
+    static std::vector<T*>& slab_bases() {
+      static std::vector<T*> v;
+      return v;
+    }
+
+    // Hard ceiling on pool bytes.  The pool is process-wide and never shrinks,
+    // so without a ceiling it ratchets: every time the free list momentarily
+    // empties, AllocateMore's "is there slack?" guard passes and another
+    // ALLOC_BATCH is added permanently.  That is a check-then-act test of
+    // *slack*, not of *total size*, so it bounds nothing -- and a slow
+    // consumer empties the list constantly.  Observed: bigint_add's eager path
+    // under the `blocked` drive policy (writes serialized onto one drive, so
+    // ExternalTransform's workers stall in writer.Push while still holding
+    // their input buffer) grew this pool to ~486 GB at a 1 TiB input and was
+    // OOM-killed, while the same run under `random` was fine.
+    //
+    // Default: 1/8 of available RAM, at least 256 buffers (1 GiB at a 4 MiB
+    // CHUNK_SIZE) so small boxes still work.  Override with
+    // PLAID_READER_POOL_MAX_BYTES.
+    static size_t pool_max_buffers() {
+      static const size_t cap = [] {
+        size_t bytes = AvailablePhysicalMemoryBytes() / 8;
+        if (const char* e = getenv("PLAID_READER_POOL_MAX_BYTES"))
+          bytes = std::stoull(e);
+        return std::max<size_t>(256, bytes / BUFFER_SIZE);
+      }();
+      return cap;
+    }
 
     Allocator() {
       // Prime the pool once; the threshold guard makes later readers no-ops.
       AllocateMore(INITIAL_COUNT);
     }
 
-    // No destructor
-    void AllocateMore(size_t n) {
+    // No destructor -- see slab_bases() above.
+
+    // Add `n` buffers unless the pool already has slack or is at its cap.
+    // Returns true if the pool grew.  Callers must NOT hold free_list_lock().
+    bool AllocateMore(size_t n) {
       std::lock_guard<std::mutex> lg(alloc_lock());
       {
         std::lock_guard<std::mutex> fl(free_list_lock());
-        if (free_list().size() > ALLOC_THRESHOLD) return;
+        if (free_list().size() > ALLOC_THRESHOLD) return false;
+        if (pool_count() >= pool_max_buffers()) return false;  // at the cap
+        n = std::min(n, pool_max_buffers() - pool_count());
       }
       T* base =
           (T*)std::aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT, BUFFER_SIZE * n);
       CHECK(base != nullptr) << "ChunkSequenceReader: out of memory";
       std::lock_guard<std::mutex> fl(free_list_lock());
+      slab_bases().push_back(base);
       for (size_t i = 0; i < n; i++)
         free_list().push_back((T*)((intptr_t)base + i * BUFFER_SIZE));
+      pool_count() += n;
+      free_cond().notify_all();
+      return true;
     }
 
     T* Alloc() {
       while (true) {
-        std::unique_lock<std::mutex> l(free_list_lock());
-        if (!free_list().empty()) {
-          T* p = free_list().back();
-          free_list().pop_back();
-          return p;
+        {
+          std::unique_lock<std::mutex> l(free_list_lock());
+          if (!free_list().empty()) {
+            T* p = free_list().back();
+            free_list().pop_back();
+            return p;
+          }
+          if (pool_count() >= pool_max_buffers()) {
+            // At the cap: wait for a consumer to Free() rather than growing.
+            // This is the back-pressure that keeps a slow writer from
+            // ratcheting the pool -- the reader now paces to the consumer.
+            if (free_cond().wait_for(
+                    l, std::chrono::microseconds(STARVE_TIMEOUT_US),
+                    [] { return !free_list().empty(); })) {
+              T* p = free_list().back();
+              free_list().pop_back();
+              return p;
+            }
+            // Nothing came back for 30 s -- the cap is genuinely below this
+            // workload's concurrent demand.  Grow rather than hang, but say so:
+            // a silent grow here is how the unbounded ratchet looked.
+            l.unlock();
+            LOG(WARNING) << "ChunkSequenceReader pool starved at its "
+                         << pool_max_buffers() << "-buffer cap ("
+                         << ((pool_max_buffers() * BUFFER_SIZE) >> 20)
+                         << " MiB); growing past it. Raise "
+                            "PLAID_READER_POOL_MAX_BYTES if this repeats.";
+            std::lock_guard<std::mutex> lg(alloc_lock());
+            T* base = (T*)std::aligned_alloc(O_DIRECT_MEMORY_ALIGNMENT,
+                                             BUFFER_SIZE * ALLOC_BATCH);
+            CHECK(base != nullptr) << "ChunkSequenceReader: out of memory";
+            std::lock_guard<std::mutex> fl(free_list_lock());
+            slab_bases().push_back(base);
+            for (size_t i = 0; i < ALLOC_BATCH; i++)
+              free_list().push_back((T*)((intptr_t)base + i * BUFFER_SIZE));
+            pool_count() += ALLOC_BATCH;
+            continue;
+          }
         }
-        l.unlock();
         AllocateMore(ALLOC_BATCH);
       }
     }
@@ -1165,6 +1255,7 @@ class ChunkSequenceReader {
     void Free(T* p) {
       std::lock_guard<std::mutex> l(free_list_lock());
       free_list().push_back(p);
+      free_cond().notify_one();
     }
   };
 
