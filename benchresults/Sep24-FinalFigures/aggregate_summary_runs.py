@@ -8,6 +8,7 @@ flagged (size_mismatch=1) and warned about -- its stats mix sizes.
 
   usage:
     python3 aggregate_summary_runs.py RUN1.csv RUN2.csv [...] [--out DIR]
+                                      [--entries map,reduce,...]
 
 Writes to DIR (default: cwd):
   summary_stats.csv            per-entry per-run ratios + mean/median/min/max/stdev
@@ -59,14 +60,24 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("csvs", nargs="+", help="summary_figure.csv files, one per run")
     ap.add_argument("--out", default=".", help="output directory (default: cwd)")
+    ap.add_argument("--entries", default="",
+                    help="comma-separated entry names (the CSVs' `name` column) to "
+                         "aggregate; default: every entry in any input")
     args = ap.parse_args()
 
     runs = [read_csv(p) for p in args.csvs]
+    order = entry_order(runs)
+    if args.entries:
+        wanted = [e for e in args.entries.split(",") if e]
+        unknown = [e for e in wanted if not any(e in run for run in runs)]
+        if unknown:
+            ap.error(f"--entries not found in any input CSV: {', '.join(unknown)}")
+        order = [n for n in order if n in wanted]
     k = len(runs)
     warnings = []
     stat_rows, mean_rows, median_rows = [], [], []
 
-    for name in entry_order(runs):
+    for name in order:
         present = [(i, run[name]) for i, run in enumerate(runs) if name in run]
         if not present:
             continue
