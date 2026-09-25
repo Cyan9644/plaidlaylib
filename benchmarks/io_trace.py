@@ -54,6 +54,10 @@ tail (when it has enough samples to matter) is written separately as
 trace_post.csv / trace_post_{throughput,cpu,drives}.png, unmarked and titled
 "(post-algorithm)".
 
+Each trace directory also gets markers.csv (label,time_s -- every TRACE
+marker, on trace.csv's own time_s clock), so a later plot can crop a phase
+window from trace.csv without re-running or scraping stdout.
+
 MEANINGFUL ONLY ON REAL BLOCK DEVICES.  On the tmpfs dev box the "SSDs" are
 RAM-backed and generate no /proc/diskstats traffic, so the disk panels come out
 empty (the script warns and still records CPU).  Run it on the 30-SSD machine.
@@ -382,6 +386,14 @@ def write_trace_csv(path, ser, devices, t0):
                         f"{ser['dev_write'][d][i]:.3f}",
                         f"{ser['dev_util'][d][i]:.2f}"]
             f.write(",".join(row) + "\n")
+    print(f"  wrote {path}", flush=True)
+
+
+def write_markers_csv(path, markers, t0):
+    with open(path, "w") as f:
+        f.write("label,time_s\n")
+        for label, mono in markers:
+            f.write(f"{label},{mono - t0:.4f}\n")
     print(f"  wrote {path}", flush=True)
 
 
@@ -798,6 +810,7 @@ def main():
         hide_kinds = {("build", "end")} if entry["name"].startswith("bellman_ford") else frozenset()
 
         write_trace_csv(os.path.join(outdir, "trace.csv"), ser, devices, t0)
+        write_markers_csv(os.path.join(outdir, "markers.csv"), markers, t0)
         plot_trace(ser, markers, devices, t0, os.path.join(outdir, "trace.png"),
                   hide_kinds=hide_kinds)
 

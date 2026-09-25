@@ -223,9 +223,11 @@ int main(int argc, char* argv[]) {
   if (inmem_ok) {
     auto a_mem = parlay::tabulate(n, limb_a);  // parlay::sequence<digit>
     auto b_mem = parlay::tabulate(n, limb_b);
+    trace_mark("op_start_inmem");
     t0 = Clock::now();
     auto sum_mem = plaid::bigint_reference::add(a_mem, b_mem);
     inmem_add_s = elapsed(t0);
+    trace_mark("op_end_inmem");
     std::cout << "in-mem parlaylib add: " << sum_mem.size() << " limb(s)   "
               << std::setprecision(4) << inmem_add_s << "s\n";
     if (sum_mem.size() != result_limbs) {
