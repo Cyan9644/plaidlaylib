@@ -2,7 +2,7 @@
 """paper_trace with small-size CPU lines overlaid: the same bigint_add 4 TiB
 out-of-core trace (drive util / CPU / iowait over read/write GB/s, cropped to
 the algorithm window), plus two see-through green CPU lines from one smaller
-(64 GiB) traced run -- that size's out-of-core add (dashed) and the in-memory
+(128 GiB) traced run -- that size's out-of-core add (dashed) and the in-memory
 parlaylib add (solid).
 
 The small lines come from a SEPARATE run because at 4 TiB the in-memory add
@@ -12,9 +12,16 @@ op_start..op_end window and the in-memory add is op_start_inmem..op_end_inmem
 io_trace.py writes beside it.  Only CPU is drawn for the small run.  Every
 line starts at x = 0 = its own op start; the legend states each run's size.
 
+128 GiB (n = 8 Gi limbs, ~192 GiB resident in DRAM) is just past
+bigint_add.cpp's default in-memory gate (n <= RAM/64, ~7.8 Gi on 500 GiB), so
+the trace run must raise EXAMPLE_INMEM_BUDGET_BYTES or the in-memory add (and
+its markers) is silently skipped.
+
   usage:
-    python3 benchmarks/io_trace.py bigint_add --size 64GiB   # on the SSD box
-    # copy that run's trace_bigint_add_* dir to trace_bigint_add_64GiB_inmem/,
+    # on the SSD box:
+    EXAMPLE_INMEM_BUDGET_BYTES=$((320<<30)) \\
+        python3 benchmarks/io_trace.py bigint_add --size 128GiB
+    # copy that run's trace_bigint_add_* dir to trace_bigint_add_128GiB_inmem/,
     # then:
     python3 plot_paper_trace_inmem.py
     python3 plot_paper_trace_inmem.py --normalize   # x = fraction of op window
@@ -34,7 +41,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
-SMALL_DIR = os.path.join(HERE, "trace_bigint_add_64GiB_inmem")
+SMALL_DIR = os.path.join(HERE, "trace_bigint_add_128GiB_inmem")
 SMALL_ALPHA = 0.4
 # (start marker, end marker) of each small-run window, from bigint_add.cpp.
 SMALL_EXTERNAL = ("op_start", "op_end")
@@ -78,8 +85,8 @@ def plot(outdir, t0, t1, split, smooth_s, small_dir, normalize):
                                *marker_window(markers, *SMALL_INMEM))
     split_x = split - t0
     span = xs[-1]
-    print(f"  PLAID 4 TiB {span:.1f} s, PLAID 64 GiB {exs[-1]:.1f} s, "
-          f"in-memory 64 GiB {ixs[-1]:.1f} s")
+    print(f"  PLAID 4 TiB {span:.1f} s, PLAID 128 GiB {exs[-1]:.1f} s, "
+          f"in-memory 128 GiB {ixs[-1]:.1f} s")
     if normalize:
         split_x /= span
         xs, exs, ixs = xs / span, exs / exs[-1], ixs / ixs[-1]
@@ -97,9 +104,9 @@ def plot(outdir, t0, t1, split, smooth_s, small_dir, normalize):
     ax_cpu.plot(xs, sm(pc["cpu_pct"], dt), color=P["green"],
                 label="CPU (PLAID, 4 TiB)")
     ax_cpu.plot(exs, sm(ec["cpu_pct"], edt), color=P["green"],
-                alpha=SMALL_ALPHA, linestyle="--", label="CPU (PLAID, 64 GiB)")
+                alpha=SMALL_ALPHA, linestyle="--", label="CPU (PLAID, 128 GiB)")
     ax_cpu.plot(ixs, sm(ic["cpu_pct"], idt), color=P["green"],
-                alpha=SMALL_ALPHA, label="CPU (in-memory, 64 GiB)")
+                alpha=SMALL_ALPHA, label="CPU (in-memory, 128 GiB)")
     ax_cpu.plot(xs, sm(pc["iowait_pct"], dt), color=P["orange"],
                 label="iowait")
     ax_cpu.set_ylim(0, 100)
@@ -135,7 +142,7 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--outdir", default=HERE)
     ap.add_argument("--small-dir", default=SMALL_DIR,
-                    help="io_trace.py point dir of the 64 GiB run "
+                    help="io_trace.py point dir of the 128 GiB run "
                          "(needs trace.csv + markers.csv)")
     ap.add_argument("--t-start", type=float, default=ppf.TRACE_T0)
     ap.add_argument("--t-end", type=float, default=ppf.TRACE_T1)
@@ -149,8 +156,9 @@ def main():
     for f in ("trace.csv", "markers.csv"):
         if not os.path.exists(os.path.join(args.small_dir, f)):
             sys.exit(f"missing {os.path.join(args.small_dir, f)}: run "
-                     "`io_trace.py bigint_add --size 64GiB` and copy its trace "
-                     "dir there (see --help)")
+                     "`EXAMPLE_INMEM_BUDGET_BYTES=$((320<<30)) io_trace.py "
+                     "bigint_add --size 128GiB` and copy its trace dir there "
+                     "(see --help)")
     plot_style.apply()
     with matplotlib.rc_context(ppf.PAPER_RC):
         plot(args.outdir, args.t_start, args.t_end, args.phase_split,
