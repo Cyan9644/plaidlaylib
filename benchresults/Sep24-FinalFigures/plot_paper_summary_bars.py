@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """paper_summary_core redrawn in summary_figure.png's two-bar style: per entry, a
-green ParlayLib DRAM bar fixed at 1 beside a blue PLAID external bar at the
+light-green ParlayLib bar fixed at 1 beside a dark-green PLAID bar at the
 out-of-core / DRAM time ratio.  No gridlines, no red DRAM line.  Same data,
 order, labels and fonts as plot_paper_figures.py's paper_summary_core (fft /
 bellman-ford / convex-hull dropped), and the output is pinned to
@@ -27,6 +27,10 @@ from PIL import Image  # noqa: E402
 DPI = 300
 REFERENCE_PNG = os.path.join(HERE, "paper_summary_core.png")
 OUT_PNG = os.path.join(HERE, "paper_summary_bars.png")
+# Sampled from image.png (seaborn-style Greens pair): light = ParlayLib,
+# dark = PLAID.
+PARLAY_COLOR = "#b3d495"
+PLAID_COLOR = "#40923a"
 
 
 def reference_size():
@@ -55,10 +59,10 @@ def main():
         fig, ax = plt.subplots(figsize=(w_px / DPI, h_px / DPI), dpi=DPI)
         fig.subplots_adjust(left=0.045, right=0.995, top=0.96, bottom=0.36)
         ax.bar(x - width / 2, [1.0] * len(x), width,
-               color=plot_style.PALETTE["green"], label="ParlayLib (in-memory)",
+               color=PARLAY_COLOR, label="ParlayLib (in-memory)",
                zorder=2)
         ax.bar(x + width / 2, ratios, width,
-               color=plot_style.PALETTE["blue"], label="PLAID (external)",
+               color=PLAID_COLOR, label="PLAID (external)",
                zorder=2)
         ax.set_xticks(x)
         ax.set_xticklabels(names, rotation=40, ha="right",
