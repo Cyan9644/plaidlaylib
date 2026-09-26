@@ -37,8 +37,23 @@ import numpy as np  # noqa: E402
 
 SUMMARY_CSV = os.path.join(HERE, "summary_figure.csv")
 TRACE_CSV = os.path.join(HERE, "trace_bigint_add_4TiB_0", "trace.csv")
-ABLATION_CSV = os.path.join(HERE, "20260924-171939-drive-policy",
-                            "drive_policy_bigint_add.csv")
+# The ablation is stitched from four sweeps under ablation_data/, each carrying
+# whichever substrate(s) it measured (add_s = fused delayed, eager_add_s =
+# materialized eager):
+#   141415  all three policies, both substrates, 128 / 256 / 512 GiB
+#   102303  random + round_robin, both substrates, 1 / 2 / 4 TiB
+#   212756  blocked, delayed only, 1 TiB     (its eager arm is not measured
+#   201015  blocked, delayed only, 2 TiB      past 512 GiB)
+#   230836  random,  delayed only, 8 TiB     (the deepest point measured)
+# Merged per (policy, size, column) keeping the last non-blank value, so a
+# sweep that left a column empty never erases one that filled it.  Each curve
+# then spans exactly what exists for it.
+ABLATION_CSVS = [
+    os.path.join(HERE, "ablation_data", d, "drive_policy_bigint_add.csv")
+    for d in ("20260925-141415-drive-policy", "20260925-102303-drive-policy",
+              "20260925-212756-drive-policy", "20260925-201015-drive-policy",
+              "20260925-230836-drive-policy")
+]
 
 # Printed widths (inches) for a typical two-column paper.
 TEXT_WIDTH = 7.0
@@ -70,7 +85,6 @@ SUMMARY_LABELS = {"bellman_ford_sparse": "bellman-ford",
 SUMMARY_REDUCED_EXCLUDE = ("fft", "bellman_ford_sparse", "convex_hull")
 
 # Same order/colors as drive_policy_ablation.py's plot, so the figure matches.
-ABLATION_MAX_BYTES = 512 << 30
 POLICIES = [("random", "blue"), ("round_robin", "orange"), ("blocked", "aqua")]
 
 PAPER_RC = {
@@ -218,17 +232,21 @@ def plot_trace(outdir, t0, t1, split, smooth_s):
 
 
 def plot_ablation(outdir):
-    # blocked OOMs at 1 TiB (see warnings.txt), so cut every policy at
-    # 512 GiB and all six lines span the same sizes.
-    rows = [r for r in read_csv(ABLATION_CSV)
-            if int(r["input_bytes"]) <= ABLATION_MAX_BYTES]
+    # (policy, size, column) -> time, last non-blank wins across the sweeps.
+    merged = {}
+    for path in ABLATION_CSVS:
+        for r in read_csv(path):
+            for col in ("add_s", "eager_add_s"):
+                if r.get(col, "").strip():
+                    merged[(r["policy"], int(r["input_bytes"]), col)] = \
+                        float(r[col])
+
     P = plot_style.PALETTE
     fig, ax = plt.subplots(figsize=(COLUMN_WIDTH, 2.1))
     for policy, color in POLICIES:
-        prow = [r for r in rows if r["policy"] == policy]
         for col, style in (("add_s", "-o"), ("eager_add_s", "--s")):
-            pts = [(int(r["input_bytes"]), float(r[col]))
-                   for r in prow if r[col].strip()]
+            pts = sorted((size, t) for (pol, size, c), t in merged.items()
+                         if pol == policy and c == col)
             if pts:
                 xs, ys = zip(*pts)
                 ax.plot(xs, ys, style, color=P[color])
